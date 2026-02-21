@@ -59,6 +59,9 @@ pub async fn ingest_question(
                     format!("role:{}", turn.role),
                 ]),
                 created_at: session_date,
+                actor: None,
+                actor_type: "system".to_string(),
+                audience: "global".to_string(),
             };
 
             let stored = store.store(memory).await?;

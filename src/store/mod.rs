@@ -46,6 +46,12 @@ pub struct Memory {
     pub is_consolidated_original: bool,
     /// ID of the consolidated memory this was merged into (None if not consolidated)
     pub consolidated_into: Option<String>,
+    /// Actor who created this memory (optional until auth wired in Phase 12)
+    pub actor: Option<String>,
+    /// Actor type: "agent", "user", "system", "auto-store"
+    pub actor_type: String,
+    /// Audience scope: "global", "self", "tenant"
+    pub audience: String,
 }
 
 /// Input type for creating a new memory.
@@ -67,6 +73,14 @@ pub struct CreateMemory {
     /// Used by benchmark harness for ingesting historical sessions.
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
+    /// Actor who created this memory (optional until auth wired)
+    pub actor: Option<String>,
+    /// Actor type: "agent" (default), "user", "system", "auto-store"
+    #[serde(default = "default_actor_type")]
+    pub actor_type: String,
+    /// Audience scope: "global" (default), "self", "tenant"
+    #[serde(default = "default_audience")]
+    pub audience: String,
 }
 
 fn default_type_hint() -> String {
@@ -75,6 +89,14 @@ fn default_type_hint() -> String {
 
 fn default_source() -> String {
     "default".to_string()
+}
+
+fn default_actor_type() -> String {
+    "agent".to_string()
+}
+
+fn default_audience() -> String {
+    "global".to_string()
 }
 
 /// Input type for partially updating an existing memory.
@@ -111,6 +133,10 @@ pub struct ListFilter {
     pub limit: i64,
     /// Cursor from previous page for pagination
     pub cursor: Option<String>,
+    /// Filter by actor (exact match, optional)
+    pub actor: Option<String>,
+    /// Filter by audience (exact match, optional)
+    pub audience: Option<String>,
 }
 
 impl Default for ListFilter {
@@ -124,6 +150,8 @@ impl Default for ListFilter {
             updated_before: None,
             limit: 20,
             cursor: None,
+            actor: None,
+            audience: None,
         }
     }
 }
@@ -155,6 +183,8 @@ pub struct SearchFilter {
     pub created_before: Option<DateTime<Utc>>,
     /// Filter memories that have ALL specified tags (containment match)
     pub tags: Option<Vec<String>>,
+    /// Filter by audience scope (optional)
+    pub audience: Option<String>,
 }
 
 impl Default for SearchFilter {
@@ -167,6 +197,7 @@ impl Default for SearchFilter {
             created_after: None,
             created_before: None,
             tags: None,
+            audience: None,
         }
     }
 }

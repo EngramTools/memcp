@@ -83,6 +83,12 @@ pub struct StoreMemoryParams {
     pub source: Option<String>,
     /// Optional tags for categorization
     pub tags: Option<Vec<String>>,
+    /// Who is storing this memory (optional, self-reported until auth)
+    pub actor: Option<String>,
+    /// Actor type: "agent" (default), "user", "system"
+    pub actor_type: Option<String>,
+    /// Audience scope: "global" (default), "self"
+    pub audience: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -148,6 +154,10 @@ pub struct ListMemoriesParams {
     pub limit: Option<u32>,
     /// Cursor from previous page for pagination (optional)
     pub cursor: Option<String>,
+    /// Filter by actor (exact match, optional)
+    pub actor: Option<String>,
+    /// Filter by audience scope (optional)
+    pub audience: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -186,6 +196,8 @@ pub struct SearchMemoryParams {
     /// Weight for symbolic metadata search path (0.0 to disable, 1.0 = default, >1.0 = emphasize).
     /// Controls how much tag/type/source matches influence results.
     pub symbolic_weight: Option<f64>,
+    /// Filter by audience scope (optional)
+    pub audience: Option<String>,
 }
 
 // Helper: convert MemcpError to CallToolResult with isError: true
@@ -265,6 +277,9 @@ impl MemoryService {
             source: params.source.unwrap_or_else(|| "default".to_string()),
             tags: params.tags,
             created_at: None,
+            actor: params.actor,
+            actor_type: params.actor_type.unwrap_or_else(|| "agent".to_string()),
+            audience: params.audience.unwrap_or_else(|| "global".to_string()),
         };
 
         match self.store.store(input).await {
@@ -296,6 +311,9 @@ impl MemoryService {
                     "updated_at": memory.updated_at.to_rfc3339(),
                     "access_count": memory.access_count,
                     "embedding_status": memory.embedding_status,
+                    "actor": memory.actor,
+                    "actor_type": memory.actor_type,
+                    "audience": memory.audience,
                     "hint": "Use get_memory with this ID to retrieve, or update_memory to modify"
                 })))
             }
@@ -345,6 +363,9 @@ impl MemoryService {
                     "last_accessed_at": memory.last_accessed_at.map(|dt| dt.to_rfc3339()),
                     "access_count": memory.access_count,
                     "embedding_status": memory.embedding_status,
+                    "actor": memory.actor,
+                    "actor_type": memory.actor_type,
+                    "audience": memory.audience,
                     "hint": "Use update_memory to modify or delete_memory to remove"
                 })))
             }
@@ -440,6 +461,9 @@ impl MemoryService {
                     "updated_at": memory.updated_at.to_rfc3339(),
                     "access_count": memory.access_count,
                     "embedding_status": memory.embedding_status,
+                    "actor": memory.actor,
+                    "actor_type": memory.actor_type,
+                    "audience": memory.audience,
                     "hint": "Use get_memory to re-read or delete_memory to remove"
                 })))
             }
@@ -619,6 +643,8 @@ impl MemoryService {
             updated_before,
             limit: limit as i64,
             cursor: params.cursor,
+            actor: params.actor,
+            audience: params.audience,
         };
 
         match self.store.list(filter).await {
@@ -637,6 +663,9 @@ impl MemoryService {
                             "updated_at": m.updated_at.to_rfc3339(),
                             "access_count": m.access_count,
                             "embedding_status": m.embedding_status,
+                            "actor": m.actor,
+                            "actor_type": m.actor_type,
+                            "audience": m.audience,
                         })
                     })
                     .collect();
@@ -803,6 +832,7 @@ impl MemoryService {
             bm25_k,
             vector_k,
             symbolic_k,
+            params.audience.as_deref(),
         ).await {
             Ok(hits) => hits,
             Err(e) => return Ok(store_error_to_result(e)),
@@ -939,6 +969,9 @@ impl MemoryService {
                 "relevance_score": (hit.salience_score * 1000.0).round() / 1000.0,
                 "match_source": hit.match_source,
                 "rrf_score": (hit.rrf_score * 10000.0).round() / 10000.0,
+                "actor": hit.memory.actor,
+                "actor_type": hit.memory.actor_type,
+                "audience": hit.memory.audience,
             });
             // Add score breakdown when debug_scoring is enabled
             if let Some(ref bd) = hit.breakdown {

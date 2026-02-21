@@ -198,6 +198,9 @@ fn row_to_memory(row: &PgRow) -> Result<Memory, MemcpError> {
         extraction_status: row.try_get("extraction_status").unwrap_or_else(|_| "pending".to_string()),
         is_consolidated_original: row.try_get("is_consolidated_original").unwrap_or(false),
         consolidated_into: row.try_get("consolidated_into").unwrap_or(None),
+        actor: row.try_get("actor").unwrap_or(None),
+        actor_type: row.try_get("actor_type").unwrap_or_else(|_| "agent".to_string()),
+        audience: row.try_get("audience").unwrap_or_else(|_| "global".to_string()),
     })
 }
 
@@ -214,8 +217,8 @@ impl MemoryStore for PostgresMemoryStore {
             .map(|t| serde_json::json!(t));
 
         sqlx::query(
-            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending')",
+            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10)",
         )
         .bind(&id)
         .bind(&input.content)
@@ -224,6 +227,9 @@ impl MemoryStore for PostgresMemoryStore {
         .bind(&tags_json)     // JSONB — bind serde_json::Value directly
         .bind(&now)           // TIMESTAMPTZ — bind DateTime<Utc> directly
         .bind(&now)
+        .bind(&input.actor)
+        .bind(&input.actor_type)
+        .bind(&input.audience)
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to insert memory: {}", e)))?;
@@ -244,13 +250,17 @@ impl MemoryStore for PostgresMemoryStore {
             extraction_status: "pending".to_string(),
             is_consolidated_original: false,
             consolidated_into: None,
+            actor: input.actor,
+            actor_type: input.actor_type,
+            audience: input.audience,
         })
     }
 
     async fn get(&self, id: &str) -> Result<Memory, MemcpError> {
         let row = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
-             extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into \
+             extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
+             actor, actor_type, audience \
              FROM memories WHERE id = $1",
         )
         .bind(id)
@@ -336,7 +346,8 @@ impl MemoryStore for PostgresMemoryStore {
         // Re-fetch and return the updated record
         let updated_row = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
-             extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into \
+             extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
+             actor, actor_type, audience \
              FROM memories WHERE id = $1",
         )
         .bind(id)
@@ -405,6 +416,14 @@ impl MemoryStore for PostgresMemoryStore {
             ));
             param_idx += 3;
         }
+        if filter.actor.is_some() {
+            conditions.push(format!("actor = ${}", param_idx));
+            param_idx += 1;
+        }
+        if filter.audience.is_some() {
+            conditions.push(format!("audience = ${}", param_idx));
+            param_idx += 1;
+        }
 
         let where_clause = if conditions.is_empty() {
             String::new()
@@ -414,7 +433,8 @@ impl MemoryStore for PostgresMemoryStore {
 
         let sql = format!(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
-             extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into \
+             extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
+             actor, actor_type, audience \
              FROM memories {} ORDER BY created_at DESC, id ASC LIMIT ${}",
             where_clause, param_idx
         );
@@ -442,6 +462,12 @@ impl MemoryStore for PostgresMemoryStore {
             let cid = cursor_id.as_deref().unwrap_or("");
             // Bind 3 times for the cursor comparison: $N, $N+1 (same value), $N+2
             q = q.bind(ca).bind(ca).bind(cid.to_string());
+        }
+        if let Some(ref actor) = filter.actor {
+            q = q.bind(actor);
+        }
+        if let Some(ref audience) = filter.audience {
+            q = q.bind(audience);
         }
         // Fetch one extra to determine if there are more pages
         q = q.bind(limit + 1);
@@ -497,7 +523,15 @@ impl MemoryStore for PostgresMemoryStore {
         }
         if filter.updated_before.is_some() {
             conditions.push(format!("updated_at < ${}", param_idx));
-            let _ = param_idx + 1; // suppress unused increment warning
+            param_idx += 1;
+        }
+        if filter.actor.is_some() {
+            conditions.push(format!("actor = ${}", param_idx));
+            param_idx += 1;
+        }
+        if filter.audience.is_some() {
+            conditions.push(format!("audience = ${}", param_idx));
+            let _ = param_idx + 1;
         }
 
         let where_clause = if conditions.is_empty() {
@@ -526,6 +560,12 @@ impl MemoryStore for PostgresMemoryStore {
         }
         if let Some(ref ub) = filter.updated_before {
             q = q.bind(ub);
+        }
+        if let Some(ref actor) = filter.actor {
+            q = q.bind(actor);
+        }
+        if let Some(ref audience) = filter.audience {
+            q = q.bind(audience);
         }
 
         let row = q
@@ -563,7 +603,15 @@ impl MemoryStore for PostgresMemoryStore {
         }
         if filter.updated_before.is_some() {
             conditions.push(format!("updated_at < ${}", param_idx));
-            let _ = param_idx + 1; // suppress unused increment warning
+            param_idx += 1;
+        }
+        if filter.actor.is_some() {
+            conditions.push(format!("actor = ${}", param_idx));
+            param_idx += 1;
+        }
+        if filter.audience.is_some() {
+            conditions.push(format!("audience = ${}", param_idx));
+            let _ = param_idx + 1;
         }
 
         let where_clause = if conditions.is_empty() {
@@ -592,6 +640,12 @@ impl MemoryStore for PostgresMemoryStore {
         }
         if let Some(ref ub) = filter.updated_before {
             q = q.bind(ub);
+        }
+        if let Some(ref actor) = filter.actor {
+            q = q.bind(actor);
+        }
+        if let Some(ref audience) = filter.audience {
+            q = q.bind(audience);
         }
 
         let result = q
@@ -671,7 +725,8 @@ impl PostgresMemoryStore {
     pub async fn get_pending_memories(&self, limit: i64) -> Result<Vec<crate::store::Memory>, MemcpError> {
         let rows = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
-             extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into \
+             extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
+             actor, actor_type, audience \
              FROM memories WHERE embedding_status IN ('pending', 'failed') \
              ORDER BY created_at ASC LIMIT $1",
         )
@@ -1041,6 +1096,10 @@ impl PostgresMemoryStore {
             conditions.push(format!("m.tags @> ${}::jsonb", param_idx));
             param_idx += 1;
         }
+        if filter.audience.is_some() {
+            conditions.push(format!("m.audience = ${}", param_idx));
+            param_idx += 1;
+        }
 
         let where_clause = format!("WHERE {}", conditions.join(" AND "));
 
@@ -1053,6 +1112,7 @@ impl PostgresMemoryStore {
                     m.access_count, m.embedding_status, \
                     m.extracted_entities, m.extracted_facts, m.extraction_status, \
                     m.is_consolidated_original, m.consolidated_into, \
+                    m.actor, m.actor_type, m.audience, \
                     (1 - (me.embedding <=> $1)) AS similarity \
              FROM memories m \
              JOIN memory_embeddings me ON me.memory_id = m.id \
@@ -1086,6 +1146,9 @@ impl PostgresMemoryStore {
         if let Some(ref tags) = filter.tags {
             q = q.bind(serde_json::json!(tags));
         }
+        if let Some(ref audience) = filter.audience {
+            q = q.bind(audience);
+        }
         q = q.bind(filter.limit).bind(filter.offset);
 
         let rows = q
@@ -1103,6 +1166,9 @@ impl PostgresMemoryStore {
         }
         if let Some(ref tags) = filter.tags {
             count_q = count_q.bind(serde_json::json!(tags));
+        }
+        if let Some(ref audience) = filter.audience {
+            count_q = count_q.bind(audience);
         }
 
         let count_row = count_q
@@ -1159,7 +1225,8 @@ impl PostgresMemoryStore {
         let rows = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, \
              last_accessed_at, access_count, embedding_status, \
-             extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into \
+             extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
+             actor, actor_type, audience \
              FROM memories WHERE id = ANY($1)",
         )
         .bind(ids)
@@ -1198,6 +1265,7 @@ impl PostgresMemoryStore {
         bm25_k: Option<f64>,
         vector_k: Option<f64>,
         symbolic_k: Option<f64>,
+        audience: Option<&str>,
     ) -> Result<Vec<crate::search::HybridRawHit>, MemcpError> {
         // 40 candidates per leg — research recommendation balancing recall vs cost
         let candidate_limit = 40i64;
@@ -1220,6 +1288,7 @@ impl PostgresMemoryStore {
                     created_after,
                     created_before,
                     tags: tags.map(|t| t.to_vec()),
+                    audience: audience.map(|s| s.to_string()),
                 };
                 let result = self.search_similar(&filter).await?;
                 result
@@ -1273,6 +1342,11 @@ impl PostgresMemoryStore {
                     match_source: match_source.clone(),
                 });
             }
+        }
+
+        // Post-filter fused results by audience if specified
+        if let Some(aud) = audience {
+            hits.retain(|hit| hit.memory.audience == aud);
         }
 
         Ok(hits)
@@ -1493,8 +1567,8 @@ impl PostgresMemoryStore {
         sqlx::query(
             "INSERT INTO memories \
              (id, content, type_hint, source, created_at, updated_at, access_count, \
-              embedding_status, extraction_status) \
-             VALUES ($1, $2, 'consolidated', 'consolidation', $3, $3, 0, 'pending', 'pending')",
+              embedding_status, extraction_status, actor_type, audience) \
+             VALUES ($1, $2, 'consolidated', 'consolidation', $3, $3, 0, 'pending', 'pending', 'system', 'global')",
         )
         .bind(&consolidated_id)
         .bind(content)
