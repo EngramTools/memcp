@@ -79,96 +79,96 @@ impl MemoryService {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct StoreMemoryParams {
-    /// The memory content to store (required)
+    /// Memory content
     pub content: String,
-    /// Classification hint: "fact", "preference", "instruction", etc. (default: "fact")
+    /// Classification hint
     pub type_hint: Option<String>,
-    /// Origin source: "user", "assistant", "system", etc. (default: "default")
+    /// Origin source
     pub source: Option<String>,
-    /// Optional tags for categorization
+    /// Tags
     pub tags: Option<Vec<String>>,
-    /// Who is storing this memory (optional, self-reported until auth)
+    /// Actor identity
     pub actor: Option<String>,
-    /// Actor type: "agent" (default), "user", "system"
+    /// Actor type
     pub actor_type: Option<String>,
-    /// Audience scope: "global" (default), "self"
+    /// Audience scope
     pub audience: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetMemoryParams {
-    /// Memory ID to retrieve (required)
+    /// Memory ID
     pub id: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct UpdateMemoryParams {
-    /// Memory ID to update (required)
+    /// Memory ID
     pub id: String,
-    /// New content (optional)
+    /// New content
     pub content: Option<String>,
-    /// New classification hint (optional)
+    /// New classification hint
     pub type_hint: Option<String>,
-    /// New origin source (optional)
+    /// New origin source
     pub source: Option<String>,
-    /// New tags, replaces existing (optional)
+    /// New tags (replaces existing)
     pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct DeleteMemoryParams {
-    /// Memory ID to delete (required)
+    /// Memory ID
     pub id: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct BulkDeleteMemoriesParams {
-    /// Filter by type_hint (optional)
+    /// Filter by type_hint
     pub type_hint: Option<String>,
-    /// Filter by source (optional)
+    /// Filter by source
     pub source: Option<String>,
-    /// Delete memories created after this ISO-8601 timestamp (optional)
+    /// Created after (ISO-8601)
     pub created_after: Option<String>,
-    /// Delete memories created before this ISO-8601 timestamp (optional)
+    /// Created before (ISO-8601)
     pub created_before: Option<String>,
-    /// Delete memories updated after this ISO-8601 timestamp (optional)
+    /// Updated after (ISO-8601)
     pub updated_after: Option<String>,
-    /// Delete memories updated before this ISO-8601 timestamp (optional)
+    /// Updated before (ISO-8601)
     pub updated_before: Option<String>,
-    /// Set to true to confirm deletion (default: false — returns count only)
+    /// true to delete, false for count
     #[serde(default)]
     pub confirm: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ListMemoriesParams {
-    /// Filter by type_hint (optional)
+    /// Filter by type_hint
     pub type_hint: Option<String>,
-    /// Filter by source (optional)
+    /// Filter by source
     pub source: Option<String>,
-    /// Filter memories created after this ISO-8601 timestamp (optional)
+    /// Created after (ISO-8601)
     pub created_after: Option<String>,
-    /// Filter memories created before this ISO-8601 timestamp (optional)
+    /// Created before (ISO-8601)
     pub created_before: Option<String>,
-    /// Filter memories updated after this ISO-8601 timestamp (optional)
+    /// Updated after (ISO-8601)
     pub updated_after: Option<String>,
-    /// Filter memories updated before this ISO-8601 timestamp (optional)
+    /// Updated before (ISO-8601)
     pub updated_before: Option<String>,
-    /// Maximum results to return (1-100, default: 20)
+    /// Max results (1-100)
     pub limit: Option<u32>,
-    /// Cursor from previous page for pagination (optional)
+    /// Pagination cursor
     pub cursor: Option<String>,
-    /// Filter by actor (exact match, optional)
+    /// Filter by actor
     pub actor: Option<String>,
-    /// Filter by audience scope (optional)
+    /// Filter by audience
     pub audience: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ReinforceMemoryParams {
-    /// Memory ID to reinforce (required)
+    /// Memory ID
     pub id: String,
-    /// Reinforcement strength: "good" (default) for standard reinforcement, "easy" for stronger boost
+    /// Strength: "good" or "easy"
     #[serde(default = "default_rating")]
     pub rating: Option<String>,
 }
@@ -179,28 +179,25 @@ fn default_rating() -> Option<String> {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SearchMemoryParams {
-    /// Natural language query — find memories by meaning, not exact words (required)
+    /// Search query
     pub query: String,
-    /// Maximum results to return (1-100, default: 10)
+    /// Max results (1-100)
     pub limit: Option<u32>,
-    /// Return only memories created after this ISO-8601 timestamp (optional)
+    /// Created after (ISO-8601)
     pub created_after: Option<String>,
-    /// Return only memories created before this ISO-8601 timestamp (optional)
+    /// Created before (ISO-8601)
     pub created_before: Option<String>,
-    /// Filter by tags — return only memories with ALL specified tags (optional)
+    /// Filter by tags (all must match)
     pub tags: Option<Vec<String>>,
-    /// Cursor from previous page for pagination (optional)
+    /// Pagination cursor
     pub cursor: Option<String>,
-    /// Weight for BM25 keyword search path (0.0 to disable, 1.0 = default, >1.0 = emphasize).
-    /// Controls how much exact keyword matches influence results.
+    /// BM25 weight (0=disable, 1=default)
     pub bm25_weight: Option<f64>,
-    /// Weight for vector semantic search path (0.0 to disable, 1.0 = default, >1.0 = emphasize).
-    /// Controls how much meaning similarity influences results.
+    /// Vector weight (0=disable, 1=default)
     pub vector_weight: Option<f64>,
-    /// Weight for symbolic metadata search path (0.0 to disable, 1.0 = default, >1.0 = emphasize).
-    /// Controls how much tag/type/source matches influence results.
+    /// Symbolic weight (0=disable, 1=default)
     pub symbolic_weight: Option<f64>,
-    /// Filter by audience scope (optional)
+    /// Filter by audience
     pub audience: Option<String>,
 }
 
@@ -255,7 +252,7 @@ fn parse_datetime(s: &str, field: &str) -> Result<chrono::DateTime<chrono::Utc>,
 // Tool implementations
 #[rmcp::tool_router]
 impl MemoryService {
-    #[tool(description = "Store a new memory with content, type hint, source, and tags. Returns the created memory with its ID.")]
+    #[tool(description = "Store a new memory. Returns {id}.")]
     async fn store_memory(
         &self,
         Parameters(params): Parameters<StoreMemoryParams>,
@@ -343,7 +340,7 @@ impl MemoryService {
         }
     }
 
-    #[tool(description = "Retrieve a specific memory by ID. Also updates access count and last accessed timestamp.")]
+    #[tool(description = "Get a memory by ID.")]
     async fn get_memory(
         &self,
         Parameters(params): Parameters<GetMemoryParams>,
@@ -395,7 +392,7 @@ impl MemoryService {
         }
     }
 
-    #[tool(description = "Update an existing memory's content, type hint, source, or tags. At least one field must be provided.")]
+    #[tool(description = "Update a memory. At least one field required.")]
     async fn update_memory(
         &self,
         Parameters(params): Parameters<UpdateMemoryParams>,
@@ -513,7 +510,7 @@ impl MemoryService {
         }
     }
 
-    #[tool(description = "Delete a single memory by ID. This is permanent and cannot be undone.")]
+    #[tool(description = "Delete a memory by ID.")]
     async fn delete_memory(
         &self,
         Parameters(params): Parameters<DeleteMemoryParams>,
@@ -542,7 +539,7 @@ impl MemoryService {
         }
     }
 
-    #[tool(description = "Bulk delete memories by filter. First call (confirm: false) returns the count. Second call (confirm: true) performs deletion.")]
+    #[tool(description = "Bulk delete by filter. confirm=false returns count, confirm=true deletes.")]
     async fn bulk_delete_memories(
         &self,
         Parameters(params): Parameters<BulkDeleteMemoriesParams>,
@@ -623,7 +620,7 @@ impl MemoryService {
         }
     }
 
-    #[tool(description = "List memories with optional filters and cursor-based pagination.")]
+    #[tool(description = "List memories with filters and pagination.")]
     async fn list_memories(
         &self,
         Parameters(params): Parameters<ListMemoriesParams>,
@@ -727,7 +724,7 @@ impl MemoryService {
         }
     }
 
-    #[tool(description = "Search memories using both keyword matching and semantic similarity for best results. Use this when you want to find memories related to a concept, topic, or question. Results are ranked by salience score combining recency, access frequency, semantic relevance, and reinforcement. For browsing all memories or filtering by type/source, use list_memories instead.")]
+    #[tool(description = "Search memories by meaning. Returns salience-ranked results.")]
     async fn search_memory(
         &self,
         Parameters(params): Parameters<SearchMemoryParams>,
@@ -1042,7 +1039,7 @@ impl MemoryService {
         Ok(CallToolResult::structured(response))
     }
 
-    #[tool(description = "Reinforce a memory to boost its salience in future searches. Use when a memory is particularly relevant or important. Reinforcing a faded memory produces a stronger boost than reinforcing a recently accessed one (spaced repetition). Rating: 'good' (default) for standard reinforcement, 'easy' for extra-strong boost.")]
+    #[tool(description = "Reinforce a memory to boost future search salience.")]
     async fn reinforce_memory(
         &self,
         Parameters(params): Parameters<ReinforceMemoryParams>,
@@ -1104,7 +1101,7 @@ impl MemoryService {
         }
     }
 
-    #[tool(description = "Check server health and status")]
+    #[tool(description = "Health check.")]
     async fn health_check(
         &self,
     ) -> Result<CallToolResult, McpError> {
@@ -1160,7 +1157,7 @@ impl ServerHandler for MemoryService {
                 website_url: None,
             },
             instructions: Some(
-                "Memory server for AI agents. Tools: store_memory, get_memory, search_memory, update_memory, delete_memory, bulk_delete_memories, list_memories, health_check, reinforce_memory. Resources: memory://session-primer (recent memories), memory://user-profile (preferences).".to_string()
+                "Memory server for AI agents. Tools: store_memory, get_memory, search_memory, update_memory, delete_memory, bulk_delete_memories, list_memories, reinforce_memory, health_check.\n\nSearch uses keyword + semantic matching ranked by salience (recency, access frequency, relevance, reinforcement). Use list_memories to browse by filters. Reinforcement uses spaced repetition — faded memories get stronger boosts.\n\nDefaults: type_hint=\"fact\", source=\"default\", actor_type=\"agent\", audience=\"global\". Weights: 0=disable leg, 1=default, >1=emphasize.".to_string()
             ),
         }
     }
