@@ -1,6 +1,8 @@
+pub mod auto_store;
 pub mod benchmark;
 pub mod config;
 pub mod consolidation;
+pub mod content_filter;
 pub mod embedding;
 pub mod errors;
 pub mod extraction;

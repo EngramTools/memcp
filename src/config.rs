@@ -349,6 +349,123 @@ impl Default for EmbeddingConfig {
     }
 }
 
+/// Configuration for the auto-store sidecar.
+///
+/// Watches conversation log files and automatically ingests memories
+/// without requiring the agent to explicitly call store_memory.
+/// Disabled by default — opt in via `[auto_store] enabled = true`.
+/// Nested env var overrides use double underscores:
+///   MEMCP_AUTO_STORE__ENABLED=true
+///   MEMCP_AUTO_STORE__WATCH_PATHS=~/.claude/history.jsonl
+///   MEMCP_AUTO_STORE__FILTER_MODE=heuristic
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoStoreConfig {
+    /// Whether auto-store is enabled (default: false — opt-in)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Paths to watch for new log entries.
+    /// Supports ~ expansion for home directory.
+    /// e.g. ["~/.claude/history.jsonl"]
+    #[serde(default)]
+    pub watch_paths: Vec<String>,
+
+    /// Log format: "claude-code" (default) or "generic-jsonl"
+    #[serde(default = "default_auto_store_format")]
+    pub format: String,
+
+    /// Filter mode: "llm" (default), "heuristic", or "none"
+    #[serde(default = "default_auto_store_filter_mode")]
+    pub filter_mode: String,
+
+    /// LLM provider for filtering: "ollama" (default) or "openai"
+    #[serde(default = "default_auto_store_filter_provider")]
+    pub filter_provider: String,
+
+    /// Model name for LLM filter (e.g. "llama3.2")
+    #[serde(default = "default_auto_store_filter_model")]
+    pub filter_model: String,
+
+    /// Fallback poll interval in seconds (default: 5)
+    #[serde(default = "default_auto_store_poll_interval")]
+    pub poll_interval_secs: u64,
+
+    /// Dedup window in seconds — identical content within this window is skipped (default: 300)
+    #[serde(default = "default_auto_store_dedup_window")]
+    pub dedup_window_secs: u64,
+}
+
+fn default_auto_store_format() -> String { "claude-code".to_string() }
+fn default_auto_store_filter_mode() -> String { "llm".to_string() }
+fn default_auto_store_filter_provider() -> String { "ollama".to_string() }
+fn default_auto_store_filter_model() -> String { "llama3.2".to_string() }
+fn default_auto_store_poll_interval() -> u64 { 5 }
+fn default_auto_store_dedup_window() -> u64 { 300 }
+
+impl Default for AutoStoreConfig {
+    fn default() -> Self {
+        AutoStoreConfig {
+            enabled: false,
+            watch_paths: Vec::new(),
+            format: default_auto_store_format(),
+            filter_mode: default_auto_store_filter_mode(),
+            filter_provider: default_auto_store_filter_provider(),
+            filter_model: default_auto_store_filter_model(),
+            poll_interval_secs: default_auto_store_poll_interval(),
+            dedup_window_secs: default_auto_store_dedup_window(),
+        }
+    }
+}
+
+/// Configuration for content filtering (topic exclusion).
+///
+/// Two-tier system: regex patterns (fast, deterministic) and
+/// semantic topic exclusion (embedding-based similarity).
+/// Disabled by default — opt in via `[content_filter] enabled = true`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentFilterConfig {
+    /// Whether content filtering is enabled (default: false — opt-in)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Default action when content matches: "drop" (silent, default) or "reject" (return error)
+    #[serde(default = "default_filter_action")]
+    pub default_action: String,
+
+    /// Regex patterns — content matching ANY pattern is excluded.
+    #[serde(default)]
+    pub regex_patterns: Vec<String>,
+
+    /// Semantic topics to exclude. Each string is embedded at startup
+    /// and incoming content is checked via cosine similarity.
+    #[serde(default)]
+    pub excluded_topics: Vec<String>,
+
+    /// Cosine similarity threshold for semantic exclusion (default: 0.85).
+    #[serde(default = "default_exclusion_threshold")]
+    pub semantic_threshold: f64,
+}
+
+fn default_filter_action() -> String {
+    "drop".to_string()
+}
+
+fn default_exclusion_threshold() -> f64 {
+    0.85
+}
+
+impl Default for ContentFilterConfig {
+    fn default() -> Self {
+        ContentFilterConfig {
+            enabled: false,
+            default_action: default_filter_action(),
+            regex_patterns: Vec::new(),
+            excluded_topics: Vec::new(),
+            semantic_threshold: default_exclusion_threshold(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Log level: trace, debug, info, warn, error
@@ -393,6 +510,17 @@ pub struct Config {
     /// Existing configs without [query_intelligence] section still work (serde default applied).
     #[serde(default)]
     pub query_intelligence: QueryIntelligenceConfig,
+
+    /// Auto-store sidecar configuration.
+    /// Watches conversation log files and automatically ingests memories.
+    /// Existing configs without [auto_store] section still work (serde default applied).
+    #[serde(default)]
+    pub auto_store: AutoStoreConfig,
+
+    /// Content filtering configuration (topic exclusion).
+    /// Existing configs without [content_filter] section still work (serde default applied).
+    #[serde(default)]
+    pub content_filter: ContentFilterConfig,
 }
 
 fn default_log_level() -> String {
@@ -415,6 +543,8 @@ impl Default for Config {
             extraction: ExtractionConfig::default(),
             consolidation: ConsolidationConfig::default(),
             query_intelligence: QueryIntelligenceConfig::default(),
+            auto_store: AutoStoreConfig::default(),
+            content_filter: ContentFilterConfig::default(),
         }
     }
 }
