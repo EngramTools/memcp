@@ -879,10 +879,12 @@ impl PostgresMemoryStore {
                 .try_get("memory_id")
                 .map_err(|e| MemcpError::Storage(e.to_string()))?;
             let stability: f64 = row
-                .try_get("stability")
+                .try_get::<f32, _>("stability")
+                .map(|v| v as f64)
                 .map_err(|e| MemcpError::Storage(e.to_string()))?;
             let difficulty: f64 = row
-                .try_get("difficulty")
+                .try_get::<f32, _>("difficulty")
+                .map(|v| v as f64)
                 .map_err(|e| MemcpError::Storage(e.to_string()))?;
             let reinforcement_count: i32 = row
                 .try_get("reinforcement_count")
@@ -933,8 +935,8 @@ impl PostgresMemoryStore {
                updated_at = EXCLUDED.updated_at",
         )
         .bind(memory_id)
-        .bind(stability)
-        .bind(difficulty)
+        .bind(stability as f32)
+        .bind(difficulty as f32)
         .bind(reinforcement_count)
         .bind(last_reinforced_at)
         .bind(&now)
@@ -1000,8 +1002,8 @@ impl PostgresMemoryStore {
                updated_at = EXCLUDED.updated_at",
         )
         .bind(memory_id)
-        .bind(new_stability)
-        .bind(current.difficulty)
+        .bind(new_stability as f32)
+        .bind(current.difficulty as f32)
         .bind(new_count)
         .bind(&now)
         .bind(&now)

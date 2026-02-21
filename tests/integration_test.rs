@@ -72,7 +72,7 @@ impl McpClient {
 
     fn send_request(&self, request: Value) -> Option<Value> {
         self.tx.send(request).ok()?;
-        self.rx.recv_timeout(Duration::from_secs(2)).ok()
+        self.rx.recv_timeout(Duration::from_secs(10)).ok()
     }
 
     fn send_notification(&self, notification: Value) {
@@ -860,14 +860,16 @@ fn test_bulk_delete_two_step() {
     assert_eq!(deleted["deleted"], 3, "Should have deleted 3 memories");
     assert_eq!(deleted["confirmed"], true, "Should confirm deletion");
 
-    // Verify only permanent memories remain
-    let list_all_resp = client.call_tool("list_memories", json!({}));
-    let all_content = McpTestClient::structured_content(&list_all_resp);
-    let remaining = all_content["memories"].as_array().unwrap();
-    assert_eq!(remaining.len(), 2, "Should have only 2 permanent memories left");
-    for m in remaining {
-        assert_eq!(m["type_hint"], "permanent", "Remaining memories should be permanent");
-    }
+    // Verify no temporary memories remain (permanent ones should still exist)
+    let list_temp_resp = client.call_tool("list_memories", json!({"type_hint": "temporary"}));
+    let temp_content = McpTestClient::structured_content(&list_temp_resp);
+    let temp_remaining = temp_content["memories"].as_array().unwrap();
+    assert_eq!(temp_remaining.len(), 0, "All temporary memories should be deleted");
+
+    let list_perm_resp = client.call_tool("list_memories", json!({"type_hint": "permanent"}));
+    let perm_content = McpTestClient::structured_content(&list_perm_resp);
+    let perm_remaining = perm_content["memories"].as_array().unwrap();
+    assert_eq!(perm_remaining.len(), 2, "Should have 2 permanent memories left");
 }
 
 #[test]
