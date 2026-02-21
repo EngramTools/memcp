@@ -240,6 +240,10 @@ async fn run_worker(
 
         match store.store(create).await {
             Ok(memory) => {
+                // Seed salience: auto-store gets stability=2.5 (weaker than explicit store's 3.0)
+                if let Err(e) = store.upsert_salience(&memory.id, 2.5, 5.0, 0, None).await {
+                    tracing::warn!(error = %e, memory_id = %memory.id, "Failed to seed salience for auto-store");
+                }
                 tracing::info!(
                     memory_id = %memory.id,
                     source = %entry.source,

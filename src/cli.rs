@@ -169,6 +169,11 @@ pub async fn cmd_store(
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
+    // Seed salience: explicit stores get stability=3.0 (stronger than auto-store's 2.5)
+    if let Err(e) = store.upsert_salience(&memory.id, 3.0, 5.0, 0, None).await {
+        tracing::warn!(error = %e, memory_id = %memory.id, "Failed to seed salience for explicit store");
+    }
+
     println!(
         "{}",
         serde_json::to_string(&format_memory_json(&memory, false))?

@@ -303,6 +303,12 @@ impl MemoryService {
 
         match self.store.store(input).await {
             Ok(memory) => {
+                // Seed salience: explicit stores get stability=3.0 (stronger than auto-store's 2.5)
+                if let Some(ref pg) = self.pg_store {
+                    if let Err(e) = pg.upsert_salience(&memory.id, 3.0, 5.0, 0, None).await {
+                        tracing::warn!(error = %e, memory_id = %memory.id, "Failed to seed salience for explicit store");
+                    }
+                }
                 // Enqueue background embedding job (non-blocking)
                 if let Some(ref pipeline) = self.pipeline {
                     let text = crate::embedding::build_embedding_text(&memory.content, &memory.tags);
