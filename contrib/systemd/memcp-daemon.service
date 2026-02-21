@@ -1,0 +1,15 @@
+[Unit]
+Description=memcp daemon - Memory server background workers
+After=postgresql.service
+
+[Service]
+Type=simple
+ExecStart=MEMCP_BINARY_PATH daemon
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
