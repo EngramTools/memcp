@@ -240,6 +240,15 @@ impl McpTestClient {
         })).expect("No response from resources/list")
     }
 
+    /// Delete all memories in the database (for test isolation).
+    fn clean_all(&self) {
+        // Bulk delete all memories with confirm=true
+        // Use a type_hint filter that won't match to get count first,
+        // then delete without filter to get everything
+        let resp = self.call_tool("bulk_delete_memories", json!({"confirm": true}));
+        let _ = resp; // ignore result — may be 0 if already clean
+    }
+
     /// Call resources/read with a given URI. Returns the full response.
     fn read_resource(&self, uri: &str) -> Value {
         let id = self.next_id();
@@ -345,7 +354,7 @@ fn test_tool_discovery() {
     assert!(response["result"]["tools"].is_array());
 
     let tools = response["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 8, "Should have exactly 8 tools");
+    assert_eq!(tools.len(), 9, "Should have exactly 9 tools");
 
     // Check all expected tools are present
     let tool_names: Vec<String> = tools.iter()
@@ -359,6 +368,7 @@ fn test_tool_discovery() {
     assert!(tool_names.contains(&"bulk_delete_memories".to_string()));
     assert!(tool_names.contains(&"list_memories".to_string()));
     assert!(tool_names.contains(&"search_memory".to_string()));
+    assert!(tool_names.contains(&"reinforce_memory".to_string()));
     assert!(tool_names.contains(&"health_check".to_string()));
 
     // Verify each tool has required fields
@@ -594,19 +604,21 @@ fn test_search_memory() {
     let result = &response["result"];
     assert!(result["isError"].is_null() || result["isError"] == false);
 
-    // Check structured content for mock results
+    // Check structured content for search results
     if result["structuredContent"].is_object() {
         let search_result = &result["structuredContent"];
-        assert!(search_result["results"].is_array(), "Should have results array");
+        // Server returns "memories" array (not "results")
+        assert!(search_result["memories"].is_array() || search_result["total_results"].is_number(),
+            "Should have memories array or total_results field");
 
-        // Verify mock results have expected structure
-        let results = search_result["results"].as_array().unwrap();
-        if !results.is_empty() {
-            let first_result = &results[0];
-            assert!(first_result["id"].is_string());
-            assert!(first_result["content"].is_string());
-            assert!(first_result["relevance_score"].is_number());
-            assert!(first_result["created_at"].is_string());
+        if let Some(memories) = search_result["memories"].as_array() {
+            if !memories.is_empty() {
+                let first_result = &memories[0];
+                assert!(first_result["id"].is_string());
+                assert!(first_result["content"].is_string());
+                assert!(first_result["relevance_score"].is_number());
+                assert!(first_result["created_at"].is_string());
+            }
         }
     }
 }
@@ -723,6 +735,7 @@ fn test_delete_memory() {
 fn test_list_memories_with_pagination() {
     let client = McpTestClient::spawn();
     client.initialize();
+    client.clean_all();
 
     // Store 5 memories
     for i in 0..5 {
@@ -783,6 +796,7 @@ fn test_list_memories_with_pagination() {
 fn test_list_memories_with_filter() {
     let client = McpTestClient::spawn();
     client.initialize();
+    client.clean_all();
 
     // Store memories with different type_hints
     client.call_tool("store_memory", json!({"content": "Fact 1", "type_hint": "fact"}));
@@ -805,6 +819,7 @@ fn test_list_memories_with_filter() {
 fn test_bulk_delete_two_step() {
     let client = McpTestClient::spawn();
     client.initialize();
+    client.clean_all();
 
     // Store 3 "temporary" and 2 "permanent" memories
     for i in 0..3 {

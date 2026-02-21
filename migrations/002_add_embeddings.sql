@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS memory_embeddings (
     model_name TEXT NOT NULL,
     model_version TEXT NOT NULL,
     dimension INTEGER NOT NULL,
-    embedding vector,
+    embedding vector(384),
     is_current BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
