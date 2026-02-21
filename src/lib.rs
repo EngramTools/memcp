@@ -13,3 +13,4 @@ pub mod query_intelligence;
 pub mod search;
 pub mod server;
 pub mod store;
+pub mod summarization;

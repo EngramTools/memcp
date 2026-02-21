@@ -466,6 +466,94 @@ impl Default for ContentFilterConfig {
     }
 }
 
+/// Configuration for the auto-summarization subsystem.
+///
+/// When enabled, the auto-store sidecar summarizes AI assistant responses
+/// before storing them as memories. Uses Ollama (local, default) or any
+/// OpenAI-compatible API (OpenAI, Kimi/Moonshot, local vLLM, etc.).
+/// Disabled by default — opt in via `[summarization] enabled = true`.
+/// Nested env var overrides use double underscores:
+///   MEMCP_SUMMARIZATION__ENABLED=true
+///   MEMCP_SUMMARIZATION__PROVIDER=openai
+///   MEMCP_SUMMARIZATION__OPENAI_BASE_URL=https://api.moonshot.cn/v1
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SummarizationConfig {
+    /// Whether summarization is enabled (default: false — opt-in)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Which provider to use: "ollama" (local, default) or "openai" (any OpenAI-compatible API)
+    #[serde(default = "default_summarization_provider")]
+    pub provider: String,
+
+    /// Ollama server base URL
+    #[serde(default = "default_ollama_base_url")]
+    pub ollama_base_url: String,
+
+    /// Ollama model for summarization
+    #[serde(default = "default_summarization_ollama_model")]
+    pub ollama_model: String,
+
+    /// OpenAI-compatible base URL (supports OpenAI, Kimi/Moonshot, local vLLM, etc.)
+    #[serde(default = "default_summarization_openai_base_url")]
+    pub openai_base_url: String,
+
+    /// OpenAI-compatible API key — required when provider = "openai"
+    #[serde(default)]
+    pub openai_api_key: Option<String>,
+
+    /// OpenAI-compatible model for summarization (e.g. "gpt-4o-mini", "kimi-k2.5")
+    #[serde(default = "default_summarization_openai_model")]
+    pub openai_model: String,
+
+    /// Maximum input characters before truncation (default: 4000)
+    #[serde(default = "default_summarization_max_input_chars")]
+    pub max_input_chars: usize,
+
+    /// System prompt template for summarization.
+    /// The assistant response content is appended after this prompt.
+    #[serde(default = "default_summarization_prompt")]
+    pub prompt_template: String,
+}
+
+fn default_summarization_provider() -> String { "ollama".to_string() }
+fn default_summarization_ollama_model() -> String { "llama3.2:3b".to_string() }
+fn default_summarization_openai_base_url() -> String { "https://api.openai.com/v1".to_string() }
+fn default_summarization_openai_model() -> String { "gpt-4o-mini".to_string() }
+fn default_summarization_max_input_chars() -> usize { 4000 }
+fn default_summarization_prompt() -> String {
+    "Summarize the following AI assistant response into a concise memory entry. \
+     Extract and preserve:\n\
+     - Decisions made and their reasoning\n\
+     - Technical facts, explanations, and architecture choices\n\
+     - User preferences and corrections\n\
+     - Action items and next steps\n\
+     - Commands, configurations, or patterns worth remembering\n\n\
+     Omit:\n\
+     - Verbose reasoning chains and thinking-out-loud\n\
+     - Code formatting noise (keep only key snippets if critical)\n\
+     - Repeated context the user already knows\n\
+     - Pleasantries and filler\n\n\
+     Output a concise paragraph (2-5 sentences). If the response contains multiple \
+     distinct topics, separate them with semicolons.".to_string()
+}
+
+impl Default for SummarizationConfig {
+    fn default() -> Self {
+        SummarizationConfig {
+            enabled: false,
+            provider: default_summarization_provider(),
+            ollama_base_url: default_ollama_base_url(),
+            ollama_model: default_summarization_ollama_model(),
+            openai_base_url: default_summarization_openai_base_url(),
+            openai_api_key: None,
+            openai_model: default_summarization_openai_model(),
+            max_input_chars: default_summarization_max_input_chars(),
+            prompt_template: default_summarization_prompt(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Log level: trace, debug, info, warn, error
@@ -521,6 +609,11 @@ pub struct Config {
     /// Existing configs without [content_filter] section still work (serde default applied).
     #[serde(default)]
     pub content_filter: ContentFilterConfig,
+
+    /// Summarization configuration (for auto-store sidecar).
+    /// Existing configs without [summarization] section still work (serde default applied).
+    #[serde(default)]
+    pub summarization: SummarizationConfig,
 }
 
 fn default_log_level() -> String {
@@ -545,6 +638,7 @@ impl Default for Config {
             query_intelligence: QueryIntelligenceConfig::default(),
             auto_store: AutoStoreConfig::default(),
             content_filter: ContentFilterConfig::default(),
+            summarization: SummarizationConfig::default(),
         }
     }
 }
