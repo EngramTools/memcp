@@ -20,6 +20,7 @@ use chrono::Utc;
 use crate::query_intelligence::{RankedCandidate, temporal::parse_temporal_hint};
 
 use crate::config::SalienceConfig;
+use crate::content_filter::{ContentFilter, FilterVerdict};
 use crate::embedding::{EmbeddingJob, EmbeddingProvider};
 use crate::errors::MemcpError;
 use crate::extraction::ExtractionJob;
@@ -38,6 +39,7 @@ pub struct MemoryService {
     qi_expansion_provider: Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
     qi_reranking_provider: Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
     qi_config: crate::config::QueryIntelligenceConfig,
+    content_filter: Option<Arc<dyn ContentFilter>>,
 }
 
 impl MemoryService {
@@ -51,6 +53,7 @@ impl MemoryService {
         qi_expansion_provider: Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
         qi_reranking_provider: Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
         qi_config: crate::config::QueryIntelligenceConfig,
+        content_filter: Option<Arc<dyn ContentFilter>>,
     ) -> Self {
         Self {
             store,
@@ -63,6 +66,7 @@ impl MemoryService {
             qi_expansion_provider,
             qi_reranking_provider,
             qi_config,
+            content_filter,
         }
     }
 
@@ -271,6 +275,24 @@ impl MemoryService {
             })));
         }
 
+        // Content filter check (before storage)
+        if let Some(ref filter) = self.content_filter {
+            match filter.check(&params.content).await {
+                Ok(FilterVerdict::Allow) => {}
+                Ok(FilterVerdict::Drop { reason }) => {
+                    tracing::info!(reason = %reason, "store_memory: content filtered, not storing");
+                    return Ok(CallToolResult::structured(json!({
+                        "filtered": true,
+                        "reason": reason,
+                        "hint": "Content was not stored due to server content filtering rules"
+                    })));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "store_memory: content filter error, proceeding with store");
+                }
+            }
+        }
+
         let input = CreateMemory {
             content: params.content,
             type_hint: params.type_hint.unwrap_or_else(|| "fact".to_string()),
@@ -405,6 +427,26 @@ impl MemoryService {
                 "isError": true,
                 "error": "At least one of 'content', 'type_hint', 'source', or 'tags' must be provided"
             })));
+        }
+
+        // Content filter check (only when content is changing)
+        if let Some(ref new_content) = params.content {
+            if let Some(ref filter) = self.content_filter {
+                match filter.check(new_content).await {
+                    Ok(FilterVerdict::Allow) => {}
+                    Ok(FilterVerdict::Drop { reason }) => {
+                        tracing::info!(reason = %reason, "update_memory: new content filtered, rejecting update");
+                        return Ok(CallToolResult::structured(json!({
+                            "filtered": true,
+                            "reason": reason,
+                            "hint": "Content update was rejected due to server content filtering rules"
+                        })));
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "update_memory: content filter error, proceeding with update");
+                    }
+                }
+            }
         }
 
         // Track if content or tags changed — determines if re-embedding is needed

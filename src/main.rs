@@ -17,6 +17,7 @@ use memcp::logging;
 use memcp::query_intelligence::QueryIntelligenceProvider;
 use memcp::query_intelligence::ollama::OllamaQueryIntelligenceProvider;
 use memcp::query_intelligence::openai::OpenAIQueryIntelligenceProvider;
+use memcp::content_filter::CompositeFilter;
 use memcp::server::MemoryService;
 use memcp::store::postgres::PostgresMemoryStore;
 use rmcp::ServiceExt;
@@ -313,6 +314,42 @@ async fn main() -> Result<()> {
                 None
             };
 
+            // 8b. Build content filter if enabled
+            let content_filter: Option<Arc<dyn memcp::content_filter::ContentFilter>> = if config.content_filter.enabled {
+                match CompositeFilter::from_config(
+                    &config.content_filter,
+                    Some(provider_for_search.clone()),
+                ).await {
+                    Ok(filter) => {
+                        tracing::info!(
+                            regex_patterns = config.content_filter.regex_patterns.len(),
+                            excluded_topics = config.content_filter.excluded_topics.len(),
+                            "Content filter enabled"
+                        );
+                        Some(Arc::new(filter))
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to initialize content filter — filtering disabled");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            // 8c. Spawn auto-store sidecar if enabled
+            if config.auto_store.enabled {
+                let _auto_store_handle = memcp::auto_store::AutoStoreWorker::spawn(
+                    config.auto_store.clone(),
+                    store.clone(),
+                    Some(&pipeline),
+                    extraction_pipeline.as_ref(),
+                    &config.extraction,
+                    content_filter.clone(),
+                );
+                tracing::info!("Auto-store sidecar spawned");
+            }
+
             // 9. Create QI providers if enabled
             let qi_expansion_provider = if config.query_intelligence.expansion_enabled {
                 match create_qi_expansion_provider(&config) {
@@ -356,6 +393,7 @@ async fn main() -> Result<()> {
                 qi_expansion_provider,
                 qi_reranking_provider,
                 config.query_intelligence.clone(),
+                content_filter,
             );
 
             // 11. Serve via stdio transport

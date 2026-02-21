@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
 use crate::config::AutoStoreConfig;
+use crate::content_filter::{ContentFilter, FilterVerdict};
 use crate::embedding::{EmbeddingJob, build_embedding_text};
 use crate::embedding::pipeline::EmbeddingPipeline;
 use crate::extraction::ExtractionJob;
@@ -45,6 +46,7 @@ impl AutoStoreWorker {
         embedding_pipeline: Option<&EmbeddingPipeline>,
         extraction_pipeline: Option<&ExtractionPipeline>,
         extraction_config: &crate::config::ExtractionConfig,
+        content_filter: Option<Arc<dyn ContentFilter>>,
     ) -> JoinHandle<()> {
         let parser = create_parser(&config.format);
         let filter = create_filter(
@@ -81,6 +83,7 @@ impl AutoStoreWorker {
                 store,
                 embedding_sender,
                 extraction_sender,
+                content_filter,
             )
             .await;
         })
@@ -105,6 +108,7 @@ async fn run_worker(
     store: Arc<PostgresMemoryStore>,
     embedding_sender: Option<tokio::sync::mpsc::Sender<EmbeddingJob>>,
     extraction_sender: Option<tokio::sync::mpsc::Sender<ExtractionJob>>,
+    content_filter: Option<Arc<dyn ContentFilter>>,
 ) {
     // Channel for watch events
     let (tx, mut rx) = tokio::sync::mpsc::channel::<WatchEvent>(1000);
@@ -141,6 +145,24 @@ async fn run_worker(
         if now.duration_since(last_dedup_cleanup) > dedup_window * 2 {
             dedup_map.retain(|_, seen| now.duration_since(*seen) < dedup_window);
             last_dedup_cleanup = now;
+        }
+
+        // Content exclusion filter (BEFORE relevance filter — cheaper and deterministic)
+        if let Some(ref cf) = content_filter {
+            match cf.check(&entry.content).await {
+                Ok(FilterVerdict::Drop { reason }) => {
+                    tracing::debug!(
+                        reason = %reason,
+                        content_preview = %entry.content.chars().take(50).collect::<String>(),
+                        "Auto-store: content excluded by filter"
+                    );
+                    continue;
+                }
+                Ok(FilterVerdict::Allow) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "Auto-store: content filter error, proceeding");
+                }
+            }
         }
 
         // Filter check
