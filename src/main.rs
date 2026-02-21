@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use std::time::Duration;
+use memcp::cli;
 use memcp::config::Config;
 use memcp::consolidation::ConsolidationWorker;
 use memcp::embedding::EmbeddingProvider;
@@ -23,18 +24,113 @@ use memcp::store::postgres::PostgresMemoryStore;
 use rmcp::ServiceExt;
 
 #[derive(Parser)]
-#[command(name = "memcp", version, about = "High-performance MCP memory server")]
+#[command(
+    name = "memcp",
+    version,
+    about = "Memory server for AI agents",
+    long_about = "memcp - Memory server for AI agents\n\n\
+        USAGE:\n  \
+        memcp store <content> [--type-hint fact] [--source user] [--tags a,b]\n  \
+        memcp search <query> [--limit 10] [--tags a,b]\n  \
+        memcp list [--type-hint fact] [--source user] [--limit 20]\n  \
+        memcp get <id>\n  \
+        memcp delete <id>\n  \
+        memcp reinforce <id> [--rating good|easy]\n  \
+        memcp status                Show daemon status\n  \
+        memcp daemon                Start background workers\n  \
+        memcp daemon install        Install as system service\n  \
+        memcp serve                 Start MCP server (stdio)\n  \
+        memcp migrate               Run database migrations\n  \
+        memcp embed backfill|stats  Embedding management\n\n\
+        OUTPUT: JSON to stdout. Errors to stderr with non-zero exit code.",
+)]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Commands>,
+    command: Commands,
 
     /// Skip automatic database migration on startup
-    #[arg(long)]
+    #[arg(long, global = true)]
     skip_migrate: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Store a new memory (writes to DB, exits immediately)
+    Store {
+        content: String,
+        #[arg(long, default_value = "fact")]
+        type_hint: String,
+        #[arg(long, default_value = "default")]
+        source: String,
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        #[arg(long)]
+        actor: Option<String>,
+        #[arg(long, default_value = "agent")]
+        actor_type: String,
+        #[arg(long, default_value = "global")]
+        audience: String,
+    },
+    /// Search memories by keyword + metadata matching with salience ranking
+    Search {
+        query: String,
+        #[arg(long, default_value = "10")]
+        limit: i64,
+        #[arg(long)]
+        created_after: Option<String>,
+        #[arg(long)]
+        created_before: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        #[arg(long)]
+        audience: Option<String>,
+        #[arg(long)]
+        verbose: bool,
+    },
+    /// List memories with optional filters and pagination
+    List {
+        #[arg(long)]
+        type_hint: Option<String>,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        created_after: Option<String>,
+        #[arg(long)]
+        created_before: Option<String>,
+        #[arg(long)]
+        updated_after: Option<String>,
+        #[arg(long)]
+        updated_before: Option<String>,
+        #[arg(long, default_value = "20")]
+        limit: i64,
+        #[arg(long)]
+        cursor: Option<String>,
+        #[arg(long)]
+        actor: Option<String>,
+        #[arg(long)]
+        audience: Option<String>,
+        #[arg(long)]
+        verbose: bool,
+    },
+    /// Retrieve a memory by ID
+    Get { id: String },
+    /// Delete a memory by ID (permanent)
+    Delete { id: String },
+    /// Reinforce a memory to boost its salience in future searches
+    Reinforce {
+        id: String,
+        #[arg(long, default_value = "good")]
+        rating: String,
+    },
+    /// Show daemon status and pending work counts
+    Status,
+    /// Start background workers (embedding, extraction, consolidation, auto-store)
+    Daemon {
+        #[command(subcommand)]
+        action: Option<DaemonAction>,
+    },
+    /// Start MCP server on stdio (backwards-compatible mode)
+    Serve,
     /// Run database migrations and exit
     Migrate,
     /// Embedding management operations
@@ -42,6 +138,12 @@ enum Commands {
         #[command(subcommand)]
         action: EmbedAction,
     },
+}
+
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Install daemon as a system service (launchd on macOS, systemd on Linux)
+    Install,
 }
 
 #[derive(Subcommand)]
@@ -170,7 +272,7 @@ async fn main() -> Result<()> {
 
     // 4. Handle subcommands
     match cli.command {
-        Some(Commands::Migrate) => {
+        Commands::Migrate => {
             tracing::info!("Running database migrations...");
             // run_migrations=true, just connect and migrate then exit
             let _store = PostgresMemoryStore::new(&config.database_url, true)
@@ -180,7 +282,7 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        Some(Commands::Embed { action }) => {
+        Commands::Embed { action } => {
             let store = Arc::new(
                 PostgresMemoryStore::new(&config.database_url, true)
                     .await
@@ -227,8 +329,48 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        None => {
-            // Default: start the MCP server
+        Commands::Store { content, type_hint, source, tags, actor, actor_type, audience } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_store(&store, content, type_hint, source, tags, actor, actor_type, audience).await?;
+        }
+
+        Commands::Search { query, limit, created_after, created_before, tags, audience, verbose } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, audience, verbose).await?;
+        }
+
+        Commands::List { type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_list(&store, type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose).await?;
+        }
+
+        Commands::Get { id } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_get(&store, &id).await?;
+        }
+
+        Commands::Delete { id } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_delete(&store, &id).await?;
+        }
+
+        Commands::Reinforce { id, rating } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_reinforce(&store, &id, &rating).await?;
+        }
+
+        Commands::Status => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_status(&store).await?;
+        }
+
+        Commands::Daemon { .. } => {
+            eprintln!("Daemon mode not yet implemented. Use 'memcp serve' for MCP mode.");
+            std::process::exit(1);
+        }
+
+        Commands::Serve => {
+            // Start the MCP server
             tracing::info!(
                 version = env!("CARGO_PKG_VERSION"),
                 "memcp server starting"

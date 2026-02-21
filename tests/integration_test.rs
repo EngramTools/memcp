@@ -15,6 +15,7 @@ struct McpClient {
 impl McpClient {
     fn spawn() -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_memcp"))
+            .arg("serve")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())  // Suppress log output in tests
@@ -107,6 +108,7 @@ impl McpTestClient {
             .unwrap_or_else(|_| "postgres://memcp:memcp@localhost:5432/memcp".to_string());
 
         let mut child = Command::new(env!("CARGO_BIN_EXE_memcp"))
+            .arg("serve")
             .env("DATABASE_URL", &database_url)
             .env("MEMCP_LOG_LEVEL", "warn")
             .stdin(Stdio::piped())
