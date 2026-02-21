@@ -23,6 +23,7 @@ use crate::extraction::ollama::OllamaExtractionProvider;
 use crate::extraction::openai::OpenAIExtractionProvider;
 use crate::extraction::pipeline::ExtractionPipeline;
 use crate::store::postgres::PostgresMemoryStore;
+use crate::summarization::create_summarization_provider;
 
 /// Main daemon entry point.
 ///
@@ -133,6 +134,31 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             None
         };
 
+    // 7.5. Create summarization provider if enabled
+    let summarization_provider = match create_summarization_provider(&config.summarization) {
+        Ok(Some(provider)) => {
+            let model = if config.summarization.provider == "openai" {
+                &config.summarization.openai_model
+            } else {
+                &config.summarization.ollama_model
+            };
+            tracing::info!(
+                provider = %config.summarization.provider,
+                model = %model,
+                "Summarization enabled for auto-store"
+            );
+            Some(provider)
+        }
+        Ok(None) => {
+            tracing::info!("Summarization disabled — auto-store will store raw content");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to initialize summarization provider — summarization disabled");
+            None
+        }
+    };
+
     // 8. Spawn auto-store sidecar if enabled
     if config.auto_store.enabled {
         let _auto_store_handle = crate::auto_store::AutoStoreWorker::spawn(
@@ -142,6 +168,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             extraction_pipeline.as_ref(),
             &config.extraction,
             content_filter.clone(),
+            summarization_provider,
         );
         tracing::info!("Auto-store sidecar spawned");
     }

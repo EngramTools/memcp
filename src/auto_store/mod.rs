@@ -21,6 +21,7 @@ use crate::extraction::ExtractionJob;
 use crate::extraction::pipeline::ExtractionPipeline;
 use crate::store::{CreateMemory, MemoryStore};
 use crate::store::postgres::PostgresMemoryStore;
+use crate::summarization::SummarizationProvider;
 
 use self::filter::{FilterStrategy, create_filter};
 use self::parser::{LogParser, create_parser};
@@ -47,6 +48,7 @@ impl AutoStoreWorker {
         extraction_pipeline: Option<&ExtractionPipeline>,
         extraction_config: &crate::config::ExtractionConfig,
         content_filter: Option<Arc<dyn ContentFilter>>,
+        summarization_provider: Option<Arc<dyn SummarizationProvider>>,
     ) -> JoinHandle<()> {
         let parser = create_parser(&config.format);
         let filter = create_filter(
@@ -84,6 +86,7 @@ impl AutoStoreWorker {
                 embedding_sender,
                 extraction_sender,
                 content_filter,
+                summarization_provider,
             )
             .await;
         })
@@ -109,6 +112,7 @@ async fn run_worker(
     embedding_sender: Option<tokio::sync::mpsc::Sender<EmbeddingJob>>,
     extraction_sender: Option<tokio::sync::mpsc::Sender<ExtractionJob>>,
     content_filter: Option<Arc<dyn ContentFilter>>,
+    summarization_provider: Option<Arc<dyn SummarizationProvider>>,
 ) {
     // Channel for watch events
     let (tx, mut rx) = tokio::sync::mpsc::channel::<WatchEvent>(1000);
@@ -181,8 +185,40 @@ async fn run_worker(
             }
         }
 
+        // Summarize assistant responses, store user messages raw
+        let is_assistant = entry.metadata.get("role").map(|r| r == "assistant").unwrap_or(false);
+        let (store_content, is_summarized) = if is_assistant {
+            if let Some(ref provider) = summarization_provider {
+                match provider.summarize(&entry.content).await {
+                    Ok(summary) => {
+                        tracing::debug!(
+                            original_len = entry.content.len(),
+                            summary_len = summary.len(),
+                            "Auto-store: summarized assistant response"
+                        );
+                        (summary, true)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            content_preview = %entry.content.chars().take(50).collect::<String>(),
+                            "Auto-store: summarization failed, storing raw (fail-open)"
+                        );
+                        (entry.content.clone(), false)
+                    }
+                }
+            } else {
+                (entry.content.clone(), false)
+            }
+        } else {
+            (entry.content.clone(), false)
+        };
+
         // Build tags
         let mut tags = vec!["auto-store".to_string()];
+        if is_summarized {
+            tags.push("summarized".to_string());
+        }
         if let Some(ref sid) = entry.session_id {
             tags.push(format!("session:{}", sid));
         }
@@ -192,8 +228,8 @@ async fn run_worker(
 
         // Store the memory
         let create = CreateMemory {
-            content: entry.content.clone(),
-            type_hint: "auto".to_string(),
+            content: store_content,
+            type_hint: if is_summarized { "summary".to_string() } else { "auto".to_string() },
             source: entry.source.clone(),
             tags: Some(tags.clone()),
             created_at: entry.timestamp,
@@ -207,7 +243,8 @@ async fn run_worker(
                 tracing::info!(
                     memory_id = %memory.id,
                     source = %entry.source,
-                    content_len = entry.content.len(),
+                    content_len = memory.content.len(),
+                    summarized = is_summarized,
                     "Auto-stored memory"
                 );
 

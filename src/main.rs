@@ -458,6 +458,7 @@ async fn main() -> Result<()> {
                     extraction_pipeline.as_ref(),
                     &config.extraction,
                     content_filter.clone(),
+                    None, // Summarization only in daemon mode
                 );
                 tracing::info!("Auto-store sidecar spawned");
             }
