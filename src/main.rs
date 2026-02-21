@@ -6,13 +6,9 @@ use memcp::cli;
 use memcp::config::Config;
 use memcp::consolidation::ConsolidationWorker;
 use memcp::embedding::EmbeddingProvider;
-use memcp::embedding::local::LocalEmbeddingProvider;
-use memcp::embedding::openai::OpenAIEmbeddingProvider;
 use memcp::embedding::pipeline::{EmbeddingPipeline, backfill};
 use memcp::extraction::ExtractionJob;
 use memcp::extraction::ExtractionProvider;
-use memcp::extraction::ollama::OllamaExtractionProvider;
-use memcp::extraction::openai::OpenAIExtractionProvider;
 use memcp::extraction::pipeline::ExtractionPipeline;
 use memcp::logging;
 use memcp::query_intelligence::QueryIntelligenceProvider;
@@ -165,27 +161,7 @@ enum EmbedAction {
 
 /// Create the extraction provider based on configuration.
 fn create_extraction_provider(config: &Config) -> Result<Arc<dyn ExtractionProvider + Send + Sync>> {
-    match config.extraction.provider.as_str() {
-        "openai" => {
-            let api_key = config.extraction.openai_api_key.clone()
-                .ok_or_else(|| anyhow::anyhow!(
-                    "OpenAI API key required when extraction provider is 'openai'. \
-                     Set MEMCP_EXTRACTION__OPENAI_API_KEY or extraction.openai_api_key in memcp.toml"
-                ))?;
-            Ok(Arc::new(OpenAIExtractionProvider::new(
-                api_key,
-                config.extraction.openai_model.clone(),
-                config.extraction.max_content_chars,
-            )?))
-        }
-        "ollama" | _ => {
-            Ok(Arc::new(OllamaExtractionProvider::new(
-                config.extraction.ollama_base_url.clone(),
-                config.extraction.ollama_model.clone(),
-                config.extraction.max_content_chars,
-            )))
-        }
-    }
+    memcp::daemon::create_extraction_provider(config)
 }
 
 /// Create the QI expansion provider based on configuration.
@@ -240,19 +216,7 @@ fn create_qi_reranking_provider(config: &Config) -> Result<Arc<dyn QueryIntellig
 
 /// Create the embedding provider based on configuration.
 async fn create_embedding_provider(config: &Config) -> Result<Arc<dyn EmbeddingProvider + Send + Sync>> {
-    match config.embedding.provider.as_str() {
-        "openai" => {
-            let api_key = config.embedding.openai_api_key.clone()
-                .ok_or_else(|| anyhow::anyhow!(
-                    "OpenAI API key required when provider is 'openai'. \
-                     Set MEMCP_EMBEDDING__OPENAI_API_KEY or embedding.openai_api_key in memcp.toml"
-                ))?;
-            Ok(Arc::new(OpenAIEmbeddingProvider::new(api_key)?))
-        }
-        "local" | _ => {
-            Ok(Arc::new(LocalEmbeddingProvider::new(&config.embedding.cache_dir).await?))
-        }
-    }
+    memcp::daemon::create_embedding_provider(config).await
 }
 
 #[tokio::main]
@@ -364,9 +328,15 @@ async fn main() -> Result<()> {
             cli::cmd_status(&store).await?;
         }
 
-        Commands::Daemon { .. } => {
-            eprintln!("Daemon mode not yet implemented. Use 'memcp serve' for MCP mode.");
-            std::process::exit(1);
+        Commands::Daemon { action } => {
+            match action {
+                Some(DaemonAction::Install) => {
+                    memcp::daemon::install_service()?;
+                }
+                None => {
+                    memcp::daemon::run_daemon(&config, cli.skip_migrate).await?;
+                }
+            }
         }
 
         Commands::Serve => {
