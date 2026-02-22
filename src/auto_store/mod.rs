@@ -244,6 +244,26 @@ async fn run_worker(
                 if let Err(e) = store.upsert_salience(&memory.id, 2.5, 5.0, 0, None).await {
                     tracing::warn!(error = %e, memory_id = %memory.id, "Failed to seed salience for auto-store");
                 }
+
+                // Update sidecar ingest tracking in daemon_status
+                let today = chrono::Utc::now().date_naive();
+                if let Err(e) = sqlx::query(
+                    "UPDATE daemon_status SET \
+                         last_ingest_at = NOW(), \
+                         ingest_count_today = CASE \
+                             WHEN ingest_date = $1 THEN ingest_count_today + 1 \
+                             ELSE 1 \
+                         END, \
+                         ingest_date = $1 \
+                     WHERE id = 1"
+                )
+                .bind(today)
+                .execute(store.pool())
+                .await
+                {
+                    tracing::warn!(error = %e, "Failed to update ingest tracking");
+                }
+
                 tracing::info!(
                     memory_id = %memory.id,
                     source = %entry.source,
