@@ -15,6 +15,7 @@ use crate::config::Config;
 use crate::consolidation::ConsolidationWorker;
 use crate::content_filter::CompositeFilter;
 use crate::embedding::EmbeddingProvider;
+#[cfg(feature = "local-embed")]
 use crate::embedding::local::LocalEmbeddingProvider;
 use crate::embedding::openai::OpenAIEmbeddingProvider;
 use crate::embedding::pipeline::{EmbeddingPipeline, backfill};
@@ -400,9 +401,25 @@ pub async fn create_embedding_provider(
                 })?;
             Ok(Arc::new(OpenAIEmbeddingProvider::new(api_key)?))
         }
+        #[cfg(feature = "local-embed")]
         "local" | _ => Ok(Arc::new(
             LocalEmbeddingProvider::new(&config.embedding.cache_dir).await?,
         )),
+        #[cfg(not(feature = "local-embed"))]
+        "local" => {
+            anyhow::bail!(
+                "Local embedding provider requires the 'local-embed' feature. \
+                 Build with: cargo build --features local-embed\n\
+                 Or switch to OpenAI: set embedding.provider = \"openai\" in memcp.toml"
+            );
+        }
+        #[cfg(not(feature = "local-embed"))]
+        _ => {
+            anyhow::bail!(
+                "Unknown embedding provider. When built without 'local-embed', \
+                 only 'openai' is supported. Set embedding.provider = \"openai\" in memcp.toml"
+            );
+        }
     }
 }
 
