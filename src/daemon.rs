@@ -45,6 +45,14 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     let provider = create_embedding_provider(config).await?;
     let provider_for_filter = provider.clone();
 
+    // 2.5. Ensure HNSW index exists with the correct dimension for the active provider.
+    // Migration 010 dropped the old vector(384)-typed HNSW index; we recreate it here
+    // with a dimension-aware cast so the index works for any configured model.
+    let dim = provider.dimension();
+    store.ensure_hnsw_index(dim).await
+        .map_err(|e| anyhow::anyhow!("Failed to ensure HNSW index: {}", e))?;
+    tracing::info!(dimension = dim, "HNSW index ready");
+
     // 3. Create consolidation worker if enabled
     let consolidation_sender = if config.consolidation.enabled {
         let worker = ConsolidationWorker::new(
