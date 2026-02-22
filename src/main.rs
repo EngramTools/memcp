@@ -6,6 +6,7 @@ use memcp::cli;
 use memcp::config::Config;
 use memcp::consolidation::ConsolidationWorker;
 use memcp::embedding::EmbeddingProvider;
+use memcp::embedding::model_dimension;
 use memcp::embedding::pipeline::{EmbeddingPipeline, backfill};
 use memcp::extraction::ExtractionJob;
 use memcp::extraction::ExtractionProvider;
@@ -37,7 +38,9 @@ use rmcp::ServiceExt;
         memcp daemon install        Install as system service\n  \
         memcp serve                 Start MCP server (stdio)\n  \
         memcp migrate               Run database migrations\n  \
-        memcp embed backfill|stats  Embedding management\n\n\
+        memcp embed backfill|stats  Embedding management\n  \
+        memcp embed switch-model --model BGEBaseENV15 --dry-run\n  \
+        memcp embed switch-model --model BGEBaseENV15 --yes\n\n\
         OUTPUT: JSON to stdout. Errors to stderr with non-zero exit code.",
 )]
 struct Cli {
@@ -150,12 +153,15 @@ enum EmbedAction {
     Stats,
     /// Switch to a new embedding model (marks current embeddings as stale)
     SwitchModel {
-        /// New model name to switch to (e.g., "text-embedding-3-small")
+        /// New model name to switch to (e.g., "text-embedding-3-small", "BGEBaseENV15")
         #[arg(long)]
         model: String,
         /// Show what would happen without making changes
         #[arg(long)]
         dry_run: bool,
+        /// Skip confirmation prompt for destructive cross-dimension switches (for scripted use)
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -270,23 +276,118 @@ async fn main() -> Result<()> {
                     let stats = store.embedding_stats().await?;
                     println!("{}", serde_json::to_string_pretty(&stats)?);
                 }
-                EmbedAction::SwitchModel { model, dry_run } => {
-                    let stats = store.embedding_stats().await?;
+                EmbedAction::SwitchModel { model, dry_run, yes } => {
+                    // Resolve target model dimension from the known model registry
+                    let target_dim = match model_dimension(&model) {
+                        Some(d) => d,
+                        None => {
+                            eprintln!("Error: Unknown model '{}'.", model);
+                            eprintln!("Supported models:");
+                            eprintln!("  Local (fastembed):");
+                            eprintln!("    AllMiniLML6V2      (384 dims)");
+                            eprintln!("    BGESmallENV15      (384 dims)");
+                            eprintln!("    AllMiniLML12V2     (384 dims)");
+                            eprintln!("    BGEBaseENV15       (768 dims)");
+                            eprintln!("    BGELargeENV15      (1024 dims)");
+                            eprintln!("  OpenAI:");
+                            eprintln!("    text-embedding-3-small  (1536 dims)");
+                            eprintln!("    text-embedding-3-large  (3072 dims)");
+                            eprintln!("    text-embedding-ada-002  (1536 dims)");
+                            std::process::exit(1);
+                        }
+                    };
 
-                    if dry_run {
-                        println!("DRY RUN — Switch model to '{}'", model);
-                        println!("Current embedding stats:");
-                        println!("{}", serde_json::to_string_pretty(&stats)?);
-                        println!("\nThis would:");
-                        println!("  - Mark all current embeddings as stale (is_current = false)");
-                        println!("  - Set embedding_status = 'pending' for all affected memories");
-                        println!("  - New embeddings will use model '{}' on next backfill", model);
-                        println!("\nRun without --dry-run to apply.");
-                    } else {
-                        println!("Switching to model '{}'...", model);
-                        let stale_count = store.mark_all_embeddings_stale().await?;
-                        println!("Marked {} embeddings as stale.", stale_count);
-                        println!("Run 'memcp embed backfill' to generate new embeddings with the new model.");
+                    // Query current dimension from DB
+                    let current_dim = store.current_embedding_dimension().await?;
+
+                    // Count total memories (for dry-run and output)
+                    let total_memories = sqlx::query_scalar::<_, i64>(
+                        "SELECT COUNT(*) FROM memories"
+                    )
+                    .fetch_one(store.pool())
+                    .await
+                    .unwrap_or(0) as u64;
+
+                    match current_dim {
+                        None => {
+                            // Fresh DB — no embeddings exist yet
+                            println!("No existing embeddings found.");
+                            println!("Target model: {} ({} dims)", model, target_dim);
+                            println!();
+                            println!("No purge needed. Update your memcp.toml to set the new model:");
+                            println!("  [embedding]");
+                            println!("  local_model = \"{}\"   # or openai_model for OpenAI", model);
+                            println!();
+                            println!("Then restart the daemon to begin embedding {} memories.", total_memories);
+                        }
+                        Some(current) if current == target_dim => {
+                            // Same dimension — safe swap, just mark stale
+                            if dry_run {
+                                println!("DRY RUN — Same-dimension model switch");
+                                println!("  Current dimension: {} dims", current);
+                                println!("  Target model:      {} ({} dims)", model, target_dim);
+                                println!("  Operation:         mark-stale (safe — no purge needed)");
+                                println!();
+                                println!("Would mark all current embeddings as stale (is_current = false).");
+                                println!("Would reset embedding_status = 'pending' for affected memories.");
+                                println!("{} memories would need re-embedding.", total_memories);
+                                println!();
+                                println!("Run without --dry-run to apply.");
+                            } else {
+                                println!("Switching to model '{}' (same dimension: {} dims)...", model, target_dim);
+                                let stale_count = store.mark_all_embeddings_stale().await?;
+                                println!("Marked {} embeddings as stale.", stale_count);
+                                println!();
+                                println!("Next steps:");
+                                println!("  1. Update memcp.toml: set embedding.local_model = \"{}\"", model);
+                                println!("     (or embedding.openai_model for OpenAI models)");
+                                println!("  2. Run 'memcp embed backfill' to re-embed with the new model.");
+                            }
+                        }
+                        Some(current) => {
+                            // Cross-dimension switch — destructive, requires --yes
+                            if dry_run {
+                                println!("DRY RUN — Cross-dimension model switch (DESTRUCTIVE)");
+                                println!("  Current dimension: {} dims", current);
+                                println!("  Target model:      {} ({} dims)", model, target_dim);
+                                println!("  Operation:         PURGE all embeddings + drop HNSW index");
+                                println!();
+                                println!("WARNING: Dimensions differ ({} -> {}).", current, target_dim);
+                                println!("Existing embeddings are incompatible with the new model.");
+                                println!();
+                                println!("Would perform:");
+                                println!("  - Drop HNSW index (idx_memory_embeddings_hnsw)");
+                                println!("  - Delete ALL embedding rows from memory_embeddings");
+                                println!("  - Reset embedding_status = 'pending' for all {} memories", total_memories);
+                                println!();
+                                println!("Source memories are NOT deleted — only embedding vectors are removed.");
+                                println!("After switch + daemon restart, all {} memories will be re-embedded.", total_memories);
+                                println!();
+                                println!("Run with --yes (and without --dry-run) to apply.");
+                            } else if !yes {
+                                eprintln!("WARNING: Switching from {} dims to {} dims.", current, target_dim);
+                                eprintln!("This will purge ALL existing embeddings ({} rows).", total_memories);
+                                eprintln!("Source memories are not deleted — only embedding vectors are removed.");
+                                eprintln!();
+                                eprintln!("Re-run with --yes to confirm:");
+                                eprintln!("  memcp embed switch-model --model {} --yes", model);
+                                std::process::exit(1);
+                            } else {
+                                // --yes confirmed — execute destructive switch
+                                println!("Cross-dimension switch: {} dims -> {} dims", current, target_dim);
+                                println!("Dropping HNSW index...");
+                                store.drop_hnsw_index().await?;
+                                println!("Purging all embeddings...");
+                                let purged = store.purge_all_embeddings().await?;
+                                println!("Purged {} embedding rows. {} memories reset to pending.", purged, total_memories);
+                                println!();
+                                println!("Next steps:");
+                                println!("  1. Update memcp.toml: set embedding.local_model = \"{}\"", model);
+                                println!("     (or embedding.openai_model for OpenAI models)");
+                                println!("  2. Restart the daemon — it will recreate the HNSW index ({} dims)", target_dim);
+                                println!("     and begin re-embedding all {} memories.", total_memories);
+                            }
+                        }
                     }
                 }
             }
