@@ -170,6 +170,15 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
 
     // 8. Spawn auto-store sidecar if enabled
     if config.auto_store.enabled {
+        if config.auto_store.filter_mode == "none" {
+            tracing::warn!(
+                "Auto-store filter_mode is \"none\" — every conversation turn will be stored. \
+                 Set filter_mode = \"llm\" in [auto_store] config to filter for relevance (requires Ollama)."
+            );
+        }
+        if config.auto_store.watch_paths.is_empty() {
+            tracing::warn!("Auto-store enabled but watch_paths is empty — nothing will be ingested");
+        }
         let _auto_store_handle = crate::auto_store::AutoStoreWorker::spawn(
             config.auto_store.clone(),
             store.clone(),

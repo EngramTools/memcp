@@ -3,3 +3,14 @@
 
 log_level = "info"
 # log_file = "/var/log/memcp.log"  # Uncomment to enable file logging
+
+[auto_store]
+enabled = true
+watch_paths = [
+    "~/.claude/projects/-Users-ayoamadi-projects-memcp",
+    "~/.claude/projects/-Users-ayoamadi-projects-openclaw",
+]
+format = "claude-code"
+filter_mode = "llm"           # requires Ollama running; set to "none" to disable
+filter_provider = "ollama"
+filter_model = "llama3.2"
