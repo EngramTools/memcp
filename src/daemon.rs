@@ -194,6 +194,51 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     // 9. Write initial heartbeat
     write_heartbeat(&store).await;
 
+    // Write embedding model info and watched file count (one-time on startup)
+    {
+        let model_name = &config.embedding.local_model;
+        let model_dim = crate::embedding::model_dimension(model_name).unwrap_or(0) as i32;
+
+        // Count watched JSONL files using existing watcher utilities
+        let watched_count: i32 = if config.auto_store.enabled {
+            config.auto_store.watch_paths.iter()
+                .map(|p| {
+                    let expanded = crate::auto_store::watcher::expand_tilde(p);
+                    if expanded.is_dir() {
+                        crate::auto_store::watcher::scan_directory_jsonl(&expanded).len() as i32
+                    } else if expanded.is_file() {
+                        1
+                    } else {
+                        0
+                    }
+                })
+                .sum()
+        } else {
+            0
+        };
+
+        if let Err(e) = sqlx::query(
+            "UPDATE daemon_status SET \
+                 embedding_model = $1, embedding_dimension = $2, watched_file_count = $3 \
+             WHERE id = 1"
+        )
+        .bind(model_name)
+        .bind(model_dim)
+        .bind(watched_count)
+        .execute(store.pool())
+        .await
+        {
+            tracing::warn!(error = %e, "Failed to write startup metadata to daemon_status");
+        }
+
+        tracing::info!(
+            embedding_model = %model_name,
+            embedding_dimension = model_dim,
+            watched_file_count = watched_count,
+            "Startup metadata written to daemon_status"
+        );
+    }
+
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         pid = std::process::id(),

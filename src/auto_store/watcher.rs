@@ -39,7 +39,7 @@ pub fn expand_tilde(path: &str) -> PathBuf {
 
 /// Recursively scan a directory for `.jsonl` files.
 /// Returns paths sorted alphabetically. Gracefully returns empty vec if dir doesn't exist.
-fn scan_directory_jsonl(dir: &Path) -> Vec<PathBuf> {
+pub fn scan_directory_jsonl(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     scan_directory_jsonl_inner(dir, &mut files);
     files.sort();
