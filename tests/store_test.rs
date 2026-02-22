@@ -3,8 +3,10 @@
 //! Each test gets its own temporary database — created before, dropped after — so tests
 //! run in parallel with zero interference. No cleanup code needed.
 
+use std::sync::Arc;
 use memcp::store::postgres::PostgresMemoryStore;
 use memcp::store::{CreateMemory, ListFilter, MemoryStore, UpdateMemory};
+use memcp::config::Config;
 use sqlx::PgPool;
 
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
@@ -244,4 +246,46 @@ async fn test_validation_errors(pool: PgPool) {
 
     let result = store.get("00000000-0000-0000-0000-000000000000").await;
     assert!(result.is_err(), "Non-existent memory should return error");
+}
+
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_build_status_json_has_sidecar_fields(pool: PgPool) {
+    let store = Arc::new(PostgresMemoryStore::from_pool(pool).await.unwrap());
+    let config = Config::default();
+    let (status, alive, _last_ingest, _pending, _total) =
+        memcp::cli::build_status(&store, &config, false).await.unwrap();
+
+    // Should have all top-level sections
+    assert!(status.get("sidecar").is_some(), "Missing sidecar section");
+    assert!(status.get("model").is_some(), "Missing model section");
+    assert!(status.get("daemon").is_some(), "Missing daemon section");
+    assert!(status.get("pending").is_some(), "Missing pending section");
+    assert!(status.get("total_memories").is_some(), "Missing total_memories");
+
+    // Daemon should not be alive in test context (no heartbeat written)
+    assert!(!alive, "Daemon should not be alive in test context");
+
+    // Sidecar should have expected fields
+    let sidecar = status.get("sidecar").unwrap();
+    assert!(sidecar.get("ingest_count_today").is_some());
+    assert!(sidecar.get("watched_file_count").is_some());
+}
+
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_build_status_with_check(pool: PgPool) {
+    let store = Arc::new(PostgresMemoryStore::from_pool(pool).await.unwrap());
+    let config = Config::default();
+    let (status, _alive, _last_ingest, _pending, _total) =
+        memcp::cli::build_status(&store, &config, true).await.unwrap();
+
+    // Should have checks section when check=true
+    assert!(status.get("checks").is_some(), "Missing checks section");
+    let checks = status.get("checks").unwrap();
+    assert!(checks.get("database").is_some(), "Missing database check");
+    assert!(checks.get("ollama").is_some(), "Missing ollama check");
+    assert!(checks.get("model_cache").is_some(), "Missing model_cache check");
+    assert!(checks.get("watch_paths").is_some(), "Missing watch_paths check");
+
+    // DB should be reachable (we're running in a test with active pool)
+    assert_eq!(checks.get("database").unwrap().as_bool(), Some(true));
 }

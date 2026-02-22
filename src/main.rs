@@ -142,7 +142,14 @@ enum Commands {
         rating: String,
     },
     /// Show daemon status and pending work counts
-    Status,
+    Status {
+        /// Human-readable one-liner output
+        #[arg(long)]
+        pretty: bool,
+        /// Deep health check (pings DB, Ollama, checks model cache, watch paths)
+        #[arg(long)]
+        check: bool,
+    },
     /// Start background workers (embedding, extraction, consolidation, auto-store)
     Daemon {
         #[command(subcommand)]
@@ -449,9 +456,9 @@ async fn main() -> Result<()> {
             cli::cmd_reinforce(&store, &id, &rating).await?;
         }
 
-        Commands::Status => {
+        Commands::Status { pretty, check } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_status(&store).await?;
+            cli::cmd_status(&store, &config, pretty, check).await?;
         }
 
         Commands::Daemon { action } => {

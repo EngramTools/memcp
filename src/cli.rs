@@ -445,32 +445,58 @@ pub async fn cmd_reinforce(
     Ok(())
 }
 
-/// Show daemon status and pending work counts.
-pub async fn cmd_status(store: &Arc<PostgresMemoryStore>) -> Result<()> {
-    // Daemon heartbeat info
+/// Format a timestamp as a human-readable relative time string (e.g., "5m ago").
+fn format_relative_time(dt: DateTime<Utc>) -> String {
+    let secs = (Utc::now() - dt).num_seconds().max(0);
+    match secs {
+        s if s < 60 => format!("{}s ago", s),
+        s if s < 3600 => format!("{}m ago", s / 60),
+        s if s < 86400 => format!("{}h ago", s / 3600),
+        s => format!("{}d ago", s / 86400),
+    }
+}
+
+/// Build the status JSON value (extracted for testability).
+pub async fn build_status(
+    store: &Arc<PostgresMemoryStore>,
+    config: &Config,
+    check: bool,
+) -> Result<(serde_json::Value, bool, Option<DateTime<Utc>>, i32, i32)> {
+    // Daemon heartbeat info + sidecar fields
     let daemon_row = sqlx::query(
-        "SELECT last_heartbeat, started_at, pid, version, worker_states \
+        "SELECT last_heartbeat, started_at, pid, version, worker_states, \
+                last_ingest_at, ingest_count_today, watched_file_count, \
+                embedding_model, embedding_dimension \
          FROM daemon_status WHERE id = 1",
     )
     .fetch_optional(store.pool())
     .await;
 
-    let daemon_info = match daemon_row {
+    let (alive, daemon_info, last_ingest_at, ingest_count_today, watched_file_count,
+         embedding_model, embedding_dimension) = match daemon_row {
         Ok(Some(row)) => {
             let heartbeat: Option<DateTime<Utc>> = row.get("last_heartbeat");
             let alive = heartbeat
                 .map(|hb| (Utc::now() - hb).num_seconds() < 30)
                 .unwrap_or(false);
-            json!({
+            let last_ingest: Option<DateTime<Utc>> = row.get("last_ingest_at");
+            let ingest_today: Option<i32> = row.get("ingest_count_today");
+            let watched: Option<i32> = row.get("watched_file_count");
+            let model: Option<String> = row.get("embedding_model");
+            let dimension: Option<i32> = row.get("embedding_dimension");
+
+            let info = json!({
                 "alive": alive,
                 "last_heartbeat": heartbeat.map(|t| t.to_rfc3339()),
                 "started_at": row.get::<Option<DateTime<Utc>>, _>("started_at").map(|t| t.to_rfc3339()),
                 "pid": row.get::<Option<i32>, _>("pid"),
                 "version": row.get::<Option<String>, _>("version"),
                 "worker_states": row.get::<Option<serde_json::Value>, _>("worker_states"),
-            })
+            });
+            (alive, info, last_ingest, ingest_today.unwrap_or(0), watched.unwrap_or(0),
+             model, dimension)
         }
-        _ => json!({ "alive": false }),
+        _ => (false, json!({"alive": false}), None, 0, 0, None, None),
     };
 
     // Pending work counts
@@ -491,14 +517,143 @@ pub async fn cmd_status(store: &Arc<PostgresMemoryStore>) -> Result<()> {
         .await
         .unwrap_or(0);
 
-    let output = json!({
+    // Deep health check (when --check is passed)
+    let checks = if check {
+        // 1. Database reachable (already connected, but verify with a ping)
+        let db_ok = sqlx::query("SELECT 1").fetch_one(store.pool()).await.is_ok();
+
+        // 2. Ollama responding (if summarization is configured)
+        let ollama_ok = if config.summarization.enabled {
+            let url = format!("{}/api/version", config.summarization.ollama_base_url);
+            reqwest::get(&url).await.map(|r| r.status().is_success()).unwrap_or(false)
+        } else {
+            true // not configured = not a failure
+        };
+
+        // 3. Model cache present on disk
+        let cache_dir = dirs::cache_dir()
+            .unwrap_or_default()
+            .join("fastembed_cache");
+        let model_cache_ok = cache_dir.exists()
+            && std::fs::read_dir(&cache_dir).map(|mut d| d.next().is_some()).unwrap_or(false);
+
+        // 4. Watch paths exist
+        let watch_paths_ok = if config.auto_store.enabled {
+            config.auto_store.watch_paths.iter().all(|p| {
+                let expanded = crate::auto_store::watcher::expand_tilde(p);
+                expanded.exists() || expanded.parent().map(|par| par.exists()).unwrap_or(false)
+            })
+        } else {
+            true
+        };
+
+        Some(json!({
+            "database": db_ok,
+            "ollama": ollama_ok,
+            "model_cache": model_cache_ok,
+            "watch_paths": watch_paths_ok,
+        }))
+    } else {
+        None
+    };
+
+    // Build full JSON output
+    let mut output = json!({
         "daemon": daemon_info,
-        "pending": {
-            "embeddings": pending_embed,
-            "extractions": pending_extract,
-        },
+        "pending": { "embeddings": pending_embed, "extractions": pending_extract },
         "total_memories": total_memories,
+        "sidecar": {
+            "last_ingest_at": last_ingest_at.map(|t| t.to_rfc3339()),
+            "ingest_count_today": ingest_count_today,
+            "watched_file_count": watched_file_count,
+        },
+        "model": {
+            "name": embedding_model,
+            "dimension": embedding_dimension,
+        },
     });
-    println!("{}", serde_json::to_string(&output)?);
+    if let Some(checks) = checks {
+        output.as_object_mut().unwrap().insert("checks".to_string(), checks);
+    }
+
+    Ok((output, alive, last_ingest_at, pending_embed as i32 + pending_extract as i32, total_memories as i32))
+}
+
+/// Show daemon status and pending work counts.
+pub async fn cmd_status(
+    store: &Arc<PostgresMemoryStore>,
+    config: &Config,
+    pretty: bool,
+    check: bool,
+) -> Result<()> {
+    let (output, alive, last_ingest_at, pending_total, total_memories) =
+        build_status(store, config, check).await?;
+
+    if pretty {
+        let icon = if alive { "\u{2705}" } else { "\u{274c}" };
+        if alive {
+            // Uptime
+            let uptime_str = output.get("daemon")
+                .and_then(|d| d.get("started_at"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<DateTime<Utc>>().ok())
+                .map(|t| format_relative_time(t))
+                .unwrap_or_else(|| "?".to_string());
+
+            // Pending with backlog warning
+            let pending_str = if pending_total > 50 {
+                format!("\u{26a0} {} pending", pending_total)
+            } else {
+                format!("{} pending", pending_total)
+            };
+
+            // Last ingest
+            let ingest_str = last_ingest_at
+                .map(|t| format!("last ingest {}", format_relative_time(t)))
+                .unwrap_or_else(|| "no ingests yet".to_string());
+
+            println!("{} daemon up {} | {} | {} | {} memories",
+                icon, uptime_str, pending_str, ingest_str, total_memories);
+        } else {
+            println!("{} daemon down", icon);
+        }
+
+        if let Some(checks) = output.get("checks") {
+            let check_line: Vec<String> = ["database", "ollama", "model_cache", "watch_paths"]
+                .iter()
+                .map(|k| {
+                    let ok = checks.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+                    let ci = if ok { "\u{2705}" } else { "\u{274c}" };
+                    format!("{}: {}", k.replace('_', " "), ci)
+                })
+                .collect();
+            println!("  {}", check_line.join("  "));
+        }
+    } else {
+        // JSON output
+        println!("{}", serde_json::to_string(&output)?);
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_relative_time() {
+        let now = Utc::now();
+        assert!(format_relative_time(now).contains("s ago"));
+        assert!(format_relative_time(now - chrono::Duration::minutes(5)).contains("5m ago"));
+        assert!(format_relative_time(now - chrono::Duration::hours(2)).contains("2h ago"));
+        assert!(format_relative_time(now - chrono::Duration::days(3)).contains("3d ago"));
+    }
+
+    #[test]
+    fn test_format_relative_time_negative_clamps_to_zero() {
+        // Future time should clamp to 0s ago
+        let future = Utc::now() + chrono::Duration::hours(1);
+        assert!(format_relative_time(future).contains("0s ago"));
+    }
 }
