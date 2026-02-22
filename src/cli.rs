@@ -287,6 +287,76 @@ pub async fn cmd_search(
     Ok(())
 }
 
+/// Show recent memories for session handoff.
+///
+/// Uses `list` with a time filter derived from the `--since` duration string.
+/// Supports "30m", "1h", "2h", "1d" etc.
+pub async fn cmd_recent(
+    store: &Arc<PostgresMemoryStore>,
+    since: String,
+    source: Option<String>,
+    actor: Option<String>,
+    limit: i64,
+    verbose: bool,
+) -> Result<()> {
+    let duration = parse_duration(&since)?;
+    let created_after = Utc::now() - duration;
+
+    let filter = ListFilter {
+        type_hint: None,
+        source,
+        created_after: Some(created_after),
+        created_before: None,
+        updated_after: None,
+        updated_before: None,
+        limit,
+        cursor: None,
+        actor,
+        audience: None,
+    };
+
+    let result = store
+        .list(filter)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    let memories: Vec<serde_json::Value> = result
+        .memories
+        .iter()
+        .map(|m| format_memory_json(m, verbose))
+        .collect();
+
+    let output = json!({
+        "memories": memories,
+        "count": memories.len(),
+        "since": since,
+    });
+    println!("{}", serde_json::to_string(&output)?);
+    Ok(())
+}
+
+/// Parse a human-readable duration string like "30m", "1h", "2h", "1d".
+fn parse_duration(s: &str) -> Result<chrono::Duration> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err(anyhow::anyhow!("Empty duration string"));
+    }
+
+    let (num_str, unit) = s.split_at(s.len() - 1);
+    let num: i64 = num_str.parse().map_err(|_| {
+        anyhow::anyhow!("Invalid duration '{}'. Use format like '30m', '1h', '2h', '1d'", s)
+    })?;
+
+    match unit {
+        "m" => Ok(chrono::Duration::minutes(num)),
+        "h" => Ok(chrono::Duration::hours(num)),
+        "d" => Ok(chrono::Duration::days(num)),
+        _ => Err(anyhow::anyhow!(
+            "Unknown duration unit '{}'. Use 'm' (minutes), 'h' (hours), or 'd' (days)", unit
+        )),
+    }
+}
+
 /// List memories with optional filters and cursor-based pagination.
 pub async fn cmd_list(
     store: &Arc<PostgresMemoryStore>,

@@ -8,9 +8,9 @@ log_level = "info"
 enabled = true
 watch_paths = [
     "~/.claude/projects/-Users-ayoamadi-projects-memcp",
-    "~/.claude/projects/-Users-ayoamadi-projects-openclaw",
+    "~/.openclaw/agents",
 ]
-format = "claude-code"
+format = "auto"               # auto-detects Claude Code vs Openclaw vs generic JSONL
 filter_mode = "llm"           # requires Ollama running; set to "none" to disable
 filter_provider = "ollama"
 filter_model = "llama3.2"

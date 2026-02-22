@@ -268,6 +268,7 @@ mod tests {
             content: content.to_string(),
             timestamp: None,
             source: "test".to_string(),
+            actor: None,
             session_id: None,
             project: None,
             metadata: HashMap::new(),

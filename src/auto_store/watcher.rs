@@ -37,22 +37,28 @@ pub fn expand_tilde(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// Scan a directory for `.jsonl` files.
+/// Recursively scan a directory for `.jsonl` files.
 /// Returns paths sorted alphabetically. Gracefully returns empty vec if dir doesn't exist.
 fn scan_directory_jsonl(dir: &Path) -> Vec<PathBuf> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return Vec::new(),
-    };
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_file() && p.extension().map(|ext| ext == "jsonl").unwrap_or(false)
-        })
-        .collect();
+    let mut files = Vec::new();
+    scan_directory_jsonl_inner(dir, &mut files);
     files.sort();
     files
+}
+
+fn scan_directory_jsonl_inner(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            scan_directory_jsonl_inner(&path, out);
+        } else if path.is_file() && is_jsonl(&path) {
+            out.push(path);
+        }
+    }
 }
 
 /// Read new lines from a file starting at the given byte offset.
@@ -201,10 +207,10 @@ pub fn spawn_watcher(
                     }
                 }
             }
-            // Watch directory paths directly
+            // Watch directory paths recursively (picks up nested agent/sessions dirs)
             for dir in &dir_paths {
                 if dir.exists() {
-                    if let Err(e) = w.watch(dir, RecursiveMode::NonRecursive) {
+                    if let Err(e) = w.watch(dir, RecursiveMode::Recursive) {
                         tracing::warn!(path = %dir.display(), error = %e, "Failed to watch directory");
                     }
                 } else {
@@ -226,18 +232,17 @@ pub fn spawn_watcher(
             tokio::select! {
                 // Triggered by fs events
                 Some(changed_path) = notify_rx.recv() => {
-                    // Check if this event is for a file in a watched directory
+                    // Check if this event is for a .jsonl file under a watched directory
                     if is_jsonl(&changed_path) {
-                        if let Some(parent) = changed_path.parent() {
-                            if dir_set.contains(parent) {
-                                // New or modified .jsonl in a watched directory — track and process
-                                if !file_states.contains_key(&changed_path) {
-                                    tracing::info!(path = %changed_path.display(), "New .jsonl file detected in watched directory");
-                                    file_states.insert(changed_path.clone(), FileState { offset: 0 });
-                                }
-                                process_file(&changed_path, &mut file_states, &tx).await;
-                                continue;
+                        let under_watched_dir = dir_set.iter().any(|d| changed_path.starts_with(d));
+                        if under_watched_dir {
+                            // New or modified .jsonl under a watched directory tree — track and process
+                            if !file_states.contains_key(&changed_path) {
+                                tracing::info!(path = %changed_path.display(), "New .jsonl file detected in watched directory");
+                                file_states.insert(changed_path.clone(), FileState { offset: 0 });
                             }
+                            process_file(&changed_path, &mut file_states, &tx).await;
+                            continue;
                         }
                     }
 
@@ -392,6 +397,27 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert!(files[0].extension().unwrap() == "jsonl");
         assert!(files[1].extension().unwrap() == "jsonl");
+    }
+
+    #[test]
+    fn test_scan_directory_jsonl_recursive() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Simulate ~/.openclaw/agents structure
+        let vita_sessions = dir.path().join("vita").join("sessions");
+        let seba_sessions = dir.path().join("seba").join("sessions");
+        std::fs::create_dir_all(&vita_sessions).unwrap();
+        std::fs::create_dir_all(&seba_sessions).unwrap();
+
+        std::fs::write(vita_sessions.join("s1.jsonl"), "line\n").unwrap();
+        std::fs::write(vita_sessions.join("s2.jsonl"), "line\n").unwrap();
+        std::fs::write(seba_sessions.join("s1.jsonl"), "line\n").unwrap();
+        // Non-jsonl should be ignored
+        std::fs::write(seba_sessions.join("config.json"), "ignored\n").unwrap();
+
+        let files = scan_directory_jsonl(dir.path());
+        assert_eq!(files.len(), 3);
+        assert!(files.iter().all(|f| f.extension().unwrap() == "jsonl"));
     }
 
     #[test]

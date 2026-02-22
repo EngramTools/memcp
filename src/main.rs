@@ -30,6 +30,7 @@ use rmcp::ServiceExt;
         memcp store <content> [--type-hint fact] [--source user] [--tags a,b]\n  \
         memcp search <query> [--limit 10] [--tags a,b]\n  \
         memcp list [--type-hint fact] [--source user] [--limit 20]\n  \
+        memcp recent [--since 30m] [--source openclaw] [--actor vita]\n  \
         memcp get <id>\n  \
         memcp delete <id>\n  \
         memcp reinforce <id> [--rating good|easy]\n  \
@@ -117,6 +118,23 @@ enum Commands {
     Get { id: String },
     /// Delete a memory by ID (permanent)
     Delete { id: String },
+    /// Show recent memories (for session handoff — configurable time window)
+    Recent {
+        /// Time window, e.g. "30m", "1h", "2h", "1d" (default: "30m")
+        #[arg(long, default_value = "30m")]
+        since: String,
+        /// Filter by source system (e.g. "openclaw", "claude-code")
+        #[arg(long)]
+        source: Option<String>,
+        /// Filter by actor/agent name (e.g. "vita", "main")
+        #[arg(long)]
+        actor: Option<String>,
+        /// Max results to return
+        #[arg(long, default_value = "10")]
+        limit: i64,
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Reinforce a memory to boost its salience in future searches
     Reinforce {
         id: String,
@@ -404,6 +422,11 @@ async fn main() -> Result<()> {
         Commands::Search { query, limit, created_after, created_before, tags, source, audience, verbose } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
             cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, verbose).await?;
+        }
+
+        Commands::Recent { since, source, actor, limit, verbose } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_recent(&store, since, source, actor, limit, verbose).await?;
         }
 
         Commands::List { type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose } => {

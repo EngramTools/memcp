@@ -126,7 +126,7 @@ async fn run_worker(
 
     while let Some(event) = rx.recv().await {
         // Parse the line
-        let entry = match parser.parse_line(&event.line) {
+        let entry = match parser.parse_line(&event.line, &event.path) {
             Some(e) => e,
             None => continue,
         };
@@ -233,7 +233,7 @@ async fn run_worker(
             source: entry.source.clone(),
             tags: Some(tags.clone()),
             created_at: entry.timestamp,
-            actor: None,
+            actor: entry.actor.clone(),
             actor_type: "auto-store".to_string(),
             audience: "global".to_string(),
         };

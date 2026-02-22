@@ -444,7 +444,8 @@ impl MemoryStore for PostgresMemoryStore {
             param_idx += 1;
         }
         if filter.source.is_some() {
-            conditions.push(format!("source = ${}", param_idx));
+            // Prefix match: --source openclaw matches openclaw/vita, openclaw/main, etc.
+            conditions.push(format!("source LIKE ${} || '%'", param_idx));
             param_idx += 1;
         }
         if filter.created_after.is_some() {
@@ -564,7 +565,7 @@ impl MemoryStore for PostgresMemoryStore {
             param_idx += 1;
         }
         if filter.source.is_some() {
-            conditions.push(format!("source = ${}", param_idx));
+            conditions.push(format!("source LIKE ${} || '%'", param_idx));
             param_idx += 1;
         }
         if filter.created_after.is_some() {
@@ -644,7 +645,7 @@ impl MemoryStore for PostgresMemoryStore {
             param_idx += 1;
         }
         if filter.source.is_some() {
-            conditions.push(format!("source = ${}", param_idx));
+            conditions.push(format!("source LIKE ${} || '%'", param_idx));
             param_idx += 1;
         }
         if filter.created_after.is_some() {
@@ -1445,9 +1446,9 @@ impl PostgresMemoryStore {
             }
         }
 
-        // Post-filter fused results by source if specified
+        // Post-filter fused results by source prefix (e.g. "openclaw" matches "openclaw/vita")
         if let Some(src) = source {
-            hits.retain(|hit| hit.memory.source == src);
+            hits.retain(|hit| hit.memory.source.starts_with(src));
         }
 
         // Post-filter fused results by audience if specified
