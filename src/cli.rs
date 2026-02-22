@@ -640,6 +640,65 @@ pub async fn cmd_status(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Statusline install / remove
+// ---------------------------------------------------------------------------
+
+/// Install the Claude Code status line script to ~/.claude/scripts/.
+pub fn cmd_statusline_install() -> Result<()> {
+    let claude_scripts = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?
+        .join(".claude")
+        .join("scripts");
+
+    std::fs::create_dir_all(&claude_scripts)?;
+
+    let dest = claude_scripts.join("memcp-statusline.sh");
+    let script = include_str!("../scripts/memcp-statusline.sh");
+    std::fs::write(&dest, script)?;
+
+    // Make executable
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    println!("Installed: {}", dest.display());
+    println!();
+    println!("Add to ~/.claude/settings.json:");
+    println!();
+    println!("  {{");
+    println!("    \"statusLine\": {{");
+    println!("      \"type\": \"command\",");
+    println!("      \"command\": \"{}\"", dest.display());
+    println!("    }}");
+    println!("  }}");
+    println!();
+    println!("Configure format in memcp.toml (optional):");
+    println!("  [status_line]");
+    println!("  format = \"ingest\"  # or \"pending\" or \"state\"");
+    Ok(())
+}
+
+/// Remove the Claude Code status line script from ~/.claude/scripts/.
+pub fn cmd_statusline_remove() -> Result<()> {
+    let dest = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?
+        .join(".claude")
+        .join("scripts")
+        .join("memcp-statusline.sh");
+
+    if dest.exists() {
+        std::fs::remove_file(&dest)?;
+        println!("Removed: {}", dest.display());
+        println!("Don't forget to remove the statusLine block from ~/.claude/settings.json");
+    } else {
+        println!("Not installed: {}", dest.display());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

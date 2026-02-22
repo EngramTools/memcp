@@ -41,7 +41,9 @@ use rmcp::ServiceExt;
         memcp migrate               Run database migrations\n  \
         memcp embed backfill|stats  Embedding management\n  \
         memcp embed switch-model --model BGEBaseENV15 --dry-run\n  \
-        memcp embed switch-model --model BGEBaseENV15 --yes\n\n\
+        memcp embed switch-model --model BGEBaseENV15 --yes\n  \
+        memcp statusline install    Install Claude Code status line\n  \
+        memcp statusline remove     Remove Claude Code status line\n\n\
         OUTPUT: JSON to stdout. Errors to stderr with non-zero exit code.",
 )]
 struct Cli {
@@ -164,6 +166,11 @@ enum Commands {
         #[command(subcommand)]
         action: EmbedAction,
     },
+    /// Manage Claude Code status line integration
+    Statusline {
+        #[command(subcommand)]
+        action: StatuslineAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -190,6 +197,14 @@ enum EmbedAction {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum StatuslineAction {
+    /// Install status line script to ~/.claude/scripts/
+    Install,
+    /// Remove status line script
+    Remove,
 }
 
 /// Create the extraction provider based on configuration.
@@ -469,6 +484,13 @@ async fn main() -> Result<()> {
                 None => {
                     memcp::daemon::run_daemon(&config, cli.skip_migrate).await?;
                 }
+            }
+        }
+
+        Commands::Statusline { action } => {
+            match action {
+                StatuslineAction::Install => cli::cmd_statusline_install()?,
+                StatuslineAction::Remove => cli::cmd_statusline_remove()?,
             }
         }
 
