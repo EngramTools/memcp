@@ -3,12 +3,20 @@
 /// Runs the full benchmark pipeline: load dataset → ingest → search → generate → score.
 /// Supports single config or "all" for comparison across vector-only / hybrid / hybrid+qi.
 /// CI integration via --subset (stratified sample) and --min-accuracy (exit code threshold).
+///
+/// Requires the `local-embed` feature (fastembed). Build with:
+///   cargo build --features local-embed --bin benchmark
 
+#[cfg(feature = "local-embed")]
 use clap::Parser;
+#[cfg(feature = "local-embed")]
 use std::path::PathBuf;
+#[cfg(feature = "local-embed")]
 use std::sync::Arc;
 
+#[cfg(feature = "local-embed")]
 use memcp::benchmark::dataset::load_dataset;
+#[cfg(feature = "local-embed")]
 use memcp::benchmark::report;
 #[cfg(feature = "local-embed")]
 use memcp::benchmark::runner::{load_checkpoint, run_benchmark};
@@ -20,8 +28,10 @@ use memcp::benchmark::default_configs;
 use memcp::embedding::local::LocalEmbeddingProvider;
 #[cfg(feature = "local-embed")]
 use memcp::embedding::pipeline::EmbeddingPipeline;
+#[cfg(feature = "local-embed")]
 use memcp::store::postgres::PostgresMemoryStore;
 
+#[cfg(feature = "local-embed")]
 #[derive(Parser)]
 #[command(name = "memcp-benchmark", about = "LongMemEval benchmark runner for memcp")]
 struct Cli {
@@ -60,6 +70,21 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    #[cfg(feature = "local-embed")]
+    return run().await;
+
+    #[cfg(not(feature = "local-embed"))]
+    {
+        eprintln!(
+            "Error: The benchmark binary requires the 'local-embed' feature.\n\
+             Build with: cargo build --features local-embed --bin benchmark"
+        );
+        std::process::exit(1);
+    }
+}
+
+#[cfg(feature = "local-embed")]
+async fn run() -> Result<(), anyhow::Error> {
     // 1. Parse CLI args
     let cli = Cli::parse();
 
@@ -116,128 +141,113 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // 8. Initialize local embedding provider and pipeline
     // Benchmark uses local fastembed provider (no API key needed, deterministic)
-    #[cfg(not(feature = "local-embed"))]
-    {
-        anyhow::bail!(
-            "The benchmark binary requires the 'local-embed' feature. \
-             Build with: cargo build --features local-embed --bin benchmark"
-        );
-    }
-
-    #[cfg(feature = "local-embed")]
     tracing::info!("Initializing local embedding provider");
-    #[cfg(feature = "local-embed")]
     let embedding_provider: Arc<dyn memcp::embedding::EmbeddingProvider + Send + Sync> =
         Arc::new(LocalEmbeddingProvider::new(".fastembed_cache", "AllMiniLML6V2").await?);
 
     // No consolidation sender for benchmark (consolidation is MCP live-trigger only)
-    #[cfg(feature = "local-embed")]
     let pipeline = EmbeddingPipeline::new(embedding_provider.clone(), store.clone(), 1000, None);
 
-    // Steps 9-12 require local-embed feature (embedding provider and pipeline are used here)
-    #[cfg(feature = "local-embed")]
-    {
-        // 9. Determine configs to run
-        let all_configs = default_configs();
-        let configs_to_run: Vec<_> = if cli.config == "all" {
-            all_configs.iter().collect()
+    // 9. Determine configs to run
+    let all_configs = default_configs();
+    let configs_to_run: Vec<_> = if cli.config == "all" {
+        all_configs.iter().collect()
+    } else {
+        let found = all_configs
+            .iter()
+            .find(|c| c.name == cli.config)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Unknown config '{}'. Valid options: vector-only, hybrid, hybrid+qi, all",
+                    cli.config
+                )
+            })?;
+        vec![found]
+    };
+
+    // 10. Run each config
+    let mut reports: Vec<BenchmarkReport> = Vec::new();
+
+    for config in &configs_to_run {
+        println!("--- Running config: {} ---", config.name);
+
+        let checkpoint_path = cli.output_dir.join(format!("{}_checkpoint.json", config.name));
+
+        // Load checkpoint if --resume and file exists
+        let resume_state = if cli.resume {
+            match load_checkpoint(&checkpoint_path) {
+                Ok(Some(state)) => {
+                    tracing::info!(
+                        config = %config.name,
+                        completed = state.completed_question_ids.len(),
+                        "Resuming from checkpoint"
+                    );
+                    Some(state)
+                }
+                Ok(None) => {
+                    tracing::info!(config = %config.name, "No checkpoint found — starting fresh");
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to load checkpoint — starting fresh");
+                    None
+                }
+            }
         } else {
-            let found = all_configs
-                .iter()
-                .find(|c| c.name == cli.config)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Unknown config '{}'. Valid options: vector-only, hybrid, hybrid+qi, all",
-                        cli.config
-                    )
-                })?;
-            vec![found]
+            None
         };
 
-        // 10. Run each config
-        let mut reports: Vec<BenchmarkReport> = Vec::new();
+        // Run the benchmark
+        let results = run_benchmark(
+            &questions,
+            config,
+            store.clone(),
+            &pipeline,
+            embedding_provider.clone(),
+            &cli.openai_api_key,
+            &checkpoint_path,
+            resume_state,
+        )
+        .await?;
 
-        for config in &configs_to_run {
-            println!("--- Running config: {} ---", config.name);
+        // Generate report
+        let report = report::generate_report(&config.name, &results);
 
-            let checkpoint_path = cli.output_dir.join(format!("{}_checkpoint.json", config.name));
+        // Print report
+        report::print_report(&report);
+        println!();
 
-            // Load checkpoint if --resume and file exists
-            let resume_state = if cli.resume {
-                match load_checkpoint(&checkpoint_path) {
-                    Ok(Some(state)) => {
-                        tracing::info!(
-                            config = %config.name,
-                            completed = state.completed_question_ids.len(),
-                            "Resuming from checkpoint"
-                        );
-                        Some(state)
-                    }
-                    Ok(None) => {
-                        tracing::info!(config = %config.name, "No checkpoint found — starting fresh");
-                        None
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to load checkpoint — starting fresh");
-                        None
-                    }
-                }
-            } else {
-                None
-            };
+        // Save report JSON
+        let report_path = cli.output_dir.join(format!("{}_report.json", config.name));
+        report::save_report(&report, &report_path)?;
+        tracing::info!(path = %report_path.display(), "Report saved");
 
-            // Run the benchmark
-            let results = run_benchmark(
-                &questions,
-                config,
-                store.clone(),
-                &pipeline,
-                embedding_provider.clone(),
-                &cli.openai_api_key,
-                &checkpoint_path,
-                resume_state,
-            )
-            .await?;
+        reports.push(report);
+    }
 
-            // Generate report
-            let report = report::generate_report(&config.name, &results);
+    // 11. If multiple configs ran, print comparison
+    if reports.len() > 1 {
+        report::print_comparison(&reports);
+        println!();
+    }
 
-            // Print report
-            report::print_report(&report);
-            println!();
-
-            // Save report JSON
-            let report_path = cli.output_dir.join(format!("{}_report.json", config.name));
-            report::save_report(&report, &report_path)?;
-            tracing::info!(path = %report_path.display(), "Report saved");
-
-            reports.push(report);
-        }
-
-        // 11. If multiple configs ran, print comparison
-        if reports.len() > 1 {
-            report::print_comparison(&reports);
-            println!();
-        }
-
-        // 12. CI threshold check
-        if let Some(threshold) = cli.min_accuracy {
-            // Check the last config's overall accuracy (or single config if not "all")
-            let last_report = reports.last().expect("At least one report must exist");
-            if last_report.overall_accuracy < threshold {
-                eprintln!(
-                    "FAIL: overall accuracy {:.1}% < threshold {:.1}%",
-                    last_report.overall_accuracy * 100.0,
-                    threshold * 100.0
-                );
-                std::process::exit(1);
-            } else {
-                println!(
-                    "PASS: overall accuracy {:.1}% >= threshold {:.1}%",
-                    last_report.overall_accuracy * 100.0,
-                    threshold * 100.0
-                );
-            }
+    // 12. CI threshold check
+    if let Some(threshold) = cli.min_accuracy {
+        // Check the last config's overall accuracy (or single config if not "all")
+        let last_report = reports.last().expect("At least one report must exist");
+        if last_report.overall_accuracy < threshold {
+            eprintln!(
+                "FAIL: overall accuracy {:.1}% < threshold {:.1}%",
+                last_report.overall_accuracy * 100.0,
+                threshold * 100.0
+            );
+            std::process::exit(1);
+        } else {
+            println!(
+                "PASS: overall accuracy {:.1}% >= threshold {:.1}%",
+                last_report.overall_accuracy * 100.0,
+                threshold * 100.0
+            );
         }
     }
 
