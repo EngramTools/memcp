@@ -82,6 +82,8 @@ enum Commands {
         #[arg(long, value_delimiter = ',')]
         tags: Option<Vec<String>>,
         #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
         audience: Option<String>,
         #[arg(long)]
         verbose: bool,
@@ -399,9 +401,9 @@ async fn main() -> Result<()> {
             cli::cmd_store(&store, content, type_hint, source, tags, actor, actor_type, audience).await?;
         }
 
-        Commands::Search { query, limit, created_after, created_before, tags, audience, verbose } => {
+        Commands::Search { query, limit, created_after, created_before, tags, source, audience, verbose } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, audience, verbose).await?;
+            cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, verbose).await?;
         }
 
         Commands::List { type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose } => {

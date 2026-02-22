@@ -127,6 +127,7 @@ pub async fn run_benchmark(
                 bm25_k,
                 vector_k,
                 symbolic_k,
+                None,  // no source filter for benchmark
                 None,  // no audience filter for benchmark
             )
             .await?;

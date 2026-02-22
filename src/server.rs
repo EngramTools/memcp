@@ -877,6 +877,7 @@ impl MemoryService {
             bm25_k,
             vector_k,
             symbolic_k,
+            None, // source filter (MCP uses separate params)
             params.audience.as_deref(),
         ).await {
             Ok(hits) => hits,

@@ -423,7 +423,7 @@ pub struct AutoStoreConfig {
 }
 
 fn default_auto_store_format() -> String { "claude-code".to_string() }
-fn default_auto_store_filter_mode() -> String { "llm".to_string() }
+fn default_auto_store_filter_mode() -> String { "none".to_string() }
 fn default_auto_store_filter_provider() -> String { "ollama".to_string() }
 fn default_auto_store_filter_model() -> String { "llama3.2".to_string() }
 fn default_auto_store_poll_interval() -> u64 { 5 }

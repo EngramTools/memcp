@@ -193,6 +193,7 @@ pub async fn cmd_search(
     created_after: Option<String>,
     created_before: Option<String>,
     tags: Option<Vec<String>>,
+    source: Option<String>,
     audience: Option<String>,
     verbose: bool,
 ) -> Result<()> {
@@ -211,6 +212,7 @@ pub async fn cmd_search(
             Some(60.0),  // bm25_k default
             None,        // vector_k=None disables vector leg
             Some(40.0),  // symbolic_k default
+            source.as_deref(),
             audience.as_deref(),
         )
         .await

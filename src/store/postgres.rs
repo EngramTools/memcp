@@ -1365,6 +1365,7 @@ impl PostgresMemoryStore {
         bm25_k: Option<f64>,
         vector_k: Option<f64>,
         symbolic_k: Option<f64>,
+        source: Option<&str>,
         audience: Option<&str>,
     ) -> Result<Vec<crate::search::HybridRawHit>, MemcpError> {
         // 40 candidates per leg — research recommendation balancing recall vs cost
@@ -1442,6 +1443,11 @@ impl PostgresMemoryStore {
                     match_source: match_source.clone(),
                 });
             }
+        }
+
+        // Post-filter fused results by source if specified
+        if let Some(src) = source {
+            hits.retain(|hit| hit.memory.source == src);
         }
 
         // Post-filter fused results by audience if specified
