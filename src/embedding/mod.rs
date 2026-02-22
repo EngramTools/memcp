@@ -3,6 +3,7 @@
 /// Provides a pluggable interface for text embedding generation.
 /// Supports local fastembed models (default, no API key) and OpenAI API.
 
+#[cfg(feature = "local-embed")]
 pub mod local;
 pub mod openai;
 pub mod pipeline;
@@ -90,6 +91,24 @@ pub fn build_embedding_text(content: &str, tags: &Option<serde_json::Value>) -> 
         }
     }
     text
+}
+
+/// Look up the vector dimension for a known embedding model.
+/// Returns None for unknown models.
+pub fn model_dimension(model_name: &str) -> Option<usize> {
+    match model_name {
+        // fastembed local models
+        "AllMiniLML6V2" | "all-MiniLM-L6-v2" => Some(384),
+        "BGESmallENV15" | "bge-small-en-v1.5" => Some(384),
+        "AllMiniLML12V2" | "all-MiniLM-L12-v2" => Some(384),
+        "BGEBaseENV15" | "bge-base-en-v1.5" => Some(768),
+        "BGELargeENV15" | "bge-large-en-v1.5" => Some(1024),
+        // OpenAI models
+        "text-embedding-3-small" => Some(1536),
+        "text-embedding-3-large" => Some(3072),
+        "text-embedding-ada-002" => Some(1536),
+        _ => None,
+    }
 }
 
 /// Core trait for embedding text into fixed-dimension float vectors.
