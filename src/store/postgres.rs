@@ -51,6 +51,10 @@ pub struct PostgresMemoryStore {
     paradedb_available: bool,
     /// Whether to use ParadeDB for BM25 search (paradedb_available AND config says "paradedb").
     use_paradedb: bool,
+    /// Configured embedding dimension, set by daemon after provider initialization.
+    /// None when created by CLI (no embedding provider loaded).
+    /// Used for explicit casts in vector queries when needed.
+    embedding_dimension: Option<usize>,
 }
 
 impl PostgresMemoryStore {
@@ -113,7 +117,7 @@ impl PostgresMemoryStore {
             false
         };
 
-        Ok(PostgresMemoryStore { pool, paradedb_available, use_paradedb })
+        Ok(PostgresMemoryStore { pool, paradedb_available, use_paradedb, embedding_dimension: None })
     }
 
     /// Truncate all benchmark-relevant tables: memories, memory_embeddings, memory_salience, memory_consolidations.
@@ -134,6 +138,60 @@ impl PostgresMemoryStore {
             .fetch_optional(pool)
             .await
             .is_ok_and(|r| r.is_some())
+    }
+
+    /// Set the configured embedding dimension.
+    ///
+    /// Called by daemon after the embedding provider is initialized.
+    /// Stored for use in query casts when needed.
+    pub fn set_embedding_dimension(&mut self, dimension: usize) {
+        self.embedding_dimension = Some(dimension);
+    }
+
+    /// Ensure the HNSW index exists with the correct dimension-aware cast.
+    ///
+    /// Called at daemon startup after the embedding provider is initialized.
+    /// The index uses `(embedding::vector(N))` to cast the untyped column to the
+    /// configured dimension so pgvector can apply cosine ops.
+    ///
+    /// If the index already exists (e.g., daemon restarted), this is a no-op.
+    pub async fn ensure_hnsw_index(&self, dimension: usize) -> Result<(), MemcpError> {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE indexname = 'idx_memory_embeddings_hnsw')",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to check HNSW index: {}", e)))?;
+
+        if !exists {
+            let sql = format!(
+                "CREATE INDEX idx_memory_embeddings_hnsw ON memory_embeddings \
+                 USING hnsw ((embedding::vector({})) vector_cosine_ops) \
+                 WITH (m = 16, ef_construction = 64)",
+                dimension
+            );
+            sqlx::query(&sql)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| MemcpError::Storage(format!("Failed to create HNSW index: {}", e)))?;
+            tracing::info!(dimension, "Created HNSW index for vector dimension");
+        } else {
+            tracing::debug!(dimension, "HNSW index already exists, skipping creation");
+        }
+
+        Ok(())
+    }
+
+    /// Drop the HNSW index.
+    ///
+    /// Useful for tests and model migration scenarios where the index needs
+    /// to be rebuilt for a different dimension.
+    pub async fn drop_hnsw_index(&self) -> Result<(), MemcpError> {
+        sqlx::query("DROP INDEX IF EXISTS idx_memory_embeddings_hnsw")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to drop HNSW index: {}", e)))?;
+        Ok(())
     }
 }
 
