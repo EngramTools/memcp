@@ -13,4 +13,4 @@ watch_paths = [
 format = "auto"               # auto-detects Claude Code vs Openclaw vs generic JSONL
 filter_mode = "llm"           # requires Ollama running; set to "none" to disable
 filter_provider = "ollama"
-filter_model = "llama3.2"
+filter_model = "llama3.2:3b"

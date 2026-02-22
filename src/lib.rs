@@ -1,3 +1,6 @@
+/// Migrator for `#[sqlx::test]` — runs all migrations in `./migrations/` on ephemeral test DBs.
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
 pub mod auto_store;
 pub mod benchmark;
 pub mod cli;

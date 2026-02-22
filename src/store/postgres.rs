@@ -120,6 +120,26 @@ impl PostgresMemoryStore {
         Ok(PostgresMemoryStore { pool, paradedb_available, use_paradedb, embedding_dimension: None })
     }
 
+    /// Create a PostgresMemoryStore from an existing connection pool.
+    ///
+    /// Used by `#[sqlx::test]` which manages database lifecycle (create, migrate, drop)
+    /// and provides a pre-configured pool pointing to an ephemeral test database.
+    pub async fn from_pool(pool: PgPool) -> Result<Self, MemcpError> {
+        let search_config = SearchConfig::default();
+        let paradedb_available = Self::detect_paradedb(&pool).await;
+        let use_paradedb = if search_config.bm25_backend == "paradedb" {
+            paradedb_available
+        } else {
+            false
+        };
+        Ok(Self {
+            pool,
+            paradedb_available,
+            use_paradedb,
+            embedding_dimension: None,
+        })
+    }
+
     /// Truncate all benchmark-relevant tables: memories, memory_embeddings, memory_salience, memory_consolidations.
     /// Uses TRUNCATE ... CASCADE for speed. Benchmark-only — not exposed via MCP.
     pub async fn truncate_all(&self) -> Result<(), MemcpError> {

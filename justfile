@@ -12,9 +12,11 @@ build:
 build-release:
     cargo build --release
 
-# Run all tests (requires PostgreSQL running)
+# Run all tests (requires PostgreSQL running via `just pg`)
+# sqlx::test uses DATABASE_URL as the base to create/drop ephemeral test databases.
+# Your dev data in the memcp database is never touched by tests.
 test:
-    cargo test
+    DATABASE_URL=postgres://memcp:memcp@localhost:5433/memcp cargo test
 
 # Run clippy lints
 lint:
