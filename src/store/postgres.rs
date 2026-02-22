@@ -898,6 +898,46 @@ impl PostgresMemoryStore {
         Ok(count)
     }
 
+    /// Query the dimension of the most recent current embedding in the database.
+    ///
+    /// Returns None when no current embeddings exist (fresh DB or after full purge).
+    /// Used by `embed switch-model` to detect dimension changes before switching models.
+    pub async fn current_embedding_dimension(&self) -> Result<Option<usize>, MemcpError> {
+        let result = sqlx::query_scalar::<_, i32>(
+            "SELECT dimension FROM memory_embeddings WHERE is_current = true LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to query dimension: {}", e)))?;
+
+        Ok(result.map(|d| d as usize))
+    }
+
+    /// Delete ALL embeddings and reset all memories to pending.
+    ///
+    /// Used when switching to a model with different dimensions — existing embeddings
+    /// are incompatible and cannot be compared against new-model embeddings via cosine distance.
+    /// Source memories are never deleted — only the derived embedding vectors are removed.
+    ///
+    /// Returns the count of embedding rows deleted.
+    pub async fn purge_all_embeddings(&self) -> Result<u64, MemcpError> {
+        let result = sqlx::query("DELETE FROM memory_embeddings")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to purge embeddings: {}", e)))?;
+
+        let count = result.rows_affected();
+
+        sqlx::query("UPDATE memories SET embedding_status = 'pending'")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                MemcpError::Storage(format!("Failed to reset embedding status: {}", e))
+            })?;
+
+        Ok(count)
+    }
+
     /// Return the underlying PgPool so embedding pipeline can share the connection pool.
     pub fn pool(&self) -> &PgPool {
         &self.pool
