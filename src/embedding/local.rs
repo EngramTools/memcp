@@ -1,6 +1,6 @@
 /// Local embedding provider using fastembed
 ///
-/// Provides offline embedding generation using all-MiniLM-L6-v2 (384 dimensions).
+/// Provides offline embedding generation using configurable fastembed models.
 /// No API key required — model weights are downloaded and cached locally.
 /// All CPU-bound fastembed calls are wrapped in spawn_blocking to avoid blocking async runtime.
 
@@ -10,11 +10,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::task;
 
-use super::{EmbeddingError, EmbeddingProvider};
+use super::{EmbeddingError, EmbeddingProvider, model_dimension};
 
 /// Local embedding provider backed by fastembed.
 ///
-/// Uses all-MiniLM-L6-v2 model (384 dimensions) as the default.
+/// Model is configurable via `EmbeddingConfig::local_model`.
+/// Defaults to AllMiniLML6V2 (384 dimensions, all-MiniLM-L6-v2).
 /// fastembed is synchronous, so embed() uses spawn_blocking internally.
 pub struct LocalEmbeddingProvider {
     model: Arc<Mutex<TextEmbedding>>,
@@ -22,17 +23,44 @@ pub struct LocalEmbeddingProvider {
     dim: usize,
 }
 
+/// Map a model name string to the fastembed EmbeddingModel enum variant.
+fn resolve_fastembed_model(name: &str) -> Result<EmbeddingModel, EmbeddingError> {
+    match name {
+        "AllMiniLML6V2" | "all-MiniLM-L6-v2" => Ok(EmbeddingModel::AllMiniLML6V2),
+        "BGESmallENV15" | "bge-small-en-v1.5" => Ok(EmbeddingModel::BGESmallENV15),
+        "AllMiniLML12V2" | "all-MiniLM-L12-v2" => Ok(EmbeddingModel::AllMiniLML12V2),
+        "BGEBaseENV15" | "bge-base-en-v1.5" => Ok(EmbeddingModel::BGEBaseENV15),
+        "BGELargeENV15" | "bge-large-en-v1.5" => Ok(EmbeddingModel::BGELargeENV15),
+        _ => Err(EmbeddingError::ModelInit(format!(
+            "Unknown local model: '{}'. Supported: AllMiniLML6V2, BGESmallENV15, AllMiniLML12V2, BGEBaseENV15, BGELargeENV15",
+            name
+        ))),
+    }
+}
+
 impl LocalEmbeddingProvider {
     /// Create a new LocalEmbeddingProvider, downloading model weights if not cached.
     ///
     /// # Arguments
     /// * `cache_dir` - Directory to cache model weights (fastembed downloads on first use)
-    pub async fn new(cache_dir: &str) -> Result<Self, EmbeddingError> {
+    /// * `model_name` - fastembed model identifier (e.g. "AllMiniLML6V2", "bge-base-en-v1.5")
+    pub async fn new(cache_dir: &str, model_name: &str) -> Result<Self, EmbeddingError> {
+        let fastembed_model = resolve_fastembed_model(model_name)?;
+        let dim = model_dimension(model_name).ok_or_else(|| {
+            EmbeddingError::ModelInit(format!(
+                "No dimension known for model '{}' — this is a bug in the dimension registry",
+                model_name
+            ))
+        })?;
+
+        // Canonical display name: prefer the canonical alias if caller used a short name
+        let display_name = model_name.to_string();
+
         let cache_path = PathBuf::from(cache_dir);
 
         let te = task::spawn_blocking(move || {
             TextEmbedding::try_new(
-                InitOptions::new(EmbeddingModel::AllMiniLML6V2)
+                InitOptions::new(fastembed_model)
                     .with_cache_dir(cache_path)
                     .with_show_download_progress(true),
             )
@@ -43,8 +71,8 @@ impl LocalEmbeddingProvider {
 
         Ok(LocalEmbeddingProvider {
             model: Arc::new(Mutex::new(te)),
-            name: "all-MiniLM-L6-v2".to_string(),
-            dim: 384,
+            name: display_name,
+            dim,
         })
     }
 }

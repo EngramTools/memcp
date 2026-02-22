@@ -1,12 +1,13 @@
 /// OpenAI embedding provider
 ///
 /// Calls the OpenAI Embeddings API using reqwest.
-/// Supports text-embedding-3-small (1536 dimensions) by default.
+/// Model is configurable via EmbeddingConfig::openai_model.
+/// Defaults to text-embedding-3-small (1536 dimensions).
 /// Requires MEMCP_EMBEDDING__OPENAI_API_KEY env var or openai_api_key in config.
 
 use async_trait::async_trait;
 
-use super::{EmbeddingError, EmbeddingProvider};
+use super::{EmbeddingError, EmbeddingProvider, model_dimension};
 
 /// Request body for OpenAI Embeddings API
 #[derive(serde::Serialize)]
@@ -29,8 +30,8 @@ struct EmbedData {
 
 /// OpenAI-backed embedding provider.
 ///
-/// Uses text-embedding-3-small (1536 dimensions) by default.
-/// Requires a valid API key — validate on construction, not at embed time.
+/// Supports configurable OpenAI embedding models.
+/// Requires a valid API key — validated on construction, not at embed time.
 pub struct OpenAIEmbeddingProvider {
     client: reqwest::Client,
     api_key: String,
@@ -43,10 +44,13 @@ impl OpenAIEmbeddingProvider {
     ///
     /// # Arguments
     /// * `api_key` - OpenAI API key (must be non-empty)
+    /// * `model` - OpenAI model name; defaults to "text-embedding-3-small" if None
+    /// * `dimension` - Override vector dimension; auto-detected from model if None
     ///
     /// # Errors
     /// Returns `EmbeddingError::NotConfigured` if api_key is empty.
-    pub fn new(api_key: String) -> Result<Self, EmbeddingError> {
+    /// Returns `EmbeddingError::ModelInit` if model is unknown and no dimension override provided.
+    pub fn new(api_key: String, model: Option<String>, dimension: Option<usize>) -> Result<Self, EmbeddingError> {
         if api_key.trim().is_empty() {
             return Err(EmbeddingError::NotConfigured(
                 "OpenAI API key is required when using the openai embedding provider. \
@@ -55,11 +59,25 @@ impl OpenAIEmbeddingProvider {
             ));
         }
 
+        let model_name = model.unwrap_or_else(|| "text-embedding-3-small".to_string());
+
+        // Resolve dimension: explicit override > registry lookup > error for unknown models
+        let dim = match dimension {
+            Some(d) => d,
+            None => model_dimension(&model_name).ok_or_else(|| {
+                EmbeddingError::ModelInit(format!(
+                    "Unknown OpenAI model '{}'. Provide 'embedding.dimension' in config to override, \
+                     or use a known model: text-embedding-3-small, text-embedding-3-large, text-embedding-ada-002",
+                    model_name
+                ))
+            })?,
+        };
+
         Ok(OpenAIEmbeddingProvider {
             client: reqwest::Client::new(),
             api_key,
-            model: "text-embedding-3-small".to_string(),
-            dim: 1536,
+            model: model_name,
+            dim,
         })
     }
 }

@@ -190,8 +190,9 @@ pub struct SearchFilter {
 impl Default for SearchFilter {
     fn default() -> Self {
         SearchFilter {
-            // Callers always set query_embedding explicitly — this is a non-meaningful default
-            query_embedding: Vector::from(vec![0.0f32; 384]),
+            // Placeholder — callers always override query_embedding before use.
+            // Length 1 avoids allocating a full-dimension vector for a non-meaningful default.
+            query_embedding: Vector::from(vec![0.0f32; 1]),
             limit: 10,
             offset: 0,
             created_after: None,

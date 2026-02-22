@@ -399,11 +399,28 @@ pub async fn create_embedding_provider(
                          Set MEMCP_EMBEDDING__OPENAI_API_KEY or embedding.openai_api_key in memcp.toml"
                     )
                 })?;
-            Ok(Arc::new(OpenAIEmbeddingProvider::new(api_key)?))
+            let provider = OpenAIEmbeddingProvider::new(
+                api_key,
+                Some(config.embedding.openai_model.clone()),
+                config.embedding.dimension,
+            )?;
+            // Warn if user-supplied dimension override differs from the model's known dimension
+            if let Some(override_dim) = config.embedding.dimension {
+                let detected = provider.dimension();
+                if override_dim != detected {
+                    tracing::warn!(
+                        override_dim = override_dim,
+                        detected_dim = detected,
+                        model = %config.embedding.openai_model,
+                        "embedding.dimension override differs from model's known dimension — using override"
+                    );
+                }
+            }
+            Ok(Arc::new(provider))
         }
         #[cfg(feature = "local-embed")]
         "local" | _ => Ok(Arc::new(
-            LocalEmbeddingProvider::new(&config.embedding.cache_dir).await?,
+            LocalEmbeddingProvider::new(&config.embedding.cache_dir, &config.embedding.local_model).await?,
         )),
         #[cfg(not(feature = "local-embed"))]
         "local" => {

@@ -312,6 +312,7 @@ impl Default for QueryIntelligenceConfig {
 /// Nested env var overrides use double underscores:
 ///   MEMCP_EMBEDDING__PROVIDER=openai
 ///   MEMCP_EMBEDDING__OPENAI_API_KEY=sk-...
+///   MEMCP_EMBEDDING__LOCAL_MODEL=BGEBaseENV15
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
     /// Which provider to use: "local" (fastembed) or "openai"
@@ -327,6 +328,21 @@ pub struct EmbeddingConfig {
     /// Default: platform cache dir + "/memcp/models", fallback to /tmp/memcp_models
     #[serde(default = "default_cache_dir")]
     pub cache_dir: String,
+
+    /// Local embedding model name (fastembed identifier).
+    /// Default: "AllMiniLML6V2" (384 dimensions, all-MiniLM-L6-v2)
+    #[serde(default = "default_local_model")]
+    pub local_model: String,
+
+    /// OpenAI embedding model name.
+    /// Default: "text-embedding-3-small" (1536 dimensions)
+    #[serde(default = "default_openai_model")]
+    pub openai_model: String,
+
+    /// Override vector dimension. Auto-detected from model if omitted.
+    /// Only needed for custom/unknown models.
+    #[serde(default)]
+    pub dimension: Option<usize>,
 }
 
 fn default_embedding_provider() -> String {
@@ -339,12 +355,23 @@ fn default_cache_dir() -> String {
         .unwrap_or_else(|| "/tmp/memcp_models".to_string())
 }
 
+fn default_local_model() -> String {
+    "AllMiniLML6V2".to_string()
+}
+
+fn default_openai_model() -> String {
+    "text-embedding-3-small".to_string()
+}
+
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         EmbeddingConfig {
             provider: default_embedding_provider(),
             openai_api_key: None,
             cache_dir: default_cache_dir(),
+            local_model: default_local_model(),
+            openai_model: default_openai_model(),
+            dimension: None,
         }
     }
 }
