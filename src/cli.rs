@@ -571,6 +571,9 @@ pub async fn build_status(
             "name": embedding_model,
             "dimension": embedding_dimension,
         },
+        "status_line": {
+            "format": config.status_line.format,
+        },
     });
     if let Some(checks) = checks {
         output.as_object_mut().unwrap().insert("checks".to_string(), checks);

@@ -493,6 +493,30 @@ impl Default for ContentFilterConfig {
     }
 }
 
+/// Configuration for the Claude Code status line integration.
+///
+/// Controls the format of the status line output script.
+/// Nested env var overrides use double underscores:
+///   MEMCP_STATUS_LINE__FORMAT=pending
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusLineConfig {
+    /// Format: "ingest" (default), "pending", or "state"
+    #[serde(default = "default_statusline_format")]
+    pub format: String,
+}
+
+fn default_statusline_format() -> String {
+    "ingest".to_string()
+}
+
+impl Default for StatusLineConfig {
+    fn default() -> Self {
+        StatusLineConfig {
+            format: default_statusline_format(),
+        }
+    }
+}
+
 /// Configuration for the auto-summarization subsystem.
 ///
 /// When enabled, the auto-store sidecar summarizes AI assistant responses
@@ -641,6 +665,11 @@ pub struct Config {
     /// Existing configs without [summarization] section still work (serde default applied).
     #[serde(default)]
     pub summarization: SummarizationConfig,
+
+    /// Status line configuration (for Claude Code integration).
+    /// Existing configs without [status_line] section still work (serde default applied).
+    #[serde(default)]
+    pub status_line: StatusLineConfig,
 }
 
 fn default_log_level() -> String {
@@ -666,6 +695,7 @@ impl Default for Config {
             auto_store: AutoStoreConfig::default(),
             content_filter: ContentFilterConfig::default(),
             summarization: SummarizationConfig::default(),
+            status_line: StatusLineConfig::default(),
         }
     }
 }
