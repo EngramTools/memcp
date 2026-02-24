@@ -1,6 +1,7 @@
 # memcp configuration
 # Environment variables override: MEMCP_LOG_LEVEL, MEMCP_LOG_FILE
 
+database_url = "postgres://memcp:memcp@localhost:5433/memcp"
 log_level = "info"
 # log_file = "/var/log/memcp.log"  # Uncomment to enable file logging
 
