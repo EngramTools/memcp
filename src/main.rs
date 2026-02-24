@@ -89,8 +89,17 @@ enum Commands {
         source: Option<String>,
         #[arg(long)]
         audience: Option<String>,
+        /// Filter by memory type (e.g., fact, preference, instruction, decision)
+        #[arg(long)]
+        type_hint: Option<String>,
         #[arg(long)]
         verbose: bool,
+        /// Output raw JSON matching MCP serve envelope (id always present)
+        #[arg(long)]
+        json: bool,
+        /// Output one line per result: id_short score snippet [tags]
+        #[arg(long)]
+        compact: bool,
     },
     /// List memories with optional filters and pagination
     List {
@@ -454,9 +463,9 @@ async fn main() -> Result<()> {
             cli::cmd_store(&store, content, type_hint, source, tags, actor, actor_type, audience).await?;
         }
 
-        Commands::Search { query, limit, created_after, created_before, tags, source, audience, verbose } => {
+        Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, verbose).await?;
+            cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact).await?;
         }
 
         Commands::Recent { since, source, actor, limit, verbose } => {

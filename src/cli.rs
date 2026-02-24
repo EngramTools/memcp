@@ -18,6 +18,7 @@ use sqlx::Row;
 
 use crate::config::Config;
 use crate::gc;
+use crate::ipc::embed_via_daemon;
 use crate::search::salience::SalienceInput;
 use crate::search::{SalienceScorer, ScoredHit};
 use crate::store::postgres::PostgresMemoryStore;
@@ -184,8 +185,17 @@ pub async fn cmd_store(
     Ok(())
 }
 
-/// Search memories using BM25+symbolic (no vector leg -- CLI doesn't load embedding model).
-/// Results are re-ranked by salience scoring.
+/// Search memories using the full hybrid pipeline (vector + BM25 + symbolic) when the daemon
+/// is running, degrading gracefully to BM25+symbolic when the daemon is offline.
+///
+/// When the daemon is running, the CLI obtains an embedding vector via Unix domain socket IPC
+/// (`embed_via_daemon`), enabling vector similarity search identical to MCP serve.
+/// When the daemon is offline, a warning is emitted to stderr and search falls back to text-only.
+///
+/// Output formats:
+/// - `--json` (json=true): raw JSON matching MCP serve envelope (`{ results, total }`)
+/// - `--compact` (compact=true): one line per result with id, score, snippet, tags
+/// - default: human-friendly list with all key fields
 pub async fn cmd_search(
     store: &Arc<PostgresMemoryStore>,
     config: &Config,
@@ -196,22 +206,43 @@ pub async fn cmd_search(
     tags: Option<Vec<String>>,
     source: Option<String>,
     audience: Option<String>,
+    type_hint: Option<String>,
     verbose: bool,
+    json: bool,
+    compact: bool,
 ) -> Result<()> {
     let ca = created_after.as_deref().map(parse_datetime).transpose()?;
     let cb = created_before.as_deref().map(parse_datetime).transpose()?;
 
-    // BM25+symbolic only -- pass query_embedding=None, vector_k=None to disable vector leg
+    // Attempt to obtain embedding from daemon for vector leg (SCF-01).
+    let query_embedding_opt = embed_via_daemon(&query).await;
+    let (query_embedding_vec, vector_k) = match &query_embedding_opt {
+        Some(embedding) => {
+            // Full hybrid pipeline: daemon provided embedding.
+            let vec = pgvector::Vector::from(embedding.clone());
+            (Some(vec), Some(60.0_f64))
+        }
+        None => {
+            // Daemon offline — degrade gracefully to text-only search.
+            eprintln!("warning: daemon offline — falling back to text-only search (results may be degraded). Start with: memcp daemon");
+            (None, None)
+        }
+    };
+
+    // Build tags filter. type_hint is applied post-search as a result filter
+    // (hybrid_search doesn't expose a type_hint column filter; post-filter is simple and correct).
+    let tags_for_search = tags.clone().filter(|t| !t.is_empty());
+
     let raw_hits = store
         .hybrid_search(
             &query,
-            None,        // no query embedding
+            query_embedding_vec.as_ref(),
             limit,
             ca,
             cb,
-            tags.as_deref(),
+            tags_for_search.as_deref(),
             Some(60.0),  // bm25_k default
-            None,        // vector_k=None disables vector leg
+            vector_k,    // Some(60.0) when daemon alive, None when offline
             Some(40.0),  // symbolic_k default
             source.as_deref(),
             audience.as_deref(),
@@ -219,11 +250,16 @@ pub async fn cmd_search(
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
+    // Apply type_hint filter post-search (symbolic leg doesn't filter by type_hint column).
+    let raw_hits: Vec<_> = if let Some(ref th) = type_hint {
+        raw_hits.into_iter().filter(|h| h.memory.type_hint == *th).collect()
+    } else {
+        raw_hits
+    };
+
     if raw_hits.is_empty() {
-        println!(
-            "{}",
-            serde_json::to_string(&json!({ "results": [], "total": 0 }))?
-        );
+        let output = json!({ "results": [], "total": 0 });
+        println!("{}", serde_json::to_string(&output)?);
         return Ok(());
     }
 
@@ -266,25 +302,83 @@ pub async fn cmd_search(
     let scorer = SalienceScorer::new(&config.salience);
     scorer.rank(&mut scored_hits, &salience_inputs);
 
-    // Format results
-    let results: Vec<serde_json::Value> = scored_hits
-        .iter()
-        .map(|h| {
-            let mut entry = format_memory_json(&h.memory, verbose);
-            if let Some(obj) = entry.as_object_mut() {
-                obj.insert("salience_score".to_string(), json!(h.salience_score));
-                obj.insert("rrf_score".to_string(), json!(h.rrf_score));
-                obj.insert("match_source".to_string(), json!(h.match_source));
-            }
-            entry
-        })
-        .collect();
+    // Format results according to output mode.
+    if json {
+        // --json: MCP-compatible JSON envelope. id always present at top level (SCF-03).
+        let results: Vec<serde_json::Value> = scored_hits
+            .iter()
+            .map(|h| {
+                let mut entry = format_memory_json(&h.memory, verbose || true);
+                if let Some(obj) = entry.as_object_mut() {
+                    // Ensure id is always top-level (SCF-03)
+                    obj.insert("id".to_string(), json!(h.memory.id));
+                    obj.insert("salience_score".to_string(), json!(h.salience_score));
+                    obj.insert("rrf_score".to_string(), json!(h.rrf_score));
+                    obj.insert("match_source".to_string(), json!(h.match_source));
+                }
+                entry
+            })
+            .collect();
 
-    let output = json!({
-        "results": results,
-        "total": results.len(),
-    });
-    println!("{}", serde_json::to_string(&output)?);
+        let output = json!({
+            "results": results,
+            "next_cursor": null,
+            "has_more": false,
+        });
+        println!("{}", serde_json::to_string(&output)?);
+    } else if compact {
+        // --compact: one line per result: "{id_short} {score:.3} {snippet_80} [{tags}]"
+        for h in &scored_hits {
+            let id_short = &h.memory.id[..8.min(h.memory.id.len())];
+            let snippet: String = h.memory.content
+                .chars()
+                .take(80)
+                .collect();
+            let snippet = if h.memory.content.len() > 80 {
+                format!("{}…", snippet)
+            } else {
+                snippet
+            };
+            let tags_str = h.memory.tags
+                .as_ref()
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|t| t.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .unwrap_or_default();
+            println!(
+                "{} {:.3} {} [{}]",
+                id_short, h.salience_score, snippet, tags_str
+            );
+        }
+    } else {
+        // Default: human-friendly JSON list with id, content, tags, score, type_hint, created_at.
+        // id always present at top level (SCF-03).
+        let results: Vec<serde_json::Value> = scored_hits
+            .iter()
+            .map(|h| {
+                let mut entry = format_memory_json(&h.memory, verbose);
+                if let Some(obj) = entry.as_object_mut() {
+                    // Ensure id is always top-level (SCF-03)
+                    obj.insert("id".to_string(), json!(h.memory.id));
+                    obj.insert("salience_score".to_string(), json!(h.salience_score));
+                    obj.insert("rrf_score".to_string(), json!(h.rrf_score));
+                    obj.insert("match_source".to_string(), json!(h.match_source));
+                }
+                entry
+            })
+            .collect();
+
+        let output = json!({
+            "results": results,
+            "total": results.len(),
+        });
+        println!("{}", serde_json::to_string(&output)?);
+    }
+
     Ok(())
 }
 
