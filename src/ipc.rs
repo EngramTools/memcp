@@ -1,18 +1,25 @@
-//! IPC channel between CLI and daemon for embedding queries.
+//! IPC channel between CLI and daemon for embedding queries and LLM re-ranking.
 //!
-//! The daemon holds the loaded fastembed model (87MB, too heavy to reload per CLI invocation).
+//! The daemon holds the loaded fastembed model (87MB, too heavy to reload per CLI invocation)
+//! and the optional QI reranking provider (LLM-based, also too expensive to initialize per call).
 //! This module provides:
 //!   - `embed_socket_path()` — well-known Unix domain socket path
-//!   - `start_embed_listener()` — daemon-side: binds socket, serves embed requests
+//!   - `start_embed_listener()` — daemon-side: binds socket, serves embed + rerank requests
 //!   - `embed_via_daemon()` — CLI-side: connects, sends text, receives embedding vector
+//!   - `rerank_via_daemon()` — CLI-side: connects, sends candidates, receives ranked results
 //!
 //! Protocol: newline-delimited JSON over a Unix domain socket.
-//!   Request:  {"text": "query text"}
-//!   Response: {"embedding": [0.1, 0.2, ...]}  or  {"error": "message"}
+//!   Embed request:   {"text": "query text"}
+//!   Embed response:  {"embedding": [0.1, 0.2, ...]}  or  {"error": "message"}
 //!
-//! Design: fail-open. CLI caller receives `None` on any error (timeout, connection
-//! refused, socket absent, parse error) and falls back to text-only search with
-//! a stderr warning. This matches the fail-open pattern used throughout memcp.
+//!   Rerank request:  {"type":"rerank","query":"...","candidates":[{"id":"uuid","content":"text","current_rank":1},...]}
+//!   Rerank response: {"ranked":[{"id":"uuid","llm_rank":1},...]}
+//!                or  {"error":"message"}
+//!                or  {"noop":true}  (when no QI provider configured)
+//!
+//! Design: fail-open. CLI callers receive `None` on any error (timeout, connection
+//! refused, socket absent, parse error) and fall back gracefully.
+//! This matches the fail-open pattern used throughout memcp.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,6 +29,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::embedding::EmbeddingProvider;
+use crate::query_intelligence::{QueryIntelligenceProvider, RankedCandidate};
 
 // ---------------------------------------------------------------------------
 // Socket path
@@ -49,7 +57,10 @@ pub fn embed_socket_path() -> PathBuf {
 // Daemon-side listener
 // ---------------------------------------------------------------------------
 
-/// Spawn the embed IPC listener as a background task.
+/// Spawn the IPC listener as a background task.
+///
+/// Handles both embedding requests ({"text":"..."}) and reranking requests
+/// ({"type":"rerank",...}) over the same Unix domain socket.
 ///
 /// Called by `run_daemon()` alongside existing worker spawns. The listener
 /// accepts incoming connections, each handled in an independent tokio task.
@@ -60,6 +71,7 @@ pub fn embed_socket_path() -> PathBuf {
 pub async fn start_embed_listener(
     socket_path: PathBuf,
     provider: Arc<dyn EmbeddingProvider + Send + Sync>,
+    qi_provider: Option<Arc<dyn QueryIntelligenceProvider + Send + Sync>>,
 ) {
     // Remove stale socket if it exists but is not listening.
     if socket_path.exists() {
@@ -98,20 +110,24 @@ pub async fn start_embed_listener(
         };
 
         let provider = provider.clone();
+        let qi_provider = qi_provider.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_embed_connection(stream, provider).await {
-                tracing::debug!(error = %e, "Embed IPC connection error");
+            if let Err(e) = handle_ipc_connection(stream, provider, qi_provider).await {
+                tracing::debug!(error = %e, "IPC connection error");
             }
         });
     }
 }
 
-/// Handle a single embed IPC connection.
+/// Handle a single IPC connection.
 ///
-/// Reads one JSON line, embeds the text, writes one JSON line back.
-async fn handle_embed_connection(
+/// Dispatches on the `"type"` field:
+/// - No `"type"` field or `"type":"embed"` → embedding request (backward compatible)
+/// - `"type":"rerank"` → LLM re-ranking request
+async fn handle_ipc_connection(
     mut stream: UnixStream,
     provider: Arc<dyn EmbeddingProvider + Send + Sync>,
+    qi_provider: Option<Arc<dyn QueryIntelligenceProvider + Send + Sync>>,
 ) -> anyhow::Result<()> {
     let (read_half, mut write_half) = stream.split();
     let mut reader = BufReader::new(read_half);
@@ -125,15 +141,14 @@ async fn handle_embed_connection(
     }
 
     let request: serde_json::Value = serde_json::from_str(line)?;
-    let text = request["text"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("Missing 'text' field in embed request"))?;
 
-    let response = match provider.embed(text).await {
-        Ok(embedding) => serde_json::json!({ "embedding": embedding }),
-        Err(e) => {
-            tracing::warn!(error = %e, "Embedding failed in IPC handler");
-            serde_json::json!({ "error": e.to_string() })
+    let response = match request.get("type").and_then(|t| t.as_str()) {
+        Some("rerank") => {
+            handle_rerank_request(&request, qi_provider.as_deref()).await
+        }
+        // No "type" field (legacy embed request) or "type":"embed"
+        _ => {
+            handle_embed_request(&request, provider).await
         }
     };
 
@@ -145,8 +160,81 @@ async fn handle_embed_connection(
     Ok(())
 }
 
+/// Handle an embedding request ({"text":"..."}).
+async fn handle_embed_request(
+    request: &serde_json::Value,
+    provider: Arc<dyn EmbeddingProvider + Send + Sync>,
+) -> serde_json::Value {
+    let text = match request["text"].as_str() {
+        Some(t) => t,
+        None => {
+            return serde_json::json!({ "error": "Missing 'text' field in embed request" });
+        }
+    };
+
+    match provider.embed(text).await {
+        Ok(embedding) => serde_json::json!({ "embedding": embedding }),
+        Err(e) => {
+            tracing::warn!(error = %e, "Embedding failed in IPC handler");
+            serde_json::json!({ "error": e.to_string() })
+        }
+    }
+}
+
+/// Handle a rerank request ({"type":"rerank","query":"...","candidates":[...]}).
+///
+/// Returns {"ranked":[...]} on success, {"noop":true} if no QI provider,
+/// {"error":"..."} on failure.
+async fn handle_rerank_request(
+    request: &serde_json::Value,
+    qi_provider: Option<&(dyn QueryIntelligenceProvider + Send + Sync)>,
+) -> serde_json::Value {
+    let provider = match qi_provider {
+        Some(p) => p,
+        None => return serde_json::json!({ "noop": true }),
+    };
+
+    let query = match request["query"].as_str() {
+        Some(q) => q,
+        None => return serde_json::json!({ "error": "Missing 'query' field in rerank request" }),
+    };
+
+    let candidates_json = match request["candidates"].as_array() {
+        Some(c) => c,
+        None => return serde_json::json!({ "error": "Missing 'candidates' field in rerank request" }),
+    };
+
+    let mut candidates = Vec::with_capacity(candidates_json.len());
+    for c in candidates_json {
+        let id = match c["id"].as_str() {
+            Some(id) => id.to_string(),
+            None => return serde_json::json!({ "error": "Candidate missing 'id' field" }),
+        };
+        let content = match c["content"].as_str() {
+            Some(content) => content.to_string(),
+            None => return serde_json::json!({ "error": "Candidate missing 'content' field" }),
+        };
+        let current_rank = c["current_rank"].as_u64().unwrap_or(1) as usize;
+        candidates.push(RankedCandidate { id, content, current_rank });
+    }
+
+    match provider.rerank(query, &candidates).await {
+        Ok(ranked) => {
+            let ranked_json: Vec<serde_json::Value> = ranked
+                .iter()
+                .map(|r| serde_json::json!({ "id": r.id, "llm_rank": r.llm_rank }))
+                .collect();
+            serde_json::json!({ "ranked": ranked_json })
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Reranking failed in IPC handler");
+            serde_json::json!({ "error": e.to_string() })
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
-// CLI-side client
+// CLI-side client: embed
 // ---------------------------------------------------------------------------
 
 /// Attempt to obtain an embedding vector from the running daemon via IPC.
@@ -217,5 +305,124 @@ async fn send_embed_request(mut stream: UnixStream, text: &str) -> Option<Vec<f3
         None
     } else {
         Some(floats)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CLI-side client: rerank
+// ---------------------------------------------------------------------------
+
+/// Attempt to re-rank search candidates via the running daemon's LLM provider.
+///
+/// Returns `None` on any failure (daemon offline, timeout, noop — no QI provider configured,
+/// connection refused). Callers should silently skip re-ranking and use salience order.
+///
+/// Timeout: 5000ms (reranking involves an LLM call, much slower than embedding).
+///
+/// # Arguments
+/// - `query` — the original search query
+/// - `candidates` — `(id, content, current_rank)` tuples (1-indexed rank)
+///
+/// # Returns
+/// - `Some(Vec<(id, llm_rank)>)` — reranked IDs with their new 1-indexed ranks
+/// - `None` — daemon offline, no QI provider, or any error (fail-open)
+pub async fn rerank_via_daemon(
+    query: &str,
+    candidates: &[(String, String, usize)],
+) -> Option<Vec<(String, usize)>> {
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let socket_path = embed_socket_path();
+
+    // Attempt connection with 5000ms timeout (LLM calls are slow).
+    let stream = tokio::time::timeout(
+        Duration::from_millis(5000),
+        UnixStream::connect(&socket_path),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    send_rerank_request(stream, query, candidates).await
+}
+
+/// Send a rerank request and parse the response.
+async fn send_rerank_request(
+    mut stream: UnixStream,
+    query: &str,
+    candidates: &[(String, String, usize)],
+) -> Option<Vec<(String, usize)>> {
+    let candidates_json: Vec<serde_json::Value> = candidates
+        .iter()
+        .map(|(id, content, rank)| {
+            serde_json::json!({
+                "id": id,
+                "content": content,
+                "current_rank": rank
+            })
+        })
+        .collect();
+
+    let request = serde_json::json!({
+        "type": "rerank",
+        "query": query,
+        "candidates": candidates_json,
+    });
+
+    let mut request_line = serde_json::to_string(&request).ok()?;
+    request_line.push('\n');
+
+    // Write with 5000ms timeout.
+    tokio::time::timeout(
+        Duration::from_millis(5000),
+        stream.write_all(request_line.as_bytes()),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    stream.flush().await.ok()?;
+
+    // Read response with 5000ms timeout.
+    let (read_half, _) = stream.split();
+    let mut reader = BufReader::new(read_half);
+    let mut response_line = String::new();
+
+    tokio::time::timeout(
+        Duration::from_millis(5000),
+        reader.read_line(&mut response_line),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    let response: serde_json::Value = serde_json::from_str(response_line.trim()).ok()?;
+
+    // noop: daemon running but no QI provider configured — silently return None.
+    if response.get("noop").is_some() {
+        return None;
+    }
+
+    // error: LLM call failed — return None (fail-open).
+    if response.get("error").is_some() {
+        return None;
+    }
+
+    let ranked = response["ranked"].as_array()?;
+    let results: Vec<(String, usize)> = ranked
+        .iter()
+        .filter_map(|r| {
+            let id = r["id"].as_str()?.to_string();
+            let llm_rank = r["llm_rank"].as_u64()? as usize;
+            Some((id, llm_rank))
+        })
+        .collect();
+
+    if results.is_empty() {
+        None
+    } else {
+        Some(results)
     }
 }

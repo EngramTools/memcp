@@ -25,6 +25,9 @@ use crate::extraction::openai::OpenAIExtractionProvider;
 use crate::extraction::pipeline::ExtractionPipeline;
 use crate::gc::{self, DedupWorker};
 use crate::ipc::{embed_socket_path, start_embed_listener};
+use crate::query_intelligence::QueryIntelligenceProvider;
+use crate::query_intelligence::ollama::OllamaQueryIntelligenceProvider;
+use crate::query_intelligence::openai::OpenAIQueryIntelligenceProvider;
 use crate::store::postgres::PostgresMemoryStore;
 use crate::summarization::create_summarization_provider;
 
@@ -90,14 +93,33 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         None
     };
 
-    // 3.7. Spawn embed IPC listener so CLI search can obtain embeddings from the daemon.
-    // The listener serves embedding requests from short-lived CLI processes over a Unix
-    // domain socket, enabling full hybrid search in CLI without reloading the model.
+    // 3.7. Spawn IPC listener so CLI can obtain embeddings and LLM re-ranking from the daemon.
+    // The listener serves both embed and rerank requests from short-lived CLI processes over
+    // a Unix domain socket, enabling full pipeline parity with MCP serve (SCF-01 gap closure).
     {
         let embed_provider = provider_for_filter.clone();
         let socket_path = embed_socket_path();
+
+        // Create QI reranking provider if reranking is enabled.
+        let qi_provider: Option<Arc<dyn QueryIntelligenceProvider + Send + Sync>> =
+            if config.query_intelligence.reranking_enabled {
+                match create_qi_reranking_provider(config) {
+                    Ok(p) => {
+                        tracing::info!("QI reranking provider available for IPC (CLI re-ranking)");
+                        Some(p)
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "QI reranking init failed — IPC rerank will no-op");
+                        None
+                    }
+                }
+            } else {
+                tracing::debug!("QI reranking disabled — IPC rerank will no-op");
+                None
+            };
+
         tokio::spawn(async move {
-            start_embed_listener(socket_path, embed_provider).await;
+            start_embed_listener(socket_path, embed_provider, qi_provider).await;
         });
     }
 
@@ -589,6 +611,40 @@ pub fn create_extraction_provider(
             config.extraction.ollama_base_url.clone(),
             config.extraction.ollama_model.clone(),
             config.extraction.max_content_chars,
+        ))),
+    }
+}
+
+/// Create the QI reranking provider based on configuration.
+///
+/// Used by the IPC listener to serve rerank requests from CLI processes, enabling
+/// full pipeline parity between CLI search and MCP serve (SCF-01 gap closure).
+pub fn create_qi_reranking_provider(
+    config: &Config,
+) -> Result<Arc<dyn QueryIntelligenceProvider + Send + Sync>> {
+    match config.query_intelligence.reranking_provider.as_str() {
+        "openai" => {
+            let api_key = config
+                .query_intelligence
+                .openai_api_key
+                .clone()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "OpenAI API key required when query intelligence reranking provider is 'openai'. \
+                         Set MEMCP_QUERY_INTELLIGENCE__OPENAI_API_KEY or query_intelligence.openai_api_key in memcp.toml"
+                    )
+                })?;
+            let provider = OpenAIQueryIntelligenceProvider::new(
+                config.query_intelligence.openai_base_url.clone(),
+                api_key,
+                config.query_intelligence.reranking_openai_model.clone(),
+            )
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            Ok(Arc::new(provider))
+        }
+        "ollama" | _ => Ok(Arc::new(OllamaQueryIntelligenceProvider::new(
+            config.query_intelligence.ollama_base_url.clone(),
+            config.query_intelligence.reranking_ollama_model.clone(),
         ))),
     }
 }

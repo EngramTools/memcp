@@ -271,27 +271,7 @@ fn create_qi_expansion_provider(config: &Config) -> Result<Arc<dyn QueryIntellig
 
 /// Create the QI reranking provider based on configuration.
 fn create_qi_reranking_provider(config: &Config) -> Result<Arc<dyn QueryIntelligenceProvider + Send + Sync>> {
-    match config.query_intelligence.reranking_provider.as_str() {
-        "openai" => {
-            let api_key = config.query_intelligence.openai_api_key.clone()
-                .ok_or_else(|| anyhow::anyhow!(
-                    "OpenAI API key required when query intelligence reranking provider is 'openai'. \
-                     Set MEMCP_QUERY_INTELLIGENCE__OPENAI_API_KEY or query_intelligence.openai_api_key in memcp.toml"
-                ))?;
-            let provider = OpenAIQueryIntelligenceProvider::new(
-                config.query_intelligence.openai_base_url.clone(),
-                api_key,
-                config.query_intelligence.reranking_openai_model.clone(),
-            ).map_err(|e| anyhow::anyhow!("{}", e))?;
-            Ok(Arc::new(provider))
-        }
-        "ollama" | _ => {
-            Ok(Arc::new(OllamaQueryIntelligenceProvider::new(
-                config.query_intelligence.ollama_base_url.clone(),
-                config.query_intelligence.reranking_ollama_model.clone(),
-            )))
-        }
-    }
+    memcp::daemon::create_qi_reranking_provider(config)
 }
 
 /// Create the embedding provider based on configuration.
