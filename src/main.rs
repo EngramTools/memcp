@@ -43,7 +43,8 @@ use rmcp::ServiceExt;
         memcp embed switch-model --model BGEBaseENV15 --dry-run\n  \
         memcp embed switch-model --model BGEBaseENV15 --yes\n  \
         memcp statusline install    Install Claude Code status line\n  \
-        memcp statusline remove     Remove Claude Code status line\n\n\
+        memcp statusline remove     Remove Claude Code status line\n  \
+        memcp gc [--dry-run]        Run garbage collection\n\n\
         OUTPUT: JSON to stdout. Errors to stderr with non-zero exit code.",
 )]
 struct Cli {
@@ -170,6 +171,18 @@ enum Commands {
     Statusline {
         #[command(subcommand)]
         action: StatuslineAction,
+    },
+    /// Run or preview garbage collection (prune low-salience and expired memories)
+    Gc {
+        /// Show candidates without making changes
+        #[arg(long)]
+        dry_run: bool,
+        /// Override salience threshold (default: from config)
+        #[arg(long)]
+        salience_threshold: Option<f64>,
+        /// Override minimum age in days (default: from config)
+        #[arg(long)]
+        min_age_days: Option<u32>,
     },
 }
 
@@ -492,6 +505,11 @@ async fn main() -> Result<()> {
                 StatuslineAction::Install => cli::cmd_statusline_install()?,
                 StatuslineAction::Remove => cli::cmd_statusline_remove()?,
             }
+        }
+
+        Commands::Gc { dry_run, salience_threshold, min_age_days } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_gc(&store, &config, dry_run, salience_threshold, min_age_days).await?;
         }
 
         Commands::Serve => {

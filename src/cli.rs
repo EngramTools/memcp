@@ -17,6 +17,7 @@ use serde_json::json;
 use sqlx::Row;
 
 use crate::config::Config;
+use crate::gc;
 use crate::search::salience::SalienceInput;
 use crate::search::{SalienceScorer, ScoredHit};
 use crate::store::postgres::PostgresMemoryStore;
@@ -462,18 +463,19 @@ pub async fn build_status(
     config: &Config,
     check: bool,
 ) -> Result<(serde_json::Value, bool, Option<DateTime<Utc>>, i32, i32)> {
-    // Daemon heartbeat info + sidecar fields
+    // Daemon heartbeat info + sidecar fields + GC metrics
     let daemon_row = sqlx::query(
         "SELECT last_heartbeat, started_at, pid, version, worker_states, \
                 last_ingest_at, ingest_count_today, watched_file_count, \
-                embedding_model, embedding_dimension \
+                embedding_model, embedding_dimension, \
+                last_gc_at, gc_pruned_total, gc_dedup_merges, filter_stats \
          FROM daemon_status WHERE id = 1",
     )
     .fetch_optional(store.pool())
     .await;
 
     let (alive, daemon_info, last_ingest_at, ingest_count_today, watched_file_count,
-         embedding_model, embedding_dimension) = match daemon_row {
+         embedding_model, embedding_dimension, gc_info) = match daemon_row {
         Ok(Some(row)) => {
             let heartbeat: Option<DateTime<Utc>> = row.get("last_heartbeat");
             let alive = heartbeat
@@ -485,6 +487,18 @@ pub async fn build_status(
             let model: Option<String> = row.get("embedding_model");
             let dimension: Option<i32> = row.get("embedding_dimension");
 
+            let last_gc_at: Option<DateTime<Utc>> = row.get("last_gc_at");
+            let gc_pruned_total: Option<i32> = row.get("gc_pruned_total");
+            let gc_dedup_merges: Option<i32> = row.get("gc_dedup_merges");
+            let filter_stats: Option<serde_json::Value> = row.get("filter_stats");
+
+            let gc = json!({
+                "last_run_at": last_gc_at.map(|t| t.to_rfc3339()),
+                "pruned_total": gc_pruned_total.unwrap_or(0),
+                "dedup_merges": gc_dedup_merges.unwrap_or(0),
+                "filter_stats": filter_stats.unwrap_or_else(|| json!({})),
+            });
+
             let info = json!({
                 "alive": alive,
                 "last_heartbeat": heartbeat.map(|t| t.to_rfc3339()),
@@ -494,25 +508,26 @@ pub async fn build_status(
                 "worker_states": row.get::<Option<serde_json::Value>, _>("worker_states"),
             });
             (alive, info, last_ingest, ingest_today.unwrap_or(0), watched.unwrap_or(0),
-             model, dimension)
+             model, dimension, gc)
         }
-        _ => (false, json!({"alive": false}), None, 0, 0, None, None),
+        _ => (false, json!({"alive": false}), None, 0, 0, None, None,
+              json!({ "last_run_at": null, "pruned_total": 0, "dedup_merges": 0, "filter_stats": {} })),
     };
 
-    // Pending work counts
+    // Pending work counts (exclude soft-deleted)
     let pending_embed: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE embedding_status = 'pending'")
+        sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE embedding_status = 'pending' AND deleted_at IS NULL")
             .fetch_one(store.pool())
             .await
             .unwrap_or(0);
 
     let pending_extract: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE extraction_status = 'pending'")
+        sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE extraction_status = 'pending' AND deleted_at IS NULL")
             .fetch_one(store.pool())
             .await
             .unwrap_or(0);
 
-    let total_memories: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories")
+    let total_memories: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL")
         .fetch_one(store.pool())
         .await
         .unwrap_or(0);
@@ -574,6 +589,7 @@ pub async fn build_status(
         "status_line": {
             "format": config.status_line.format,
         },
+        "gc": gc_info,
     });
     if let Some(checks) = checks {
         output.as_object_mut().unwrap().insert("checks".to_string(), checks);
@@ -634,6 +650,71 @@ pub async fn cmd_status(
         }
     } else {
         // JSON output
+        println!("{}", serde_json::to_string(&output)?);
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// GC command
+// ---------------------------------------------------------------------------
+
+/// Run or preview garbage collection.
+///
+/// With `--dry-run`: prints the list of candidates that would be pruned (no changes made).
+/// Without `--dry-run`: executes GC and prints a summary of pruned/expired/hard-purged counts.
+pub async fn cmd_gc(
+    store: &Arc<PostgresMemoryStore>,
+    config: &Config,
+    dry_run: bool,
+    salience_threshold_override: Option<f64>,
+    min_age_days_override: Option<u32>,
+) -> Result<()> {
+    // Apply any flag overrides to the config
+    let mut gc_config = config.gc.clone();
+    if let Some(t) = salience_threshold_override {
+        gc_config.salience_threshold = t;
+    }
+    if let Some(d) = min_age_days_override {
+        gc_config.min_age_days = d;
+    }
+
+    let result = gc::run_gc(store, &gc_config, dry_run)
+        .await
+        .map_err(|e| anyhow::anyhow!("GC failed: {}", e))?;
+
+    if let Some(reason) = &result.skipped_reason {
+        let output = serde_json::json!({
+            "status": "skipped",
+            "reason": reason,
+        });
+        println!("{}", serde_json::to_string(&output)?);
+        return Ok(());
+    }
+
+    if dry_run {
+        // Show up to 20 candidates
+        let show_count = result.candidates.len().min(20);
+        let shown: Vec<&gc::GcCandidate> = result.candidates.iter().take(show_count).collect();
+        let truncated = result.candidates.len() > 20;
+
+        let output = serde_json::json!({
+            "status": "dry_run",
+            "total_candidates": result.pruned_count,
+            "total_expired": result.expired_count,
+            "showing": show_count,
+            "truncated": truncated,
+            "candidates": shown,
+        });
+        println!("{}", serde_json::to_string(&output)?);
+    } else {
+        let output = serde_json::json!({
+            "status": "ok",
+            "pruned": result.pruned_count,
+            "expired": result.expired_count,
+            "hard_purged": result.hard_purged_count,
+        });
         println!("{}", serde_json::to_string(&output)?);
     }
 
