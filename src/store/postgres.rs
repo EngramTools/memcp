@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::config::SearchConfig;
 use crate::errors::MemcpError;
 use crate::store::{
-    decode_search_keyset_cursor, encode_search_cursor, encode_search_keyset_cursor,
+    decode_search_keyset_cursor, encode_search_keyset_cursor,
     CreateMemory, ListFilter, ListResult, Memory, MemoryStore,
     SearchFilter, SearchHit, SearchResult, UpdateMemory,
 };
