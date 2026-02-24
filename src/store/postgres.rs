@@ -339,7 +339,7 @@ impl MemoryStore for PostgresMemoryStore {
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience \
-             FROM memories WHERE id = $1",
+             FROM memories WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -454,7 +454,7 @@ impl MemoryStore for PostgresMemoryStore {
         let limit = filter.limit.min(100).max(1);
 
         // Build WHERE clause with numbered PostgreSQL parameters
-        let mut conditions: Vec<String> = Vec::new();
+        let mut conditions: Vec<String> = vec!["deleted_at IS NULL".to_string()];
         let mut param_idx: u32 = 1;
         let mut cursor_created_at: Option<DateTime<Utc>> = None;
         let mut cursor_id: Option<String> = None;
@@ -577,7 +577,7 @@ impl MemoryStore for PostgresMemoryStore {
     }
 
     async fn count_matching(&self, filter: &ListFilter) -> Result<u64, MemcpError> {
-        let mut conditions: Vec<String> = Vec::new();
+        let mut conditions: Vec<String> = vec!["deleted_at IS NULL".to_string()];
         let mut param_idx: u32 = 1;
 
         if filter.type_hint.is_some() {
@@ -657,7 +657,7 @@ impl MemoryStore for PostgresMemoryStore {
     }
 
     async fn delete_matching(&self, filter: &ListFilter) -> Result<u64, MemcpError> {
-        let mut conditions: Vec<String> = Vec::new();
+        let mut conditions: Vec<String> = vec!["deleted_at IS NULL".to_string()];
         let mut param_idx: u32 = 1;
 
         if filter.type_hint.is_some() {
@@ -806,7 +806,7 @@ impl PostgresMemoryStore {
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience \
-             FROM memories WHERE embedding_status IN ('pending', 'failed') \
+             FROM memories WHERE embedding_status IN ('pending', 'failed') AND deleted_at IS NULL \
              ORDER BY created_at ASC LIMIT $1",
         )
         .bind(limit)
@@ -825,9 +825,9 @@ impl PostgresMemoryStore {
     ///   "by_model": [ { "model_name": ..., "model_version": ..., "is_current": true, "count": N } ] }
     /// ```
     pub async fn embedding_stats(&self) -> Result<serde_json::Value, MemcpError> {
-        // Query 1: counts by embedding_status
+        // Query 1: counts by embedding_status (exclude soft-deleted)
         let status_rows = sqlx::query(
-            "SELECT embedding_status, COUNT(*) as count FROM memories GROUP BY embedding_status",
+            "SELECT embedding_status, COUNT(*) as count FROM memories WHERE deleted_at IS NULL GROUP BY embedding_status",
         )
         .fetch_all(&self.pool)
         .await
@@ -1198,9 +1198,10 @@ impl PostgresMemoryStore {
         // Build WHERE conditions with numbered PostgreSQL parameters.
         // $1 is always the query embedding — build filter params starting at $2.
         let mut conditions: Vec<String> = Vec::new();
-        // Always filter for current embeddings on complete memories
+        // Always filter for current embeddings on complete memories and exclude soft-deleted
         conditions.push("me.is_current = true".to_string());
         conditions.push("m.embedding_status = 'complete'".to_string());
+        conditions.push("m.deleted_at IS NULL".to_string());
 
         let mut param_idx: u32 = 2; // $1 is reserved for query_embedding
 
@@ -1348,7 +1349,7 @@ impl PostgresMemoryStore {
              last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience \
-             FROM memories WHERE id = ANY($1)",
+             FROM memories WHERE id = ANY($1) AND deleted_at IS NULL",
         )
         .bind(ids)
         .fetch_all(&self.pool)
@@ -1507,6 +1508,7 @@ impl PostgresMemoryStore {
                      + CASE WHEN source ILIKE $2 THEN 1 ELSE 0 END) AS score
                 FROM memories
                 WHERE is_consolidated_original = FALSE
+                  AND deleted_at IS NULL
                   AND (
                     tags @> $1::jsonb
                     OR extracted_entities @> $1::jsonb
@@ -1556,6 +1558,7 @@ impl PostgresMemoryStore {
             FROM memories
             WHERE content @@@ $1
               AND is_consolidated_original = FALSE
+              AND deleted_at IS NULL
             ORDER BY bm25_rank
             LIMIT $2"
         } else {
@@ -1570,6 +1573,7 @@ impl PostgresMemoryStore {
             FROM memories
             WHERE to_tsvector('english', content) @@ plainto_tsquery('english', $1)
               AND is_consolidated_original = FALSE
+              AND deleted_at IS NULL
             ORDER BY bm25_rank
             LIMIT $2"
         };
@@ -1644,7 +1648,7 @@ impl PostgresMemoryStore {
         limit: i64,
     ) -> Result<Vec<(String, String)>, MemcpError> {
         let rows = sqlx::query(
-            "SELECT id, content FROM memories WHERE extraction_status = 'pending' LIMIT $1",
+            "SELECT id, content FROM memories WHERE extraction_status = 'pending' AND deleted_at IS NULL LIMIT $1",
         )
         .bind(limit)
         .fetch_all(&self.pool)
@@ -1741,6 +1745,172 @@ impl PostgresMemoryStore {
         })?;
 
         Ok(consolidated_id)
+    }
+
+    // -------------------------------------------------------------------------
+    // GC (garbage collection) store methods
+    // -------------------------------------------------------------------------
+
+    /// Count live (non-soft-deleted) memories.
+    pub async fn count_live_memories(&self) -> Result<i64, MemcpError> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL"
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to count live memories: {}", e)))?;
+        Ok(count)
+    }
+
+    /// Fetch GC candidates: low-salience memories older than min_age_days.
+    ///
+    /// Excludes consolidated originals (they should never be pruned individually).
+    /// Returns candidates sorted by stability ascending (lowest first).
+    pub async fn get_gc_candidates(
+        &self,
+        salience_threshold: f64,
+        min_age_days: u32,
+        limit: i64,
+    ) -> Result<Vec<crate::gc::GcCandidate>, MemcpError> {
+        let rows = sqlx::query(
+            "SELECT m.id, LEFT(m.content, 100) AS snippet,
+                    COALESCE(ms.stability, 1.0)::float8 AS stability,
+                    EXTRACT(EPOCH FROM NOW() - m.created_at)::bigint / 86400 AS age_days
+             FROM memories m
+             LEFT JOIN memory_salience ms ON ms.memory_id = m.id
+             WHERE m.deleted_at IS NULL
+               AND m.is_consolidated_original = FALSE
+               AND COALESCE(ms.stability, 1.0) < $1
+               AND m.created_at < NOW() - ($2 || ' days')::interval
+             ORDER BY stability ASC
+             LIMIT $3",
+        )
+        .bind(salience_threshold as f32)
+        .bind(min_age_days.to_string())
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to fetch GC candidates: {}", e)))?;
+
+        rows.iter().map(|row| {
+            let id: String = row.try_get("id").map_err(|e| MemcpError::Storage(e.to_string()))?;
+            let snippet: String = row.try_get("snippet").map_err(|e| MemcpError::Storage(e.to_string()))?;
+            let stability: f64 = row.try_get::<f64, _>("stability").map_err(|e| MemcpError::Storage(e.to_string()))?;
+            let age_days: i64 = row.try_get("age_days").map_err(|e| MemcpError::Storage(e.to_string()))?;
+            Ok(crate::gc::GcCandidate {
+                id,
+                content_snippet: snippet,
+                stability,
+                age_days,
+            })
+        }).collect::<Result<Vec<_>, MemcpError>>()
+    }
+
+    /// Fetch IDs of TTL-expired memories (expires_at < NOW(), not yet soft-deleted).
+    pub async fn get_expired_memories(&self) -> Result<Vec<String>, MemcpError> {
+        let rows = sqlx::query(
+            "SELECT id FROM memories
+             WHERE deleted_at IS NULL
+               AND expires_at IS NOT NULL
+               AND expires_at < NOW()",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to fetch expired memories: {}", e)))?;
+
+        rows.iter().map(|row| {
+            row.try_get("id").map_err(|e| MemcpError::Storage(e.to_string()))
+        }).collect::<Result<Vec<_>, MemcpError>>()
+    }
+
+    /// Soft-delete a batch of memories by setting deleted_at = NOW().
+    ///
+    /// Returns the number of rows actually updated (may be less than ids.len()
+    /// if some were already deleted).
+    pub async fn soft_delete_memories(&self, ids: &[String]) -> Result<usize, MemcpError> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let result = sqlx::query(
+            "UPDATE memories SET deleted_at = NOW()
+             WHERE id = ANY($1) AND deleted_at IS NULL",
+        )
+        .bind(ids)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to soft-delete memories: {}", e)))?;
+
+        Ok(result.rows_affected() as usize)
+    }
+
+    /// Hard purge memories soft-deleted more than grace_days ago.
+    ///
+    /// Also removes associated rows from memory_embeddings, memory_salience,
+    /// extracted_facts (via extracted_facts column — no separate table), and
+    /// memory_consolidations.
+    ///
+    /// Returns the number of memory rows hard-deleted.
+    pub async fn hard_purge_old_deleted(&self, grace_days: u32) -> Result<usize, MemcpError> {
+        // Collect IDs to purge
+        let rows = sqlx::query(
+            "SELECT id FROM memories
+             WHERE deleted_at IS NOT NULL
+               AND deleted_at < NOW() - ($1 || ' days')::interval",
+        )
+        .bind(grace_days.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to fetch purgeable memories: {}", e)))?;
+
+        if rows.is_empty() {
+            return Ok(0);
+        }
+
+        let ids: Vec<String> = rows.iter()
+            .filter_map(|r| r.try_get::<String, _>("id").ok())
+            .collect();
+
+        // Delete dependent rows first
+        sqlx::query("DELETE FROM memory_embeddings WHERE memory_id = ANY($1)")
+            .bind(&ids)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to purge embeddings: {}", e)))?;
+
+        sqlx::query("DELETE FROM memory_salience WHERE memory_id = ANY($1)")
+            .bind(&ids)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to purge salience rows: {}", e)))?;
+
+        sqlx::query("DELETE FROM memory_consolidations WHERE original_id = ANY($1) OR consolidated_id = ANY($1)")
+            .bind(&ids)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to purge consolidation rows: {}", e)))?;
+
+        // Finally delete the memories themselves
+        let result = sqlx::query("DELETE FROM memories WHERE id = ANY($1)")
+            .bind(&ids)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to hard purge memories: {}", e)))?;
+
+        Ok(result.rows_affected() as usize)
+    }
+
+    /// Update GC metrics in daemon_status after a GC run.
+    pub async fn update_gc_metrics(&self, pruned: i64) -> Result<(), MemcpError> {
+        sqlx::query(
+            "UPDATE daemon_status SET last_gc_at = NOW(),
+             gc_pruned_total = COALESCE(gc_pruned_total, 0) + $1
+             WHERE id = 1",
+        )
+        .bind(pruned)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to update GC metrics: {}", e)))?;
+        Ok(())
     }
 
     /// Fetch the current embedding vector for a memory.
