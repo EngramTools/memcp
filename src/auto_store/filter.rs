@@ -1,10 +1,13 @@
 /// Filter strategy trait and implementations for auto-store sidecar.
 ///
 /// Decides whether a parsed log entry is worth storing as a memory.
-/// Three modes: LLM-based (default), heuristic keyword matching, or no filtering.
+/// Four modes: LLM-based, heuristic keyword matching, category-aware, or no filtering.
 
 use async_trait::async_trait;
+use regex::Regex;
 use serde::Deserialize;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::errors::MemcpError;
 use super::parser::ParsedEntry;
@@ -213,6 +216,101 @@ impl FilterStrategy for HeuristicFilter {
     }
 }
 
+/// Category-aware filter — blocks tool narration, passes through valuable content.
+///
+/// Uses compiled regex patterns to detect and reject low-value tool narration
+/// (e.g. "Let me read the file...", "Now I'll edit...", "Running command...").
+/// Decisions, preferences, errors, and architecture notes pass through unfiltered.
+///
+/// Operates purely heuristically — no LLM required. An optional `llm_fallback`
+/// can be provided for ambiguous content (deferred; currently pass-through).
+pub struct CategoryFilter {
+    patterns: Vec<Regex>,
+    llm_fallback: Option<Box<dyn FilterStrategy>>,
+    filtered_count: Arc<AtomicU64>,
+}
+
+/// Default tool narration patterns compiled at construction time.
+const TOOL_NARRATION_PATTERNS: &[&str] = &[
+    r"(?i)^let me (read|check|look at|search|find|edit|write|run|execute|open|examine)",
+    r"(?i)^now i('ll| will) (read|check|look|search|find|edit|write|run|execute)",
+    r"(?i)^(reading|writing|editing|searching|checking|running|executing|looking at) (the |a )?(file|code|test|command|script|directory)",
+    r"(?i)^i('ll| will) (start by|begin by|go ahead and|proceed to) ",
+    r"(?i)^(here's|here is) (what i found|the output|the result)",
+];
+
+impl CategoryFilter {
+    /// Create a new CategoryFilter.
+    ///
+    /// Compiles the default tool narration patterns plus any user-supplied patterns
+    /// from `config.tool_narration_patterns`. Invalid patterns are skipped with a warning
+    /// (fail-open — a bad pattern never prevents storing).
+    ///
+    /// An optional `llm_fallback` can be provided for ambiguous content classification
+    /// (currently unused; deferred per CONTEXT.md).
+    pub fn new(
+        config: &crate::config::CategoryFilterConfig,
+        llm_fallback: Option<Box<dyn FilterStrategy>>,
+    ) -> Self {
+        let mut patterns = Vec::new();
+
+        // Compile built-in patterns
+        for &pat in TOOL_NARRATION_PATTERNS {
+            match Regex::new(pat) {
+                Ok(re) => patterns.push(re),
+                Err(e) => {
+                    tracing::warn!(pattern = pat, error = %e, "CategoryFilter: built-in pattern failed to compile, skipping");
+                }
+            }
+        }
+
+        // Compile user-supplied patterns (fail-open on invalid regex)
+        for pat in &config.tool_narration_patterns {
+            match Regex::new(pat) {
+                Ok(re) => patterns.push(re),
+                Err(e) => {
+                    tracing::warn!(pattern = %pat, error = %e, "CategoryFilter: custom pattern failed to compile, skipping");
+                }
+            }
+        }
+
+        CategoryFilter {
+            patterns,
+            llm_fallback,
+            filtered_count: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Returns the number of entries filtered since construction.
+    pub fn filtered_count(&self) -> u64 {
+        self.filtered_count.load(Ordering::Relaxed)
+    }
+}
+
+#[async_trait]
+impl FilterStrategy for CategoryFilter {
+    async fn should_store(&self, entry: &ParsedEntry) -> Result<bool, MemcpError> {
+        // Step 1: Check tool narration patterns
+        for pattern in &self.patterns {
+            if pattern.is_match(&entry.content) {
+                self.filtered_count.fetch_add(1, Ordering::Relaxed);
+                tracing::debug!(
+                    content = %entry.content.chars().take(80).collect::<String>(),
+                    "Filtered: tool narration"
+                );
+                return Ok(false);
+            }
+        }
+
+        // Step 2: If LLM fallback available, could check ambiguous content here.
+        // For now, pass through anything that doesn't match patterns.
+        // LLM expansion is deferred per CONTEXT.md.
+        let _ = &self.llm_fallback; // suppress unused warning
+
+        Ok(true)
+    }
+}
+
 /// No filtering — stores every parsed entry.
 pub struct NoFilter;
 
@@ -229,6 +327,7 @@ pub fn create_filter(
     provider: &str,
     model: &str,
     extraction_config: &crate::config::ExtractionConfig,
+    auto_store_config: &crate::config::AutoStoreConfig,
 ) -> Box<dyn FilterStrategy> {
     match mode {
         "llm" => {
@@ -248,6 +347,9 @@ pub fn create_filter(
                 model.to_string(),
                 api_key,
             ))
+        }
+        "category" => {
+            Box::new(CategoryFilter::new(&auto_store_config.category_filter, None))
         }
         "heuristic" => Box::new(HeuristicFilter),
         "none" => Box::new(NoFilter),
@@ -302,5 +404,89 @@ mod tests {
         let filter = HeuristicFilter;
         let long_text = "The project uses a microservices architecture with gRPC for inter-service communication. Each service has its own database.";
         assert!(filter.should_store(&make_entry(long_text)).await.unwrap());
+    }
+
+    fn make_category_filter(extra_patterns: Vec<String>) -> CategoryFilter {
+        let config = crate::config::CategoryFilterConfig {
+            enabled: true,
+            block_tool_narration: true,
+            tool_narration_patterns: extra_patterns,
+        };
+        CategoryFilter::new(&config, None)
+    }
+
+    #[tokio::test]
+    async fn test_category_filter_blocks_narration() {
+        let filter = make_category_filter(vec![]);
+
+        // Built-in narration patterns must be blocked
+        assert!(!filter.should_store(&make_entry("Let me read the file")).await.unwrap());
+        assert!(!filter.should_store(&make_entry("Let me check the code")).await.unwrap());
+        assert!(!filter.should_store(&make_entry("Now I'll edit the code")).await.unwrap());
+        assert!(!filter.should_store(&make_entry("Now I will run the test")).await.unwrap());
+        assert!(!filter.should_store(&make_entry("Reading the file src/main.rs")).await.unwrap());
+        assert!(!filter.should_store(&make_entry("Running command ls -la")).await.unwrap());
+        assert!(!filter.should_store(&make_entry("I'll start by looking at the code")).await.unwrap());
+        assert!(!filter.should_store(&make_entry("I will begin by reading the directory")).await.unwrap());
+        assert!(!filter.should_store(&make_entry("Here's what I found")).await.unwrap());
+        assert!(!filter.should_store(&make_entry("Here is the output")).await.unwrap());
+
+        // Verify filtered_count is tracking correctly
+        assert!(filter.filtered_count() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_category_filter_passes_decisions() {
+        let filter = make_category_filter(vec![]);
+
+        // Decisions, preferences, errors, and architecture notes must pass through
+        assert!(filter.should_store(&make_entry("Always use pnpm for this project")).await.unwrap());
+        assert!(filter.should_store(&make_entry("The architecture uses microservices")).await.unwrap());
+        assert!(filter.should_store(&make_entry("Error: connection refused")).await.unwrap());
+        assert!(filter.should_store(&make_entry("We decided to use PostgreSQL for the database")).await.unwrap());
+        assert!(filter.should_store(&make_entry("User prefers TypeScript over JavaScript")).await.unwrap());
+        assert!(filter.should_store(&make_entry("Important: never commit secrets to git")).await.unwrap());
+
+        // No count incremented for pass-throughs
+        assert_eq!(filter.filtered_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_category_filter_custom_patterns() {
+        let custom = vec![
+            r"(?i)^analyzing ".to_string(),
+            r"(?i)^processing ".to_string(),
+        ];
+        let filter = make_category_filter(custom);
+
+        // Custom patterns should be applied
+        assert!(!filter.should_store(&make_entry("Analyzing the results now")).await.unwrap());
+        assert!(!filter.should_store(&make_entry("Processing the request")).await.unwrap());
+
+        // Built-in patterns still work
+        assert!(!filter.should_store(&make_entry("Let me read the file")).await.unwrap());
+
+        // Non-matching content passes through
+        assert!(filter.should_store(&make_entry("We decided to use Redis for caching")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_category_filter_bad_pattern_skipped() {
+        // An invalid regex pattern must not crash the filter — fail-open
+        let bad_patterns = vec![
+            r"[invalid regex (missing close bracket".to_string(),
+            r"(?i)^valid pattern ".to_string(),
+        ];
+        // This must not panic
+        let filter = make_category_filter(bad_patterns);
+
+        // The valid custom pattern should still work
+        assert!(!filter.should_store(&make_entry("valid pattern match")).await.unwrap());
+
+        // Built-in patterns work too (construction succeeded despite bad pattern)
+        assert!(!filter.should_store(&make_entry("Let me check the code")).await.unwrap());
+
+        // Normal content passes through
+        assert!(filter.should_store(&make_entry("We prefer Rust for performance")).await.unwrap());
     }
 }

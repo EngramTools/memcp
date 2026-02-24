@@ -56,6 +56,7 @@ impl AutoStoreWorker {
             &config.filter_provider,
             &config.filter_model,
             extraction_config,
+            &config,
         );
         let dedup_window = Duration::from_secs(config.dedup_window_secs);
         let poll_interval = Duration::from_secs(config.poll_interval_secs);

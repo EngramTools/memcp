@@ -376,6 +376,46 @@ impl Default for EmbeddingConfig {
     }
 }
 
+/// Configuration for the category-aware auto-store filter.
+///
+/// Controls the heuristic-based category filter that blocks tool narration
+/// (e.g. "Let me read the file...", "Now I'll edit...") while passing through
+/// valuable content (decisions, preferences, errors, architecture notes).
+/// Enabled by default when filter_mode = "category".
+/// Nested env var overrides use double underscores:
+///   MEMCP_AUTO_STORE__CATEGORY_FILTER__ENABLED=false
+///   MEMCP_AUTO_STORE__CATEGORY_FILTER__BLOCK_TOOL_NARRATION=false
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CategoryFilterConfig {
+    /// Whether category filtering is enabled (default: true)
+    #[serde(default = "default_category_filter_enabled")]
+    pub enabled: bool,
+
+    /// Block tool narration patterns (default: true).
+    /// When true, phrases like "Let me read...", "Now I'll edit..." are filtered out.
+    #[serde(default = "default_block_tool_narration")]
+    pub block_tool_narration: bool,
+
+    /// Additional custom regex patterns to block, beyond the built-in defaults.
+    /// Each pattern is applied to the start of entry content (anchored at ^).
+    /// Invalid patterns are skipped with a warning (fail-open).
+    #[serde(default)]
+    pub tool_narration_patterns: Vec<String>,
+}
+
+fn default_category_filter_enabled() -> bool { true }
+fn default_block_tool_narration() -> bool { true }
+
+impl Default for CategoryFilterConfig {
+    fn default() -> Self {
+        CategoryFilterConfig {
+            enabled: default_category_filter_enabled(),
+            block_tool_narration: default_block_tool_narration(),
+            tool_narration_patterns: Vec::new(),
+        }
+    }
+}
+
 /// Configuration for the auto-store sidecar.
 ///
 /// Watches conversation log files and automatically ingests memories
@@ -401,7 +441,7 @@ pub struct AutoStoreConfig {
     #[serde(default = "default_auto_store_format")]
     pub format: String,
 
-    /// Filter mode: "llm" (default), "heuristic", or "none"
+    /// Filter mode: "llm" (default), "heuristic", "category", or "none"
     #[serde(default = "default_auto_store_filter_mode")]
     pub filter_mode: String,
 
@@ -420,6 +460,10 @@ pub struct AutoStoreConfig {
     /// Dedup window in seconds — identical content within this window is skipped (default: 300)
     #[serde(default = "default_auto_store_dedup_window")]
     pub dedup_window_secs: u64,
+
+    /// Category filter configuration (used when filter_mode = "category").
+    #[serde(default)]
+    pub category_filter: CategoryFilterConfig,
 }
 
 fn default_auto_store_format() -> String { "claude-code".to_string() }
@@ -440,6 +484,68 @@ impl Default for AutoStoreConfig {
             filter_model: default_auto_store_filter_model(),
             poll_interval_secs: default_auto_store_poll_interval(),
             dedup_window_secs: default_auto_store_dedup_window(),
+            category_filter: CategoryFilterConfig::default(),
+        }
+    }
+}
+
+/// Configuration for the garbage collection subsystem.
+///
+/// GC runs on a schedule (gc_interval_secs) and prunes memories that are
+/// both low-salience (below salience_threshold) AND older than min_age_days.
+/// Never prunes below min_memory_floor to protect small knowledge bases.
+/// Soft-deleted memories are hard-purged after hard_purge_grace_days.
+/// Nested env var overrides use double underscores:
+///   MEMCP_GC__ENABLED=false
+///   MEMCP_GC__SALIENCE_THRESHOLD=0.5
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GcConfig {
+    /// Whether GC is enabled (default: true — runs automatically)
+    #[serde(default = "default_gc_enabled")]
+    pub enabled: bool,
+
+    /// Absolute FSRS stability threshold below which memories are candidates for pruning.
+    /// Default: 0.3 — memories with stability < 0.3 are low-salience.
+    #[serde(default = "default_gc_salience_threshold")]
+    pub salience_threshold: f64,
+
+    /// Minimum memory age in days before a memory can be pruned (default: 30).
+    /// Fresh memories are never pruned even if salience is low.
+    #[serde(default = "default_gc_min_age_days")]
+    pub min_age_days: u32,
+
+    /// Minimum number of live memories to retain (default: 100).
+    /// GC never prunes below this count — small knowledge bases are never touched.
+    #[serde(default = "default_gc_min_memory_floor")]
+    pub min_memory_floor: u64,
+
+    /// How often to run GC in seconds (default: 3600 — once per hour).
+    #[serde(default = "default_gc_interval_secs")]
+    pub gc_interval_secs: u64,
+
+    /// Days after soft-delete before hard purge (default: 30).
+    /// Soft-deleted memories are excluded from all queries but remain recoverable
+    /// until the grace period expires.
+    #[serde(default = "default_gc_hard_purge_grace_days")]
+    pub hard_purge_grace_days: u32,
+}
+
+fn default_gc_enabled() -> bool { true }
+fn default_gc_salience_threshold() -> f64 { 0.3 }
+fn default_gc_min_age_days() -> u32 { 30 }
+fn default_gc_min_memory_floor() -> u64 { 100 }
+fn default_gc_interval_secs() -> u64 { 3600 }
+fn default_gc_hard_purge_grace_days() -> u32 { 30 }
+
+impl Default for GcConfig {
+    fn default() -> Self {
+        GcConfig {
+            enabled: default_gc_enabled(),
+            salience_threshold: default_gc_salience_threshold(),
+            min_age_days: default_gc_min_age_days(),
+            min_memory_floor: default_gc_min_memory_floor(),
+            gc_interval_secs: default_gc_interval_secs(),
+            hard_purge_grace_days: default_gc_hard_purge_grace_days(),
         }
     }
 }
@@ -670,6 +776,11 @@ pub struct Config {
     /// Existing configs without [status_line] section still work (serde default applied).
     #[serde(default)]
     pub status_line: StatusLineConfig,
+
+    /// Garbage collection configuration.
+    /// Existing configs without [gc] section still work (serde default applied).
+    #[serde(default)]
+    pub gc: GcConfig,
 }
 
 fn default_log_level() -> String {
@@ -696,6 +807,7 @@ impl Default for Config {
             content_filter: ContentFilterConfig::default(),
             summarization: SummarizationConfig::default(),
             status_line: StatusLineConfig::default(),
+            gc: GcConfig::default(),
         }
     }
 }
