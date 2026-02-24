@@ -751,6 +751,34 @@ pub async fn cmd_status(
 }
 
 // ---------------------------------------------------------------------------
+// Feedback command
+// ---------------------------------------------------------------------------
+
+/// Provide explicit relevance feedback for a memory.
+///
+/// "useful" increases FSRS stability (multiplier 1.5) — the memory was helpful.
+/// "irrelevant" decreases FSRS stability sharply (multiplier 0.2) — the memory was noise.
+///
+/// Fire-and-forget: outputs `{"ok": true, "id": "...", "signal": "..."}` on success.
+/// Error handling is done by the caller in main.rs.
+pub async fn cmd_feedback(
+    store: &Arc<PostgresMemoryStore>,
+    id: &str,
+    signal: &str,
+) -> Result<()> {
+    store
+        .apply_feedback(id, signal)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    println!(
+        "{}",
+        serde_json::to_string(&json!({ "ok": true, "id": id, "signal": signal }))?
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // GC command
 // ---------------------------------------------------------------------------
 

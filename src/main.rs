@@ -193,6 +193,13 @@ enum Commands {
         #[arg(long)]
         min_age_days: Option<u32>,
     },
+    /// Provide relevance feedback for a memory (useful or irrelevant)
+    Feedback {
+        /// Memory ID to provide feedback for
+        id: String,
+        /// Feedback signal: "useful" or "irrelevant"
+        signal: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -519,6 +526,14 @@ async fn main() -> Result<()> {
         Commands::Gc { dry_run, salience_threshold, min_age_days } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
             cli::cmd_gc(&store, &config, dry_run, salience_threshold, min_age_days).await?;
+        }
+
+        Commands::Feedback { id, signal } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            if let Err(e) = cli::cmd_feedback(&store, &id, &signal).await {
+                println!("{}", serde_json::json!({"ok": false, "error": e.to_string()}));
+                std::process::exit(1);
+            }
         }
 
         Commands::Serve => {

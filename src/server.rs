@@ -178,6 +178,14 @@ fn default_rating() -> Option<String> {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct FeedbackMemoryParams {
+    /// Memory ID to provide feedback for
+    pub id: String,
+    /// Feedback signal: "useful" or "irrelevant"
+    pub signal: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct SearchMemoryParams {
     /// Search query
     pub query: String,
@@ -1104,6 +1112,42 @@ impl MemoryService {
                     row.stability, row.reinforcement_count
                 )
             }))),
+            Err(e) => Ok(store_error_to_result(e)),
+        }
+    }
+
+    #[tool(description = "Provide relevance feedback for a memory (useful or irrelevant). Adjusts salience scoring.")]
+    async fn feedback_memory(
+        &self,
+        Parameters(params): Parameters<FeedbackMemoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tracing::info!(
+            tool = "feedback_memory",
+            id = %params.id,
+            signal = %params.signal,
+            "Tool called"
+        );
+
+        if params.id.trim().is_empty() {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": "Field 'id' is required and cannot be empty",
+                "field": "id"
+            })));
+        }
+
+        let pg_store = match &self.pg_store {
+            Some(s) => s,
+            None => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": "Feedback requires PostgreSQL backend"
+                })));
+            }
+        };
+
+        match pg_store.apply_feedback(&params.id, &params.signal).await {
+            Ok(()) => Ok(CallToolResult::structured(json!({ "ok": true }))),
             Err(e) => Ok(store_error_to_result(e)),
         }
     }
