@@ -489,6 +489,41 @@ impl Default for AutoStoreConfig {
     }
 }
 
+/// Configuration for the semantic deduplication subsystem.
+///
+/// After embedding completes for a new memory, the dedup worker checks similarity
+/// against all existing embedded memories. Near-duplicates (above similarity_threshold)
+/// are merged: the existing memory metadata is updated, the new memory is soft-deleted,
+/// and all contributing sources are tracked in dedup_sources JSONB.
+/// Dedup is async (zero ingest latency impact). Fail-open: errors are logged, never cause data loss.
+/// Nested env var overrides use double underscores:
+///   MEMCP_DEDUP__ENABLED=false
+///   MEMCP_DEDUP__SIMILARITY_THRESHOLD=0.97
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DedupConfig {
+    /// Whether semantic dedup is enabled (default: true — runs automatically after embedding).
+    #[serde(default = "default_dedup_enabled")]
+    pub enabled: bool,
+
+    /// Cosine similarity threshold above which memories are considered near-duplicates (default: 0.95).
+    /// Stricter than consolidation's 0.92 — avoids false positives on paraphrases.
+    /// Range: 0.0–1.0. Higher values require tighter similarity before merging.
+    #[serde(default = "default_dedup_similarity_threshold")]
+    pub similarity_threshold: f64,
+}
+
+fn default_dedup_enabled() -> bool { true }
+fn default_dedup_similarity_threshold() -> f64 { 0.95 }
+
+impl Default for DedupConfig {
+    fn default() -> Self {
+        DedupConfig {
+            enabled: default_dedup_enabled(),
+            similarity_threshold: default_dedup_similarity_threshold(),
+        }
+    }
+}
+
 /// Configuration for the garbage collection subsystem.
 ///
 /// GC runs on a schedule (gc_interval_secs) and prunes memories that are
@@ -781,6 +816,11 @@ pub struct Config {
     /// Existing configs without [gc] section still work (serde default applied).
     #[serde(default)]
     pub gc: GcConfig,
+
+    /// Semantic deduplication configuration.
+    /// Existing configs without [dedup] section still work (serde default applied).
+    #[serde(default)]
+    pub dedup: DedupConfig,
 }
 
 fn default_log_level() -> String {
@@ -808,6 +848,7 @@ impl Default for Config {
             summarization: SummarizationConfig::default(),
             status_line: StatusLineConfig::default(),
             gc: GcConfig::default(),
+            dedup: DedupConfig::default(),
         }
     }
 }

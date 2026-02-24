@@ -1,10 +1,13 @@
 /// Garbage collection module for memory hygiene.
 ///
-/// Provides salience-based pruning, TTL expiry, dry-run support, and hard purge.
+/// Provides salience-based pruning, TTL expiry, dry-run support, hard purge,
+/// and async semantic deduplication (post-embedding near-duplicate merging).
 /// GC runs both automatically (daemon schedule) and on-demand (CLI `memcp gc`).
 
+pub mod dedup;
 pub mod worker;
 
+pub use dedup::{DedupJob, DedupWorker};
 pub use worker::run_gc;
 
 /// Result of a GC run.

@@ -41,6 +41,7 @@ pub async fn find_similar_memories(
          WHERE me.is_current = TRUE
            AND m.embedding_status = 'complete'
            AND m.is_consolidated_original = FALSE
+           AND m.deleted_at IS NULL
            AND me.memory_id != $2
            AND (1 - (me.embedding <=> $1)) >= $3
          ORDER BY cosine_similarity DESC

@@ -6,6 +6,7 @@
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
+use serde_json;
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     Row,
@@ -1910,6 +1911,83 @@ impl PostgresMemoryStore {
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to update GC metrics: {}", e)))?;
+        Ok(())
+    }
+
+    /// Merge a near-duplicate memory into an existing one.
+    ///
+    /// Executed in a transaction:
+    ///   1. Updates the existing memory: increments access_count, updates last_accessed_at,
+    ///      and appends a source entry to dedup_sources JSONB.
+    ///   2. Soft-deletes the new (incoming) memory by setting deleted_at = NOW().
+    ///
+    /// Fail-open callers: if this returns Err, the caller logs and continues (no data loss).
+    pub async fn merge_duplicate(
+        &self,
+        existing_id: &str,
+        new_id: &str,
+        source: &str,
+    ) -> Result<(), MemcpError> {
+        let merged_at = Utc::now().to_rfc3339();
+        let source_entry = serde_json::json!({
+            "source": source,
+            "merged_at": merged_at,
+            "merged_id": new_id
+        });
+        let source_jsonb = serde_json::to_string(&source_entry)
+            .map_err(|e| MemcpError::Storage(format!("Failed to serialize dedup source: {}", e)))?;
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to begin dedup transaction: {}", e)))?;
+
+        // Update existing memory: bump access_count, refresh last_accessed_at, append to dedup_sources
+        sqlx::query(
+            "UPDATE memories SET
+                 access_count = access_count + 1,
+                 last_accessed_at = NOW(),
+                 dedup_sources = dedup_sources || $2::jsonb
+             WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(existing_id)
+        .bind(&source_jsonb)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            MemcpError::Storage(format!("Failed to update existing memory in dedup merge: {}", e))
+        })?;
+
+        // Soft-delete the incoming duplicate
+        sqlx::query("UPDATE memories SET deleted_at = NOW() WHERE id = $1")
+            .bind(new_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                MemcpError::Storage(format!("Failed to soft-delete duplicate in dedup merge: {}", e))
+            })?;
+
+        tx.commit()
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to commit dedup merge transaction: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Increment the dedup merge counter in daemon_status.
+    ///
+    /// Called after each successful dedup merge. Fail-open: if this fails,
+    /// the merge still succeeded — only the metric count is affected.
+    pub async fn increment_dedup_merges(&self) -> Result<(), MemcpError> {
+        sqlx::query(
+            "UPDATE daemon_status SET
+                 gc_dedup_merges = COALESCE(gc_dedup_merges, 0) + 1
+             WHERE id = 1",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to increment dedup merges: {}", e)))?;
         Ok(())
     }
 
