@@ -167,16 +167,24 @@ pub struct ListResult {
 
 /// Filter criteria for vector similarity search with optional date and tag filters.
 ///
-/// OFFSET-based pagination is used (not keyset-based) because ORDER BY embedding distance
-/// doesn't have a stable keyset property — distances change with the query vector.
+/// Keyset cursor-based pagination is supported via the `cursor` field (preferred).
+/// OFFSET-based pagination is also supported via the `offset` field for backward compatibility,
+/// but is deprecated and emits a tracing warning.
+///
+/// For search, the keyset cursor encodes (salience_score, id) pairs — see
+/// `encode_search_keyset_cursor` / `decode_search_keyset_cursor` in this module.
 #[derive(Debug, Clone)]
 pub struct SearchFilter {
     /// The embedded query vector to search against (callers always set this explicitly)
     pub query_embedding: Vector,
-    /// Maximum number of results to return (default: 10, max: 100)
+    /// Maximum number of results to return (default: 20, max: 100)
     pub limit: i64,
-    /// Number of results to skip for pagination (default: 0)
+    /// Number of results to skip for pagination (default: 0).
+    /// DEPRECATED: Use cursor instead for new code.
     pub offset: i64,
+    /// Opaque keyset pagination cursor (encodes salience_score + id from previous page).
+    /// When set, `offset` is ignored (cursor takes precedence).
+    pub cursor: Option<String>,
     /// Filter memories created after this timestamp
     pub created_after: Option<DateTime<Utc>>,
     /// Filter memories created before this timestamp
@@ -193,8 +201,9 @@ impl Default for SearchFilter {
             // Placeholder — callers always override query_embedding before use.
             // Length 1 avoids allocating a full-dimension vector for a non-meaningful default.
             query_embedding: Vector::from(vec![0.0f32; 1]),
-            limit: 10,
+            limit: 20,
             offset: 0,
+            cursor: None,
             created_after: None,
             created_before: None,
             tags: None,
@@ -219,16 +228,71 @@ pub struct SearchResult {
     pub hits: Vec<SearchHit>,
     /// Total number of embedded memories matching the filters (ignoring limit/offset)
     pub total_matches: u64,
-    /// Base64-encoded offset for fetching the next page (None if no more results)
+    /// Opaque pagination cursor for fetching the next page (None if no more results).
+    /// Now encodes (salience_score, id) keyset pairs for stable pagination — decode with
+    /// `decode_search_keyset_cursor` to inspect. Use as-is in the `cursor` parameter of
+    /// SearchFilter or the CLI `--cursor` flag / MCP `cursor` param.
     pub next_cursor: Option<String>,
     /// Whether there are more results beyond the current page
     pub has_more: bool,
 }
 
+/// Encode a keyset search cursor from a salience score and memory id.
+///
+/// Format: base64url(json: {"t":"s","s":<score>,"i":"<id>"})
+/// The type field "t":"s" marks this as a search cursor (vs "t":"l" for list cursors).
+/// Server decodes transparently; clients treat the token as opaque.
+pub fn encode_search_keyset_cursor(salience_score: f64, id: &str) -> String {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let json = serde_json::json!({"t": "s", "s": salience_score, "i": id});
+    URL_SAFE_NO_PAD.encode(json.to_string().as_bytes())
+}
+
+/// Decode a keyset search cursor back into (salience_score, id).
+///
+/// Returns `MemcpError::Validation` on malformed cursor or wrong cursor type.
+pub fn decode_search_keyset_cursor(cursor: &str) -> Result<(f64, String), MemcpError> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|e| MemcpError::Validation {
+        message: format!("Invalid search cursor encoding: {}", e),
+        field: Some("cursor".to_string()),
+    })?;
+    let raw = String::from_utf8(bytes).map_err(|e| MemcpError::Validation {
+        message: format!("Invalid search cursor content: {}", e),
+        field: Some("cursor".to_string()),
+    })?;
+    let val: serde_json::Value = serde_json::from_str(&raw).map_err(|e| MemcpError::Validation {
+        message: format!("Invalid search cursor JSON: {}", e),
+        field: Some("cursor".to_string()),
+    })?;
+
+    // Verify type field is "s" (search cursor)
+    let t = val.get("t").and_then(|v| v.as_str()).unwrap_or("");
+    if t != "s" {
+        return Err(MemcpError::Validation {
+            message: format!("Invalid cursor type '{}': expected search cursor (t=s)", t),
+            field: Some("cursor".to_string()),
+        });
+    }
+
+    let score = val.get("s").and_then(|v| v.as_f64()).ok_or_else(|| MemcpError::Validation {
+        message: "Search cursor missing salience score field".to_string(),
+        field: Some("cursor".to_string()),
+    })?;
+    let id = val.get("i").and_then(|v| v.as_str()).ok_or_else(|| MemcpError::Validation {
+        message: "Search cursor missing id field".to_string(),
+        field: Some("cursor".to_string()),
+    })?.to_string();
+
+    Ok((score, id))
+}
+
 /// Encode a search pagination cursor from an offset value.
 ///
-/// Search cursors are OFFSET-based (not keyset-based like list_memories cursors)
-/// because vector distance ordering doesn't have a stable keyset property.
+/// DEPRECATED: Use encode_search_keyset_cursor for new code.
+/// Kept for offset backward compat — hybrid search still supports offset=N with
+/// a deprecation warning; existing clients that decode offset cursors will continue
+/// to work during the grace period.
 pub fn encode_search_cursor(offset: i64) -> String {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     URL_SAFE_NO_PAD.encode(offset.to_string().as_bytes())

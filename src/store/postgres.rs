@@ -1409,6 +1409,7 @@ impl PostgresMemoryStore {
                     query_embedding: embedding.clone(),
                     limit: candidate_limit,
                     offset: 0,
+                    cursor: None,
                     created_after,
                     created_before,
                     tags: tags.map(|t| t.to_vec()),
