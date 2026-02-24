@@ -23,6 +23,7 @@ use crate::extraction::{ExtractionJob, ExtractionProvider};
 use crate::extraction::ollama::OllamaExtractionProvider;
 use crate::extraction::openai::OpenAIExtractionProvider;
 use crate::extraction::pipeline::ExtractionPipeline;
+use crate::gc::{self, DedupWorker};
 use crate::store::postgres::PostgresMemoryStore;
 use crate::summarization::create_summarization_provider;
 
@@ -73,8 +74,23 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         None
     };
 
+    // 3.5. Create dedup worker if enabled
+    let dedup_sender = if config.dedup.enabled {
+        let (tx, rx) = tokio::sync::mpsc::channel(1000);
+        let worker = DedupWorker::new(store.clone(), config.dedup.clone(), rx);
+        tokio::spawn(async move { worker.run().await });
+        tracing::info!(
+            threshold = config.dedup.similarity_threshold,
+            "Dedup worker started"
+        );
+        Some(tx)
+    } else {
+        tracing::info!("Dedup disabled via config");
+        None
+    };
+
     // 4. Create embedding pipeline
-    let pipeline = EmbeddingPipeline::new(provider, store.clone(), 1000, consolidation_sender);
+    let pipeline = EmbeddingPipeline::new(provider, store.clone(), 1000, consolidation_sender, dedup_sender);
 
     // 5. Run startup embedding backfill
     let queued = backfill(&store, &pipeline.sender()).await;
@@ -189,6 +205,39 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             summarization_provider,
         );
         tracing::info!("Auto-store sidecar spawned");
+    }
+
+    // 8.5. Spawn GC worker if enabled
+    if config.gc.enabled {
+        let gc_store = store.clone();
+        let gc_config = config.gc.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(gc_config.gc_interval_secs));
+            loop {
+                interval.tick().await;
+                match gc::run_gc(&gc_store, &gc_config, false).await {
+                    Ok(result) => {
+                        if result.pruned_count > 0 || result.expired_count > 0 || result.hard_purged_count > 0 {
+                            tracing::info!(
+                                pruned = result.pruned_count,
+                                expired = result.expired_count,
+                                hard_purged = result.hard_purged_count,
+                                "GC cycle complete"
+                            );
+                        } else {
+                            tracing::debug!("GC cycle complete — nothing to prune");
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "GC cycle failed"),
+                }
+            }
+        });
+        tracing::info!(
+            interval_secs = config.gc.gc_interval_secs,
+            "GC worker started"
+        );
+    } else {
+        tracing::info!("GC disabled via config");
     }
 
     // 9. Write initial heartbeat

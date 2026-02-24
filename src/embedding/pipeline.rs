@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use super::{EmbeddingJob, EmbeddingProvider, build_embedding_text};
 use crate::consolidation::ConsolidationJob;
+use crate::gc::DedupJob;
 use crate::store::MemoryStore;
 use crate::store::postgres::PostgresMemoryStore;
 
@@ -32,11 +33,14 @@ impl EmbeddingPipeline {
     /// - `capacity`: Bounded channel capacity (recommended: 1000).
     /// - `consolidation_sender`: Optional channel to the consolidation worker. When provided,
     ///   each successfully embedded memory triggers a consolidation check via this channel.
+    /// - `dedup_sender`: Optional channel to the dedup worker. When provided,
+    ///   each successfully embedded memory triggers a dedup check via this channel.
     pub fn new(
         provider: Arc<dyn EmbeddingProvider>,
         store: Arc<PostgresMemoryStore>,
         capacity: usize,
         consolidation_sender: Option<mpsc::Sender<ConsolidationJob>>,
+        dedup_sender: Option<mpsc::Sender<DedupJob>>,
     ) -> Self {
         let (tx, mut rx) = mpsc::channel::<EmbeddingJob>(capacity);
         // Clone tx for retry re-sends inside the worker
@@ -94,6 +98,17 @@ impl EmbeddingPipeline {
                                     }
                                 }
                             }
+
+                            // Trigger dedup check after successful embedding.
+                            // try_send is non-blocking — if the channel is full, skip dedup for
+                            // this memory (not critical, memory is still stored successfully).
+                            if let Some(ref dedup_tx) = dedup_sender {
+                                let _ = dedup_tx.try_send(DedupJob {
+                                    memory_id: job.memory_id.clone(),
+                                    embedding: embedding.clone(),
+                                });
+                            }
+
                             worker_pending.fetch_sub(1, Ordering::Relaxed);
                         }
                     }

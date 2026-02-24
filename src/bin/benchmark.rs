@@ -145,8 +145,8 @@ async fn run() -> Result<(), anyhow::Error> {
     let embedding_provider: Arc<dyn memcp::embedding::EmbeddingProvider + Send + Sync> =
         Arc::new(LocalEmbeddingProvider::new(".fastembed_cache", "AllMiniLML6V2").await?);
 
-    // No consolidation sender for benchmark (consolidation is MCP live-trigger only)
-    let pipeline = EmbeddingPipeline::new(embedding_provider.clone(), store.clone(), 1000, None);
+    // No consolidation or dedup sender for benchmark (these are live-trigger only)
+    let pipeline = EmbeddingPipeline::new(embedding_provider.clone(), store.clone(), 1000, None, None);
 
     // 9. Determine configs to run
     let all_configs = default_configs();

@@ -318,8 +318,8 @@ async fn main() -> Result<()> {
                 EmbedAction::Backfill => {
                     println!("Starting embedding backfill...");
                     let provider = create_embedding_provider(&config).await?;
-                    // No consolidation during manual backfill — consolidation is a live trigger only
-                    let pipeline = EmbeddingPipeline::new(provider, store.clone(), 1000, None);
+                    // No consolidation or dedup during manual backfill — these are live triggers only
+                    let pipeline = EmbeddingPipeline::new(provider, store.clone(), 1000, None, None);
                     let count = backfill(&store, &pipeline.sender()).await;
                     println!("Queued {} memories for embedding.", count);
                     // Wait briefly for some embeddings to process
@@ -555,7 +555,8 @@ async fn main() -> Result<()> {
                 None
             };
 
-            let pipeline = EmbeddingPipeline::new(provider, store.clone(), 1000, consolidation_sender);
+            // Serve mode: no dedup sender (serve path is lightweight, dedup handled by daemon)
+            let pipeline = EmbeddingPipeline::new(provider, store.clone(), 1000, consolidation_sender, None);
 
             // 7. Run startup backfill — queue any un-embedded memories from previous runs
             let queued = backfill(&store, &pipeline.sender()).await;
