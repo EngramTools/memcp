@@ -24,6 +24,7 @@ use crate::extraction::ollama::OllamaExtractionProvider;
 use crate::extraction::openai::OpenAIExtractionProvider;
 use crate::extraction::pipeline::ExtractionPipeline;
 use crate::gc::{self, DedupWorker};
+use crate::ipc::{embed_socket_path, start_embed_listener};
 use crate::store::postgres::PostgresMemoryStore;
 use crate::summarization::create_summarization_provider;
 
@@ -88,6 +89,17 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         tracing::info!("Dedup disabled via config");
         None
     };
+
+    // 3.7. Spawn embed IPC listener so CLI search can obtain embeddings from the daemon.
+    // The listener serves embedding requests from short-lived CLI processes over a Unix
+    // domain socket, enabling full hybrid search in CLI without reloading the model.
+    {
+        let embed_provider = provider_for_filter.clone();
+        let socket_path = embed_socket_path();
+        tokio::spawn(async move {
+            start_embed_listener(socket_path, embed_provider).await;
+        });
+    }
 
     // 4. Create embedding pipeline
     let pipeline = EmbeddingPipeline::new(provider, store.clone(), 1000, consolidation_sender, dedup_sender);
