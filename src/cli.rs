@@ -18,7 +18,7 @@ use sqlx::Row;
 
 use crate::config::Config;
 use crate::gc;
-use crate::ipc::embed_via_daemon;
+use crate::ipc::{embed_via_daemon, rerank_via_daemon};
 use crate::search::salience::SalienceInput;
 use crate::search::{SalienceScorer, ScoredHit};
 use crate::store::postgres::PostgresMemoryStore;
@@ -325,6 +325,48 @@ pub async fn cmd_search(
 
     let scorer = SalienceScorer::new(&config.salience);
     scorer.rank(&mut scored_hits, &salience_inputs);
+
+    // LLM re-ranking via daemon IPC (SCF-01 gap closure).
+    // Same logic as server.rs:978-1030 — top 10 candidates, blend 0.7*llm + 0.3*salience.
+    // Placed AFTER salience scoring and BEFORE cursor filtering (mirrors MCP serve pipeline).
+    {
+        let top_n = scored_hits.len().min(10);
+        if top_n > 0 {
+            let qi_config = config.query_intelligence.clone();
+            let candidates: Vec<(String, String, usize)> = scored_hits[..top_n]
+                .iter()
+                .enumerate()
+                .map(|(i, hit)| {
+                    let content = if hit.memory.content.len() > qi_config.rerank_content_chars {
+                        hit.memory.content[..qi_config.rerank_content_chars].to_string()
+                    } else {
+                        hit.memory.content.clone()
+                    };
+                    (hit.memory.id.clone(), content, i + 1)
+                })
+                .collect();
+
+            if let Some(ranked) = rerank_via_daemon(&query, &candidates).await {
+                // Blend: 0.7 * llm_rank_score + 0.3 * normalized_salience
+                let max_s = scored_hits.iter().map(|h| h.salience_score).fold(f64::MIN, f64::max);
+                let min_s = scored_hits.iter().map(|h| h.salience_score).fold(f64::MAX, f64::min);
+                let range = (max_s - min_s).max(1e-6);
+
+                for hit in scored_hits[..top_n].iter_mut() {
+                    if let Some((_, llm_rank)) = ranked.iter().find(|(id, _)| id == &hit.memory.id) {
+                        let llm_score = 1.0 / (1.0 + *llm_rank as f64);
+                        let norm_salience = (hit.salience_score - min_s) / range;
+                        hit.salience_score = 0.7 * llm_score + 0.3 * norm_salience;
+                    }
+                }
+                scored_hits[..top_n].sort_by(|a, b| {
+                    b.salience_score.partial_cmp(&a.salience_score).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            // If rerank_via_daemon returns None: daemon offline or no QI provider — silently skip (fail-open).
+            // No additional warning — the existing embed-offline warning already covers degraded results.
+        }
+    }
 
     // Apply cursor-based filtering: skip items at or before the cursor position.
     // Cursor encodes (salience_score, id) of the LAST item on the previous page.
