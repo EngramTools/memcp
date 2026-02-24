@@ -18,7 +18,8 @@ use uuid::Uuid;
 use crate::config::SearchConfig;
 use crate::errors::MemcpError;
 use crate::store::{
-    encode_search_cursor, CreateMemory, ListFilter, ListResult, Memory, MemoryStore,
+    decode_search_keyset_cursor, encode_search_cursor, encode_search_keyset_cursor,
+    CreateMemory, ListFilter, ListResult, Memory, MemoryStore,
     SearchFilter, SearchHit, SearchResult, UpdateMemory,
 };
 
@@ -1166,11 +1167,23 @@ impl PostgresMemoryStore {
     ///
     /// Uses HNSW approximate nearest neighbor search ordered by cosine distance ascending.
     /// When filters are present, enables hnsw.iterative_scan to prevent over-filtering.
-    /// Returns results with similarity scores, total match count, and OFFSET-based pagination.
+    /// Returns results with similarity scores, total match count, and cursor-based pagination.
+    ///
+    /// Offset-based pagination (filter.offset > 0) is deprecated — use filter.cursor instead.
+    /// A deprecation warning is emitted to tracing when offset > 0 without a cursor.
     pub async fn search_similar(
         &self,
         filter: &SearchFilter,
     ) -> Result<SearchResult, MemcpError> {
+        // Deprecation warning: offset-based pagination is superseded by cursor-based.
+        if filter.offset > 0 && filter.cursor.is_none() {
+            tracing::warn!(
+                offset = filter.offset,
+                "Offset-based search pagination is deprecated. Use cursor-based pagination \
+                 (next_cursor from results). Offset support will be removed in a future version."
+            );
+        }
+
         // Acquire an explicit connection — SET hnsw.iterative_scan is session-scoped
         // and must run on the same connection as the search query.
         let mut conn = self.pool.acquire().await.map_err(|e| {
@@ -1316,11 +1329,20 @@ impl PostgresMemoryStore {
             hits.push(SearchHit { memory, similarity });
         }
 
-        // Compute OFFSET-based pagination
-        let next_offset = filter.offset + filter.limit;
-        let has_more = next_offset < total_matches as i64;
+        // Compute cursor-based pagination.
+        // When filter.cursor is set (new keyset path): determine has_more via total_matches.
+        // When only offset is set (deprecated path): use offset arithmetic.
+        // Always encode next_cursor as a keyset cursor (similarity, id) for forward compat.
+        let has_more = if filter.cursor.is_some() {
+            // Cursor-based: has_more based on whether we fetched limit+1 (fetch_all sees exact count)
+            total_matches as i64 > filter.limit
+        } else {
+            // Offset-based: has_more if offset+limit < total
+            let next_offset = filter.offset + filter.limit;
+            next_offset < total_matches as i64
+        };
         let next_cursor = if has_more {
-            Some(encode_search_cursor(next_offset))
+            hits.last().map(|hit| encode_search_keyset_cursor(hit.similarity, &hit.memory.id))
         } else {
             None
         };
@@ -1480,6 +1502,116 @@ impl PostgresMemoryStore {
         }
 
         Ok(hits)
+    }
+
+    /// Cursor-based paginated hybrid search.
+    ///
+    /// Wraps `hybrid_search` with application-level keyset cursor pagination using (rrf_score, id)
+    /// pairs. Fetches a larger candidate pool (limit * 3), sorts by rrf_score DESC, then applies
+    /// cursor filtering to produce stable non-overlapping pages.
+    ///
+    /// Encodes `next_cursor` as a keyset cursor: base64url({"t":"s","s":<rrf_score>,"i":"<id>"})
+    ///
+    /// SCF-04: Cursor-based pagination for search yields non-overlapping pages.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn hybrid_search_paged(
+        &self,
+        query_text: &str,
+        query_embedding: Option<&pgvector::Vector>,
+        limit: i64,
+        cursor: Option<String>,
+        created_after: Option<chrono::DateTime<Utc>>,
+        created_before: Option<chrono::DateTime<Utc>>,
+        tags: Option<&[String]>,
+        bm25_k: Option<f64>,
+        vector_k: Option<f64>,
+        symbolic_k: Option<f64>,
+        source: Option<&str>,
+        audience: Option<&str>,
+    ) -> Result<SearchResult, MemcpError> {
+        // Decode cursor if provided — get (last_score, last_id) position
+        let cursor_position: Option<(f64, String)> = if let Some(ref c) = cursor {
+            Some(decode_search_keyset_cursor(c)?)
+        } else {
+            None
+        };
+
+        // Fetch a larger candidate pool for application-level pagination.
+        // When using a cursor, we need additional candidates beyond the current page.
+        let candidate_limit = if cursor_position.is_some() {
+            limit * 5  // larger pool to find enough results after cursor position
+        } else {
+            limit * 3  // standard oversampling for first page
+        };
+
+        // Get raw hits from hybrid_search
+        let raw_hits = self.hybrid_search(
+            query_text,
+            query_embedding,
+            candidate_limit,
+            created_after,
+            created_before,
+            tags,
+            bm25_k,
+            vector_k,
+            symbolic_k,
+            source,
+            audience,
+        ).await?;
+
+        // Sort by rrf_score DESC for stable ordering, then by id ASC for tie-breaking
+        let mut sorted_hits: Vec<crate::search::HybridRawHit> = raw_hits;
+        sorted_hits.sort_by(|a, b| {
+            b.rrf_score.partial_cmp(&a.rrf_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.memory.id.cmp(&b.memory.id))
+        });
+
+        // Apply cursor filtering: skip items at or before the cursor position
+        // Cursor encodes the LAST item of the previous page (score, id).
+        // Skip items where: score > last_score, OR (score == last_score AND id <= last_id).
+        let filtered: Vec<crate::search::HybridRawHit> = if let Some((last_score, ref last_id)) = cursor_position {
+            sorted_hits.into_iter().filter(|hit| {
+                let score = hit.rrf_score;
+                if (score - last_score).abs() < f64::EPSILON {
+                    // Same score: only include items with id > last_id (tie-breaking by id)
+                    hit.memory.id.as_str() > last_id.as_str()
+                } else {
+                    // Different score: include items with lower rrf_score (come after in DESC order)
+                    score < last_score
+                }
+            }).collect()
+        } else {
+            sorted_hits
+        };
+
+        // Take limit + 1 to detect if there are more results
+        let has_more = filtered.len() as i64 > limit;
+        let take = if has_more { limit as usize } else { filtered.len() };
+
+        let page: Vec<crate::search::HybridRawHit> = filtered.into_iter().take(take).collect();
+
+        // Build next_cursor from the last item on this page
+        let next_cursor = if has_more {
+            page.last().map(|hit| encode_search_keyset_cursor(hit.rrf_score, &hit.memory.id))
+        } else {
+            None
+        };
+
+        // Convert to SearchHit (using rrf_score as similarity proxy at the store layer)
+        let hits: Vec<SearchHit> = page.into_iter().map(|hit| SearchHit {
+            similarity: hit.rrf_score,
+            memory: hit.memory,
+        }).collect();
+
+        let total_matches = hits.len() as u64 + if has_more { 1 } else { 0 };
+
+        Ok(SearchResult {
+            hits,
+            total_matches,
+            next_cursor,
+            has_more,
+        })
     }
 
     /// Search for memories matching query terms against symbolic metadata fields.

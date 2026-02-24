@@ -77,7 +77,7 @@ enum Commands {
     /// Search memories by keyword + metadata matching with salience ranking
     Search {
         query: String,
-        #[arg(long, default_value = "10")]
+        #[arg(long, default_value = "20")]
         limit: i64,
         #[arg(long)]
         created_after: Option<String>,
@@ -100,6 +100,9 @@ enum Commands {
         /// Output one line per result: id_short score snippet [tags]
         #[arg(long)]
         compact: bool,
+        /// Pagination cursor from a previous search (next_cursor value)
+        #[arg(long)]
+        cursor: Option<String>,
     },
     /// List memories with optional filters and pagination
     List {
@@ -470,9 +473,9 @@ async fn main() -> Result<()> {
             cli::cmd_store(&store, content, type_hint, source, tags, actor, actor_type, audience).await?;
         }
 
-        Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact } => {
+        Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact).await?;
+            cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor).await?;
         }
 
         Commands::Recent { since, source, actor, limit, verbose } => {

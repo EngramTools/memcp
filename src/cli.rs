@@ -22,7 +22,10 @@ use crate::ipc::embed_via_daemon;
 use crate::search::salience::SalienceInput;
 use crate::search::{SalienceScorer, ScoredHit};
 use crate::store::postgres::PostgresMemoryStore;
-use crate::store::{CreateMemory, ListFilter, Memory, MemoryStore};
+use crate::store::{
+    decode_search_keyset_cursor, encode_search_keyset_cursor,
+    CreateMemory, ListFilter, Memory, MemoryStore,
+};
 
 // ---------------------------------------------------------------------------
 // Connection helper
@@ -210,9 +213,22 @@ pub async fn cmd_search(
     verbose: bool,
     json: bool,
     compact: bool,
+    cursor: Option<String>,
 ) -> Result<()> {
     let ca = created_after.as_deref().map(parse_datetime).transpose()?;
     let cb = created_before.as_deref().map(parse_datetime).transpose()?;
+
+    // Decode cursor if provided to get (last_salience_score, last_id) for application-level filtering.
+    let cursor_position: Option<(f64, String)> = if let Some(ref c) = cursor {
+        match decode_search_keyset_cursor(c) {
+            Ok(pos) => Some(pos),
+            Err(e) => {
+                return Err(anyhow::anyhow!("Invalid cursor: {}", e));
+            }
+        }
+    } else {
+        None
+    };
 
     // Attempt to obtain embedding from daemon for vector leg (SCF-01).
     let query_embedding_opt = embed_via_daemon(&query).await;
@@ -233,11 +249,14 @@ pub async fn cmd_search(
     // (hybrid_search doesn't expose a type_hint column filter; post-filter is simple and correct).
     let tags_for_search = tags.clone().filter(|t| !t.is_empty());
 
+    // Fetch a larger candidate pool when using cursor pagination (need candidates beyond cursor pos).
+    let fetch_limit = if cursor_position.is_some() { limit * 5 } else { limit };
+
     let raw_hits = store
         .hybrid_search(
             &query,
             query_embedding_vec.as_ref(),
-            limit,
+            fetch_limit,
             ca,
             cb,
             tags_for_search.as_deref(),
@@ -258,7 +277,12 @@ pub async fn cmd_search(
     };
 
     if raw_hits.is_empty() {
-        let output = json!({ "results": [], "total": 0 });
+        let output = json!({
+            "results": [],
+            "next_cursor": null,
+            "has_more": false,
+            "total": 0,
+        });
         println!("{}", serde_json::to_string(&output)?);
         return Ok(());
     }
@@ -302,6 +326,34 @@ pub async fn cmd_search(
     let scorer = SalienceScorer::new(&config.salience);
     scorer.rank(&mut scored_hits, &salience_inputs);
 
+    // Apply cursor-based filtering: skip items at or before the cursor position.
+    // Cursor encodes (salience_score, id) of the LAST item on the previous page.
+    // Skip items where: score > last_score OR (score == last_score AND id <= last_id).
+    let scored_hits: Vec<ScoredHit> = if let Some((last_score, ref last_id)) = cursor_position {
+        scored_hits.into_iter().filter(|h| {
+            let score = h.salience_score;
+            if (score - last_score).abs() < f64::EPSILON {
+                h.memory.id.as_str() > last_id.as_str()
+            } else {
+                score < last_score
+            }
+        }).collect()
+    } else {
+        scored_hits
+    };
+
+    // Take limit items, detect if more remain.
+    let has_more = scored_hits.len() as i64 > limit;
+    let take = if has_more { limit as usize } else { scored_hits.len() };
+    let scored_hits: Vec<ScoredHit> = scored_hits.into_iter().take(take).collect();
+
+    // Build next_cursor from the last item's (salience_score, id) — keyset cursor.
+    let next_cursor: Option<String> = if has_more {
+        scored_hits.last().map(|h| encode_search_keyset_cursor(h.salience_score, &h.memory.id))
+    } else {
+        None
+    };
+
     // Format results according to output mode.
     if json {
         // --json: MCP-compatible JSON envelope. id always present at top level (SCF-03).
@@ -322,8 +374,8 @@ pub async fn cmd_search(
 
         let output = json!({
             "results": results,
-            "next_cursor": null,
-            "has_more": false,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
         });
         println!("{}", serde_json::to_string(&output)?);
     } else if compact {
@@ -354,6 +406,12 @@ pub async fn cmd_search(
                 id_short, h.salience_score, snippet, tags_str
             );
         }
+        // Print next cursor for compact mode if has_more
+        if has_more {
+            if let Some(ref c) = next_cursor {
+                println!("Next: {}", c);
+            }
+        }
     } else {
         // Default: human-friendly JSON list with id, content, tags, score, type_hint, created_at.
         // id always present at top level (SCF-03).
@@ -374,6 +432,8 @@ pub async fn cmd_search(
 
         let output = json!({
             "results": results,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
             "total": results.len(),
         });
         println!("{}", serde_json::to_string(&output)?);

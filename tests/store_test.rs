@@ -402,11 +402,6 @@ async fn test_feedback_irrelevant(pool: PgPool) {
 ///
 /// Contract: hybrid_search_paged with limit=2, then cursor=next_cursor produces
 /// a second page with no ID overlap vs the first page.
-///
-/// Gated behind feature "wave0_07_5" because hybrid_search_paged does not exist yet.
-/// Plan 03 must: add hybrid_search_paged to PostgresMemoryStore, enable this feature
-/// in Cargo.toml dev-dependencies, and remove the cfg gate.
-#[cfg(feature = "wave0_07_5")]
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
 async fn test_search_cursor_pagination(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();

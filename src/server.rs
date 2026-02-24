@@ -26,7 +26,10 @@ use crate::errors::MemcpError;
 use crate::extraction::ExtractionJob;
 use crate::search::{SalienceScorer, ScoredHit};
 use crate::search::salience::SalienceInput;
-use crate::store::{CreateMemory, ListFilter, Memory, MemoryStore, UpdateMemory};
+use crate::store::{
+    decode_search_keyset_cursor, encode_search_keyset_cursor,
+    CreateMemory, ListFilter, Memory, MemoryStore, UpdateMemory,
+};
 
 pub struct MemoryService {
     store: Arc<dyn MemoryStore + Send + Sync>,
@@ -760,8 +763,25 @@ impl MemoryService {
             })));
         }
 
-        // 2. Validate limit
-        let limit = params.limit.unwrap_or(10).clamp(1, 100);
+        // 2. Validate limit (default 20 per CONTEXT.md)
+        let limit = params.limit.unwrap_or(20).clamp(1, 100);
+
+        // 2b. Decode cursor if provided — get (last_salience_score, last_id) for keyset pagination.
+        // cursor takes precedence; if both cursor and offset would have been present, cursor wins.
+        let cursor_position: Option<(f64, String)> = if let Some(ref c) = params.cursor {
+            match decode_search_keyset_cursor(c) {
+                Ok(pos) => Some(pos),
+                Err(e) => {
+                    return Ok(CallToolResult::structured_error(json!({
+                        "isError": true,
+                        "error": format!("Invalid cursor: {}", e),
+                        "field": "cursor"
+                    })));
+                }
+            }
+        } else {
+            None
+        };
 
         // 3. Get concrete PostgresMemoryStore reference (required for hybrid search)
         let pg_store = match &self.pg_store {
@@ -872,13 +892,14 @@ impl MemoryService {
         }
 
         // 8. Call hybrid_search — BM25 + vector + symbolic with three-way RRF fusion.
-        // Note: cursor-based pagination not applied at this level; salience re-ranking
-        // must happen on the full result set before we can paginate meaningfully.
+        // Fetch a larger candidate pool when using cursor pagination (need candidates beyond cursor pos).
+        // Salience re-ranking happens after, then cursor filtering is applied application-side.
+        let fetch_limit = if cursor_position.is_some() { limit as i64 * 5 } else { limit as i64 };
         let tags_slice: Option<Vec<String>> = params.tags.clone();
         let raw_hits = match pg_store.hybrid_search(
             &search_query,
             query_embedding.as_ref(),
-            limit as i64,
+            fetch_limit,
             created_after,
             created_before,
             tags_slice.as_deref(),
@@ -1008,7 +1029,34 @@ impl MemoryService {
             }
         }
 
-        // 13. Format results
+        // 13. Apply cursor-based filtering: skip items at or before the cursor position.
+        // Cursor encodes (salience_score, id) of the LAST item on the previous page.
+        let scored_hits: Vec<ScoredHit> = if let Some((last_score, ref last_id)) = cursor_position {
+            scored_hits.into_iter().filter(|hit| {
+                let score = hit.salience_score;
+                if (score - last_score).abs() < f64::EPSILON {
+                    hit.memory.id.as_str() > last_id.as_str()
+                } else {
+                    score < last_score
+                }
+            }).collect()
+        } else {
+            scored_hits
+        };
+
+        // Trim to limit and detect if more remain.
+        let has_more = scored_hits.len() as u32 > limit;
+        let take = if has_more { limit as usize } else { scored_hits.len() };
+        let scored_hits: Vec<ScoredHit> = scored_hits.into_iter().take(take).collect();
+
+        // Build next_cursor from the last item's (salience_score, id).
+        let next_cursor: Option<String> = if has_more {
+            scored_hits.last().map(|hit| encode_search_keyset_cursor(hit.salience_score, &hit.memory.id))
+        } else {
+            None
+        };
+
+        // 14. Format results
         let count = scored_hits.len();
         let results: Vec<serde_json::Value> = scored_hits.iter().map(|hit| {
             let mut obj = json!({
@@ -1039,12 +1087,13 @@ impl MemoryService {
             obj
         }).collect();
 
-        // 14. Build final response JSON
+        // 15. Build final response JSON
         let mut response = json!({
             "memories": results,
             "total_results": count,
             "query": params.query,
-            "has_more": false,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
         });
 
         if count == 0 {
