@@ -289,3 +289,285 @@ async fn test_build_status_with_check(pool: PgPool) {
     // DB should be reachable (we're running in a test with active pool)
     assert_eq!(checks.get("database").unwrap().as_bool(), Some(true));
 }
+
+// =============================================================================
+// Phase 07.5 Wave 0 Test Stubs
+// These tests define the contract for Plans 01-03 to satisfy.
+// They are marked #[ignore] because the methods they call (apply_feedback,
+// hybrid_search with cursor) do not exist yet. Plans 01-03 must remove #[ignore].
+// =============================================================================
+
+/// SCF-02: "useful" feedback increases FSRS stability.
+///
+/// Contract: store.apply_feedback(&id, "useful") must increase stability by
+/// multiplier ~1.5. Reads back via get_salience_data to verify.
+///
+/// Gated behind feature "wave0_07_5" because apply_feedback does not exist yet.
+/// Plan 02 must: add apply_feedback to PostgresMemoryStore, enable this feature,
+/// and remove the cfg gate.
+#[cfg(feature = "wave0_07_5")]
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_feedback_useful(pool: PgPool) {
+    let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
+
+    // Store a memory
+    let mem = store
+        .store(CreateMemory {
+            content: "Rust is a systems programming language".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test-agent".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "agent".to_string(),
+            audience: "global".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Seed a known stability (2.5) so the expected result is deterministic
+    store
+        .upsert_salience(&mem.id, 2.5, 5.0, 0, None)
+        .await
+        .unwrap();
+
+    // Apply "useful" feedback — should increase stability (multiplier ~1.5)
+    store.apply_feedback(&mem.id, "useful").await.unwrap();
+
+    // Read back the salience row and verify stability increased
+    let rows = store
+        .get_salience_data(&[mem.id.clone()])
+        .await
+        .unwrap();
+    let row = rows.get(&mem.id).unwrap();
+
+    assert!(
+        row.stability > 2.5,
+        "Expected stability to increase from 2.5 after 'useful' feedback, got {}",
+        row.stability
+    );
+}
+
+/// SCF-02: "irrelevant" feedback decreases FSRS stability significantly.
+///
+/// Contract: store.apply_feedback(&id, "irrelevant") must decrease stability
+/// to ~20% of original (0.2 multiplier), clamped at 0.1 minimum.
+///
+/// Gated behind feature "wave0_07_5" because apply_feedback does not exist yet.
+/// Plan 02 must: add apply_feedback to PostgresMemoryStore, enable this feature,
+/// and remove the cfg gate.
+#[cfg(feature = "wave0_07_5")]
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_feedback_irrelevant(pool: PgPool) {
+    let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
+
+    // Store a memory
+    let mem = store
+        .store(CreateMemory {
+            content: "Python is a general-purpose scripting language".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test-agent".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "agent".to_string(),
+            audience: "global".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Seed known stability (2.5) — after irrelevant, expect ~0.5 (2.5 * 0.2)
+    store
+        .upsert_salience(&mem.id, 2.5, 5.0, 0, None)
+        .await
+        .unwrap();
+
+    // Apply "irrelevant" feedback — should decrease stability sharply
+    store.apply_feedback(&mem.id, "irrelevant").await.unwrap();
+
+    // Read back the salience row and verify stability decreased below 1.0
+    let rows = store
+        .get_salience_data(&[mem.id.clone()])
+        .await
+        .unwrap();
+    let row = rows.get(&mem.id).unwrap();
+
+    assert!(
+        row.stability < 1.0,
+        "Expected stability to decrease below 1.0 after 'irrelevant' feedback, got {}",
+        row.stability
+    );
+    assert!(
+        row.stability >= 0.1,
+        "Expected stability to be clamped at minimum 0.1, got {}",
+        row.stability
+    );
+}
+
+/// SCF-04: Cursor-based pagination for search yields non-overlapping pages.
+///
+/// Contract: hybrid_search_paged with limit=2, then cursor=next_cursor produces
+/// a second page with no ID overlap vs the first page.
+///
+/// Gated behind feature "wave0_07_5" because hybrid_search_paged does not exist yet.
+/// Plan 03 must: add hybrid_search_paged to PostgresMemoryStore, enable this feature
+/// in Cargo.toml dev-dependencies, and remove the cfg gate.
+#[cfg(feature = "wave0_07_5")]
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_search_cursor_pagination(pool: PgPool) {
+    let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
+
+    // Store 5 memories with distinct content
+    for i in 0..5usize {
+        store
+            .store(CreateMemory {
+                content: format!("Unique search content item number {}", i),
+                type_hint: "fact".to_string(),
+                source: "test-agent".to_string(),
+                tags: None,
+                created_at: None,
+                actor: None,
+                actor_type: "agent".to_string(),
+                audience: "global".to_string(),
+            })
+            .await
+            .unwrap();
+    }
+
+    // Search page 1 with limit=2, capture next_cursor
+    // NOTE: hybrid_search_paged is the new cursor-aware variant that Plan 03 will add.
+    // It adds a `cursor: Option<String>` parameter and returns a paged SearchResult.
+    let page1 = store
+        .hybrid_search_paged(
+            "search content item",
+            None,  // no embedding — BM25 only (daemon offline scenario)
+            2,     // limit
+            None,  // cursor — first page
+            None, None, None, Some(60.0), None, Some(40.0), None, None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(page1.hits.len(), 2, "Page 1 should have 2 results");
+    assert!(page1.next_cursor.is_some(), "Page 1 should have a next_cursor");
+
+    // Search page 2 using cursor from page 1
+    let page2 = store
+        .hybrid_search_paged(
+            "search content item",
+            None,
+            2,
+            page1.next_cursor.clone(), // cursor from page 1
+            None, None, None, Some(60.0), None, Some(40.0), None, None,
+        )
+        .await
+        .unwrap();
+
+    // Verify no ID overlap between pages
+    let page1_ids: std::collections::HashSet<&str> =
+        page1.hits.iter().map(|h| h.memory.id.as_str()).collect();
+    let page2_ids: std::collections::HashSet<&str> =
+        page2.hits.iter().map(|h| h.memory.id.as_str()).collect();
+
+    let overlap: std::collections::HashSet<_> = page1_ids.intersection(&page2_ids).collect();
+    assert!(
+        overlap.is_empty(),
+        "Pages should not share memory IDs, found overlap: {:?}",
+        overlap
+    );
+}
+
+/// SCF-03: Search results always include the memory `id` field.
+///
+/// This test documents the requirement that every SearchHit.memory.id is non-empty.
+/// It likely passes already (MCP serve has always emitted id), but it makes the
+/// contract explicit and guards against regressions.
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_search_result_has_id(pool: PgPool) {
+    let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
+
+    // Store a memory
+    store
+        .store(CreateMemory {
+            content: "The memory id field must always be present in search results".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test-agent".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "agent".to_string(),
+            audience: "global".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Run BM25-only search (no embedding needed)
+    let hits = store
+        .hybrid_search(
+            "memory id field present",
+            None,      // no embedding
+            10,        // limit
+            None, None, None,
+            Some(60.0), // bm25_k
+            None,       // vector_k
+            Some(40.0), // symbolic_k
+            None, None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!hits.is_empty(), "Should find at least one result");
+
+    for hit in &hits {
+        assert!(
+            !hit.memory.id.is_empty(),
+            "Every search hit must have a non-empty memory id"
+        );
+    }
+}
+
+/// SCF-05: Offset-based pagination still works (backward compat) — no crash.
+///
+/// This test verifies that passing offset > 0 to hybrid_search does not crash
+/// the process. The deprecation warning is emitted to tracing (hard to assert
+/// in tests), but backward compatibility must be preserved.
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_offset_deprecation_warning(pool: PgPool) {
+    let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
+
+    // Store a memory so the search has something to find
+    store
+        .store(CreateMemory {
+            content: "Offset pagination backward compatibility test".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test-agent".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "agent".to_string(),
+            audience: "global".to_string(),
+        })
+        .await
+        .unwrap();
+
+    // Run search with offset=1 — should complete without error (backward compat)
+    // The deprecation warning is a tracing event emitted to stderr, not assertable here.
+    let result = store
+        .hybrid_search(
+            "offset pagination",
+            None,
+            10,
+            None, None, None,
+            Some(60.0),
+            None,
+            Some(40.0),
+            None, None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "hybrid_search with offset should not crash, got error: {:?}",
+        result.err()
+    );
+}

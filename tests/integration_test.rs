@@ -443,3 +443,66 @@ fn test_search_memory() {
         }
     }
 }
+
+// =============================================================================
+// Phase 07.5 Wave 0 Test Stubs
+// =============================================================================
+
+/// SCF-01: CLI search degrades gracefully when daemon is offline.
+///
+/// Contract: `memcp search "query"` with no daemon running must:
+///   - exit with code 0 (graceful degradation, not crash)
+///   - emit a warning to stderr about degraded/daemon/text-only mode (added in Plan 01)
+///   - emit valid JSON to stdout (even if results are empty)
+///
+/// This test uses std::process::Command to spawn the real binary with DATABASE_URL
+/// set so the store connects, but the daemon embed socket is intentionally absent.
+///
+/// Note: Plan 01 will add the --json flag and stderr degradation warning.
+/// This stub tests the subset of that contract that can be verified today:
+/// exit 0 + valid JSON stdout. Plan 01 must additionally assert the stderr warning.
+#[test]
+fn test_cli_search_daemon_offline() {
+    // DATABASE_URL must be set for the store to connect (tests require Postgres).
+    // If DATABASE_URL is not set, skip this test gracefully.
+    let database_url = match std::env::var("DATABASE_URL") {
+        Ok(url) => url,
+        Err(_) => {
+            eprintln!("test_cli_search_daemon_offline: DATABASE_URL not set — skipping");
+            return;
+        }
+    };
+
+    // Run `memcp search "test query"` with no daemon running.
+    // The daemon socket will not be present, so the CLI should fall back to
+    // BM25-only search (current behavior) and warn on stderr (added in Plan 01).
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_memcp"))
+        .args(["search", "test query"])
+        .env("DATABASE_URL", &database_url)
+        .output()
+        .expect("Failed to spawn memcp binary");
+
+    // Must exit successfully (graceful degradation, not crash)
+    assert!(
+        output.status.success(),
+        "memcp search should exit 0 when daemon is offline, got status: {}.\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // stdout must be valid JSON
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
+    assert!(
+        parsed.is_ok(),
+        "memcp search stdout must be valid JSON when daemon is offline.\nstdout: {}",
+        stdout
+    );
+
+    // Plan 01 must additionally assert stderr contains a warning like:
+    //   "daemon offline" / "degraded" / "text-only search"
+    // That assertion is deferred here because the warning doesn't exist yet.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = stderr; // acknowledged — Plan 01 must add and assert the warning
+}

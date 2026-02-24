@@ -7,6 +7,8 @@ description = "High-performance MCP memory server"
 [features]
 default = ["local-embed"]
 local-embed = ["dep:fastembed"]
+# Phase 07.5 Wave 0 test stubs — enable when apply_feedback and hybrid_search_paged exist
+wave0_07_5 = []
 
 [dependencies]
 rmcp = { version = "0.15", features = ["server", "transport-io", "macros"] }
