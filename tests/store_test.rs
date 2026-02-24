@@ -302,10 +302,7 @@ async fn test_build_status_with_check(pool: PgPool) {
 /// Contract: store.apply_feedback(&id, "useful") must increase stability by
 /// multiplier ~1.5. Reads back via get_salience_data to verify.
 ///
-/// Gated behind feature "wave0_07_5" because apply_feedback does not exist yet.
-/// Plan 02 must: add apply_feedback to PostgresMemoryStore, enable this feature,
-/// and remove the cfg gate.
-#[cfg(feature = "wave0_07_5")]
+/// Gate removed in Plan 02 — apply_feedback now exists on PostgresMemoryStore.
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
 async fn test_feedback_useful(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
@@ -353,10 +350,7 @@ async fn test_feedback_useful(pool: PgPool) {
 /// Contract: store.apply_feedback(&id, "irrelevant") must decrease stability
 /// to ~20% of original (0.2 multiplier), clamped at 0.1 minimum.
 ///
-/// Gated behind feature "wave0_07_5" because apply_feedback does not exist yet.
-/// Plan 02 must: add apply_feedback to PostgresMemoryStore, enable this feature,
-/// and remove the cfg gate.
-#[cfg(feature = "wave0_07_5")]
+/// Gate removed in Plan 02 — apply_feedback now exists on PostgresMemoryStore.
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
 async fn test_feedback_irrelevant(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();

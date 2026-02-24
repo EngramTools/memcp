@@ -1991,6 +1991,71 @@ impl PostgresMemoryStore {
         Ok(())
     }
 
+    /// Apply explicit relevance feedback to a memory's FSRS salience state.
+    ///
+    /// "useful" maps to a good review: increases stability (multiplier 1.5) and
+    /// decreases difficulty (multiplier 0.9 — easier next time).
+    ///
+    /// "irrelevant" maps to a failed review: sharply decreases stability (multiplier 0.2)
+    /// and increases difficulty (multiplier 1.2 — harder next time).
+    ///
+    /// Fire-and-forget: returns Ok(()) on success, no salience details returned.
+    /// This is intentionally a separate method from reinforce_salience — the semantics
+    /// ("useful/irrelevant" explicit feedback) are different from FSRS ratings.
+    pub async fn apply_feedback(&self, memory_id: &str, signal: &str) -> Result<(), MemcpError> {
+        // Validate signal
+        if signal != "useful" && signal != "irrelevant" {
+            return Err(MemcpError::Validation {
+                message: format!(
+                    "Invalid feedback signal '{}'. Must be 'useful' or 'irrelevant'.",
+                    signal
+                ),
+                field: Some("signal".to_string()),
+            });
+        }
+
+        // Fetch current salience row (defaults if no row exists)
+        let row_map = self.get_salience_data(&[memory_id.to_string()]).await?;
+        let current = row_map.get(memory_id).cloned().unwrap_or_default();
+
+        let (new_stability, new_difficulty) = if signal == "useful" {
+            // Good review: increase stability, decrease difficulty
+            let stability = (current.stability * 1.5).clamp(0.1, 36_500.0);
+            let difficulty = (current.difficulty * 0.9).clamp(0.1, 10.0);
+            (stability, difficulty)
+        } else {
+            // Failed review (irrelevant): sharp stability drop, increase difficulty
+            let stability = (current.stability * 0.2).clamp(0.1, 36_500.0);
+            let difficulty = (current.difficulty * 1.2).clamp(0.1, 10.0);
+            (stability, difficulty)
+        };
+
+        let now = Utc::now();
+
+        // Upsert into memory_salience (same pattern as reinforce_salience)
+        sqlx::query(
+            "INSERT INTO memory_salience \
+             (memory_id, stability, difficulty, reinforcement_count, last_reinforced_at, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $6) \
+             ON CONFLICT (memory_id) DO UPDATE SET \
+               stability = EXCLUDED.stability, \
+               difficulty = EXCLUDED.difficulty, \
+               last_reinforced_at = EXCLUDED.last_reinforced_at, \
+               updated_at = EXCLUDED.updated_at",
+        )
+        .bind(memory_id)
+        .bind(new_stability as f32)
+        .bind(new_difficulty as f32)
+        .bind(current.reinforcement_count)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to apply feedback: {}", e)))?;
+
+        Ok(())
+    }
+
     /// Fetch the current embedding vector for a memory.
     ///
     /// Returns None if no current embedding exists (not yet embedded, or embedding was staled).
