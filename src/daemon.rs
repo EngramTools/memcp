@@ -245,6 +245,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     if config.gc.enabled {
         let gc_store = store.clone();
         let gc_config = config.gc.clone();
+        let recall_config = config.recall.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(gc_config.gc_interval_secs));
             loop {
@@ -269,6 +270,12 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
                     Ok(0) => {}
                     Ok(n) => tracing::debug!(count = n, "Cleaned up expired idempotency keys"),
                     Err(e) => tracing::warn!(error = %e, "Failed to clean up expired idempotency keys"),
+                }
+                // Session recall auto-expiry: clean up sessions idle > session_idle_secs
+                match gc_store.cleanup_expired_sessions(recall_config.session_idle_secs).await {
+                    Ok(0) => {}
+                    Ok(cleaned) => tracing::info!(cleaned, "Cleaned up expired recall sessions"),
+                    Err(e) => tracing::warn!(error = %e, "Session cleanup failed"),
                 }
             }
         });
