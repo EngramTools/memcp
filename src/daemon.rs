@@ -264,6 +264,12 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
                     }
                     Err(e) => tracing::warn!(error = %e, "GC cycle failed"),
                 }
+                // IDP TTL cleanup: sweep expired idempotency keys on every GC cycle
+                match gc_store.cleanup_expired_idempotency_keys().await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::debug!(count = n, "Cleaned up expired idempotency keys"),
+                    Err(e) => tracing::warn!(error = %e, "Failed to clean up expired idempotency keys"),
+                }
             }
         });
         tracing::info!(

@@ -335,7 +335,9 @@ impl MemoryService {
     #[tool(description = "Store a new memory. Returns {\"id\": \"uuid\", \"message\": \"Memory stored\"}.\n\
 Params: content (required), type_hint (fact|preference|instruction|decision), \
 tags (array), source (string), actor (string), actor_type (agent|human|system, default agent), \
-audience (global|personal|team:X).\n\
+audience (global|personal|team:X), idempotency_key (optional string).\n\
+Dedup: identical content within the server dedup window returns the existing memory (no duplicate). \
+Optional idempotency_key for caller-controlled at-most-once semantics — same key always returns original result.\n\
 Callable from code_execution_20260120 sandboxes.")]
     async fn store_memory(
         &self,
@@ -615,7 +617,7 @@ Callable from code_execution_20260120 sandboxes.")]
         }
     }
 
-    #[tool(description = "Delete a memory by ID.")]
+    #[tool(description = "Delete a memory by ID. Idempotent: returns success even if the memory does not exist (safe to retry).")]
     async fn delete_memory(
         &self,
         Parameters(params): Parameters<DeleteMemoryParams>,
@@ -840,6 +842,7 @@ Default output: {\"memories\": [{\"id\": \"uuid\", \"content\": \"text\", \"type
 \"rrf_score\": 0.031, \"actor\": null, \"actor_type\": \"agent\", \"audience\": \"global\"}], \
 \"total_results\": 1, \"query\": \"...\", \"next_cursor\": \"...\", \"has_more\": false}.\n\
 With fields=[\"id\",\"content\"]: each result has only {\"id\": \"uuid\", \"content\": \"text\"}.\n\
+Idempotent: identical queries always return consistent results (safe to retry).\n\
 Callable from code_execution_20260120 sandboxes.")]
     async fn search_memory(
         &self,

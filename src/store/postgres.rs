@@ -2162,6 +2162,18 @@ impl PostgresMemoryStore {
         Ok(result.rows_affected() as usize)
     }
 
+    /// Delete expired idempotency keys (expires_at < NOW()).
+    ///
+    /// Called from the GC worker on the same schedule as memory pruning.
+    /// Returns the number of expired keys removed.
+    pub async fn cleanup_expired_idempotency_keys(&self) -> Result<usize, MemcpError> {
+        let result = sqlx::query("DELETE FROM idempotency_keys WHERE expires_at < NOW()")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to clean up expired idempotency keys: {}", e)))?;
+        Ok(result.rows_affected() as usize)
+    }
+
     /// Update GC metrics in daemon_status after a GC run.
     pub async fn update_gc_metrics(&self, pruned: i64) -> Result<(), MemcpError> {
         sqlx::query(
