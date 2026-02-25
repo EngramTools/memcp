@@ -1539,7 +1539,7 @@ impl PostgresMemoryStore {
         bm25_k: Option<f64>,
         vector_k: Option<f64>,
         symbolic_k: Option<f64>,
-        source: Option<&str>,
+        source: Option<&[String]>,
         audience: Option<&str>,
     ) -> Result<Vec<crate::search::HybridRawHit>, MemcpError> {
         // 40 candidates per leg — research recommendation balancing recall vs cost
@@ -1620,9 +1620,12 @@ impl PostgresMemoryStore {
             }
         }
 
-        // Post-filter fused results by source prefix (e.g. "openclaw" matches "openclaw/vita")
-        if let Some(src) = source {
-            hits.retain(|hit| hit.memory.source.starts_with(src));
+        // Post-filter fused results by source prefix (OR logic across multiple sources)
+        // e.g. --source claude-code --source openclaw matches both; "openclaw" matches "openclaw/vita"
+        if let Some(sources) = source {
+            if !sources.is_empty() {
+                hits.retain(|hit| sources.iter().any(|src| hit.memory.source.starts_with(src.as_str())));
+            }
         }
 
         // Post-filter fused results by audience if specified
@@ -1655,7 +1658,7 @@ impl PostgresMemoryStore {
         bm25_k: Option<f64>,
         vector_k: Option<f64>,
         symbolic_k: Option<f64>,
-        source: Option<&str>,
+        source: Option<&[String]>,
         audience: Option<&str>,
     ) -> Result<SearchResult, MemcpError> {
         // Decode cursor if provided — get (last_score, last_id) position
@@ -2172,6 +2175,121 @@ impl PostgresMemoryStore {
             .await
             .map_err(|e| MemcpError::Storage(format!("Failed to clean up expired idempotency keys: {}", e)))?;
         Ok(result.rows_affected() as usize)
+    }
+
+    // -------------------------------------------------------------------------
+    // Session and recall management (migration 014)
+    // -------------------------------------------------------------------------
+
+    /// Ensure a session exists, updating last_active_at on each call.
+    ///
+    /// Uses INSERT ... ON CONFLICT DO UPDATE to atomically create-or-touch the session.
+    /// This satisfies the FK constraint required by insert_session_recall.
+    pub async fn ensure_session(&self, session_id: &str) -> Result<(), MemcpError> {
+        sqlx::query(
+            "INSERT INTO sessions (session_id, created_at, last_active_at) \
+             VALUES ($1, NOW(), NOW()) \
+             ON CONFLICT (session_id) DO UPDATE SET last_active_at = NOW()",
+        )
+        .bind(session_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to ensure session: {}", e)))?;
+        Ok(())
+    }
+
+    /// Record a memory as recalled in the current session.
+    ///
+    /// Calls ensure_session first to satisfy the FK constraint on session_recalls.
+    /// Uses ON CONFLICT DO NOTHING — safe to call multiple times for the same
+    /// (session_id, memory_id) pair without bumping the recall count.
+    pub async fn insert_session_recall(
+        &self,
+        session_id: &str,
+        memory_id: &str,
+        relevance: f32,
+    ) -> Result<(), MemcpError> {
+        // Satisfy FK constraint — ensure_session is idempotent.
+        self.ensure_session(session_id).await?;
+
+        sqlx::query(
+            "INSERT INTO session_recalls (session_id, memory_id, recalled_at, relevance) \
+             VALUES ($1, $2, NOW(), $3) \
+             ON CONFLICT (session_id, memory_id) DO NOTHING",
+        )
+        .bind(session_id)
+        .bind(memory_id)
+        .bind(relevance)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to insert session recall: {}", e)))?;
+        Ok(())
+    }
+
+    /// Clear all recall records for a session and reset its last_active_at.
+    ///
+    /// Resetting last_active_at prevents the session from being immediately
+    /// re-expired by the cleanup worker right after a reset (Pitfall 3 from RESEARCH.md).
+    pub async fn clear_session_recalls(&self, session_id: &str) -> Result<(), MemcpError> {
+        sqlx::query("DELETE FROM session_recalls WHERE session_id = $1")
+            .bind(session_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to clear session recalls: {}", e)))?;
+
+        sqlx::query(
+            "UPDATE sessions SET last_active_at = NOW() WHERE session_id = $1",
+        )
+        .bind(session_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to touch session after clear: {}", e)))?;
+        Ok(())
+    }
+
+    /// Apply a lightweight salience bump to a recalled memory.
+    ///
+    /// Variant of touch_salience with configurable multiplier and ceiling:
+    ///   new_stability = min(old_stability * (1.0 + bump_multiplier), stability_ceiling)
+    ///
+    /// Does NOT update last_reinforced_at or reinforcement_count — this is a
+    /// passive implicit signal, not explicit user reinforcement (matching touch_salience semantics).
+    pub async fn recall_bump_salience(
+        &self,
+        memory_id: &str,
+        bump_multiplier: f64,
+        stability_ceiling: f64,
+    ) -> Result<(), MemcpError> {
+        let sql = "INSERT INTO memory_salience (memory_id, stability, updated_at) \
+            VALUES ($1, LEAST(1.0 * (1.0 + $2), $3), NOW()) \
+            ON CONFLICT (memory_id) \
+            DO UPDATE SET stability = LEAST(memory_salience.stability * (1.0 + $2), $3), \
+            updated_at = NOW()";
+        sqlx::query(sql)
+            .bind(memory_id)
+            .bind(bump_multiplier)
+            .bind(stability_ceiling)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Delete sessions that have been idle longer than idle_secs.
+    ///
+    /// CASCADE on session_recalls FK means deleting a session automatically
+    /// removes all its recall records — no separate cleanup needed.
+    /// Returns the number of sessions deleted.
+    /// Called from the GC worker alongside memory pruning.
+    pub async fn cleanup_expired_sessions(&self, idle_secs: u64) -> Result<u64, MemcpError> {
+        let result = sqlx::query(
+            "DELETE FROM sessions WHERE last_active_at < NOW() - ($1 || ' seconds')::INTERVAL",
+        )
+        .bind(idle_secs.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to clean up expired sessions: {}", e)))?;
+        Ok(result.rows_affected())
     }
 
     /// Update GC metrics in daemon_status after a GC run.

@@ -540,6 +540,56 @@ impl Default for DedupConfig {
     }
 }
 
+/// Configuration for the recall subsystem (automatic context injection).
+///
+/// Recall surfaces the most relevant memories at the start of a session
+/// and applies a lightweight salience bump to recalled memories.
+/// Disabled fields are always valid — configs without [recall] use defaults.
+/// Nested env var overrides use double underscores:
+///   MEMCP_RECALL__MAX_MEMORIES=5
+///   MEMCP_RECALL__MIN_RELEVANCE=0.6
+///   MEMCP_RECALL__BUMP_MULTIPLIER=0.20
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecallConfig {
+    /// Maximum number of memories to return per recall (default: 3)
+    #[serde(default = "default_recall_max_memories")]
+    pub max_memories: usize,
+    /// Minimum relevance threshold for recall results, 0.0–1.0 (default: 0.7)
+    #[serde(default = "default_recall_min_relevance")]
+    pub min_relevance: f64,
+    /// Session idle expiry in seconds (default: 86400 — 24 hours).
+    /// Sessions inactive longer than this are cleaned up by the GC worker.
+    #[serde(default = "default_recall_session_idle_secs")]
+    pub session_idle_secs: u64,
+    /// Stability multiplier for recall salience bump (default: 0.15).
+    /// On recall, stability = stability * (1.0 + bump_multiplier).
+    /// Smaller than reinforce (1.5×) — passive implicit signal.
+    #[serde(default = "default_recall_bump_multiplier")]
+    pub bump_multiplier: f64,
+    /// Maximum stability value — recall bump stops here (default: 100.0).
+    /// Prevents unbounded growth for frequently-recalled memories.
+    #[serde(default = "default_recall_stability_ceiling")]
+    pub stability_ceiling: f64,
+}
+
+fn default_recall_max_memories() -> usize { 3 }
+fn default_recall_min_relevance() -> f64 { 0.7 }
+fn default_recall_session_idle_secs() -> u64 { 86400 }
+fn default_recall_bump_multiplier() -> f64 { 0.15 }
+fn default_recall_stability_ceiling() -> f64 { 100.0 }
+
+impl Default for RecallConfig {
+    fn default() -> Self {
+        RecallConfig {
+            max_memories: default_recall_max_memories(),
+            min_relevance: default_recall_min_relevance(),
+            session_idle_secs: default_recall_session_idle_secs(),
+            bump_multiplier: default_recall_bump_multiplier(),
+            stability_ceiling: default_recall_stability_ceiling(),
+        }
+    }
+}
+
 /// Configuration for the idempotency subsystem.
 ///
 /// Controls content-hash dedup window for store operations (IDP-01) and
@@ -881,6 +931,11 @@ pub struct Config {
     /// Existing configs without [idempotency] section still work (serde default applied).
     #[serde(default)]
     pub idempotency: IdempotencyConfig,
+
+    /// Recall configuration (automatic context injection).
+    /// Existing configs without [recall] section still work (serde default applied).
+    #[serde(default)]
+    pub recall: RecallConfig,
 }
 
 fn default_log_level() -> String {
@@ -910,6 +965,7 @@ impl Default for Config {
             gc: GcConfig::default(),
             dedup: DedupConfig::default(),
             idempotency: IdempotencyConfig::default(),
+            recall: RecallConfig::default(),
         }
     }
 }
