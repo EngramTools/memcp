@@ -683,6 +683,7 @@ async fn main() -> Result<()> {
                 Some(provider_for_search),
                 Some(pg_store_for_search),
                 config.salience.clone(),
+                config.search.clone(),
                 extraction_pipeline,
                 qi_expansion_provider,
                 qi_reranking_provider,

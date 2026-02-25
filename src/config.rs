@@ -18,12 +18,26 @@ use crate::errors::MemcpError;
 /// BM25 backend selection is explicit — having ParadeDB installed does NOT auto-switch.
 /// Nested env var overrides use double underscores:
 ///   MEMCP_SEARCH__BM25_BACKEND=paradedb
+///   MEMCP_SEARCH__DEFAULT_MIN_SALIENCE=0.5
+///   MEMCP_SEARCH__SALIENCE_HINT_MODE=true
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchConfig {
     /// BM25 backend: "native" (PostgreSQL tsvector, default) or "paradedb" (pg_search extension)
     /// Default: "native" — no extension required for self-hosted deployments
     #[serde(default = "default_bm25_backend")]
     pub bm25_backend: String,
+
+    /// Global default minimum salience score for search results (0.0–1.0).
+    /// Applied when the caller does not specify min_salience in the request.
+    /// When omitted here too, no filtering is applied (backwards compatible).
+    #[serde(default)]
+    pub default_min_salience: Option<f64>,
+
+    /// When true, empty results that were filtered by salience include a `salience_hint` field
+    /// explaining how many results were below the threshold.
+    /// Default: false — no hint on empty results.
+    #[serde(default)]
+    pub salience_hint_mode: bool,
 }
 
 fn default_bm25_backend() -> String {
@@ -34,6 +48,8 @@ impl Default for SearchConfig {
     fn default() -> Self {
         SearchConfig {
             bm25_backend: default_bm25_backend(),
+            default_min_salience: None,
+            salience_hint_mode: false,
         }
     }
 }
@@ -886,5 +902,7 @@ mod tests {
         assert_eq!(config.embedding.provider, "local");
         assert_eq!(config.embedding.openai_api_key, None);
         assert_eq!(config.search.bm25_backend, "native");
+        assert_eq!(config.search.default_min_salience, None);
+        assert!(!config.search.salience_hint_mode);
     }
 }

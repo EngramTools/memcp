@@ -19,7 +19,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use crate::query_intelligence::{RankedCandidate, temporal::parse_temporal_hint};
 
-use crate::config::SalienceConfig;
+use crate::config::{SalienceConfig, SearchConfig};
 use crate::content_filter::{ContentFilter, FilterVerdict};
 use crate::embedding::{EmbeddingJob, EmbeddingProvider};
 use crate::errors::MemcpError;
@@ -37,6 +37,7 @@ pub struct MemoryService {
     embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
     pg_store: Option<Arc<crate::store::postgres::PostgresMemoryStore>>,
     salience_config: SalienceConfig,
+    search_config: SearchConfig,
     start_time: Instant,
     extraction_pipeline: Option<crate::extraction::pipeline::ExtractionPipeline>,
     qi_expansion_provider: Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
@@ -52,6 +53,7 @@ impl MemoryService {
         embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
         pg_store: Option<Arc<crate::store::postgres::PostgresMemoryStore>>,
         salience_config: SalienceConfig,
+        search_config: SearchConfig,
         extraction_pipeline: Option<crate::extraction::pipeline::ExtractionPipeline>,
         qi_expansion_provider: Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
         qi_reranking_provider: Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
@@ -64,6 +66,7 @@ impl MemoryService {
             embedding_provider,
             pg_store,
             salience_config,
+            search_config,
             start_time: Instant::now(),
             extraction_pipeline,
             qi_expansion_provider,
@@ -210,6 +213,12 @@ pub struct SearchMemoryParams {
     pub symbolic_weight: Option<f64>,
     /// Filter by audience
     pub audience: Option<String>,
+    /// Field projection — return only these fields (e.g. ["id","content","tags"]).
+    /// Omitting returns all fields (backwards compatible).
+    pub fields: Option<Vec<String>>,
+    /// Minimum salience score (0.0-1.0). Results below this threshold are excluded.
+    /// Omitting applies config default_min_salience, or no filtering if that is also unset.
+    pub min_salience: Option<f64>,
 }
 
 // Helper: convert MemcpError to CallToolResult with isError: true
@@ -258,6 +267,30 @@ fn parse_datetime(s: &str, field: &str) -> Result<chrono::DateTime<chrono::Utc>,
                 "field": field
             }))
         })
+}
+
+// Helper: apply field projection to a search result JSON object.
+//
+// When `fields` is None or empty, returns the object unchanged (backwards compatible).
+// When `fields` is Some(vec), returns only the keys present in the vec.
+// Unknown field names are silently ignored (forward-compatible — callers won't break when
+// new fields are added to the schema).
+fn apply_field_projection(obj: serde_json::Value, fields: &Option<Vec<String>>) -> serde_json::Value {
+    match fields {
+        None => obj,
+        Some(requested) if requested.is_empty() => obj,
+        Some(requested) => {
+            if let serde_json::Value::Object(map) = obj {
+                let filtered: serde_json::Map<String, serde_json::Value> = map
+                    .into_iter()
+                    .filter(|(k, _)| requested.iter().any(|r| r == k))
+                    .collect();
+                serde_json::Value::Object(filtered)
+            } else {
+                obj
+            }
+        }
+    }
 }
 
 // Tool implementations
@@ -766,6 +799,21 @@ impl MemoryService {
         // 2. Validate limit (default 20 per CONTEXT.md)
         let limit = params.limit.unwrap_or(20).clamp(1, 100);
 
+        // 2a. Validate min_salience and compute effective threshold.
+        if let Some(ms) = params.min_salience {
+            if !(0.0..=1.0).contains(&ms) {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": "min_salience must be between 0.0 and 1.0",
+                    "field": "min_salience"
+                })));
+            }
+        }
+        let search_config = &self.search_config;
+        let effective_min = params.min_salience
+            .or(search_config.default_min_salience)
+            .unwrap_or(0.0);
+
         // 2b. Decode cursor if provided — get (last_salience_score, last_id) for keyset pagination.
         // cursor takes precedence; if both cursor and offset would have been present, cursor wins.
         let cursor_position: Option<(f64, String)> = if let Some(ref c) = params.cursor {
@@ -1029,6 +1077,15 @@ impl MemoryService {
             }
         }
 
+        // 12.5. Apply salience threshold filtering AFTER re-ranking, BEFORE cursor/take.
+        // Count below-threshold results first (needed for hint mode).
+        let below_threshold = scored_hits.iter().filter(|h| h.salience_score < effective_min).count();
+        let scored_hits: Vec<ScoredHit> = if effective_min > 0.0 {
+            scored_hits.into_iter().filter(|h| h.salience_score >= effective_min).collect()
+        } else {
+            scored_hits
+        };
+
         // 13. Apply cursor-based filtering: skip items at or before the cursor position.
         // Cursor encodes (salience_score, id) of the LAST item on the previous page.
         let scored_hits: Vec<ScoredHit> = if let Some((last_score, ref last_id)) = cursor_position {
@@ -1084,7 +1141,8 @@ impl MemoryService {
                     "reinforcement": (bd.reinforcement * 1000.0).round() / 1000.0,
                 });
             }
-            obj
+            // Apply field projection (no-op when fields is None or empty).
+            apply_field_projection(obj, &params.fields)
         }).collect();
 
         // 15. Build final response JSON
@@ -1098,6 +1156,13 @@ impl MemoryService {
 
         if count == 0 {
             response["hint"] = json!("No memories matched your query. Try broader search terms or use list_memories to browse all memories.");
+            // Add salience hint when hint mode is enabled and results were filtered by threshold.
+            if search_config.salience_hint_mode && below_threshold > 0 {
+                response["salience_hint"] = json!(format!(
+                    "{} results found below threshold {}",
+                    below_threshold, effective_min
+                ));
+            }
         }
 
         Ok(CallToolResult::structured(response))
