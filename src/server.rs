@@ -296,7 +296,11 @@ fn apply_field_projection(obj: serde_json::Value, fields: &Option<Vec<String>>) 
 // Tool implementations
 #[rmcp::tool_router]
 impl MemoryService {
-    #[tool(description = "Store a new memory. Returns {id}.")]
+    #[tool(description = "Store a new memory. Returns {\"id\": \"uuid\", \"message\": \"Memory stored\"}.\n\
+Params: content (required), type_hint (fact|preference|instruction|decision), \
+tags (array), source (string), actor (string), actor_type (agent|human|system, default agent), \
+audience (global|personal|team:X).\n\
+Callable from code_execution_20260120 sandboxes.")]
     async fn store_memory(
         &self,
         Parameters(params): Parameters<StoreMemoryParams>,
@@ -774,7 +778,18 @@ impl MemoryService {
         }
     }
 
-    #[tool(description = "Search memories by meaning. Returns salience-ranked results.")]
+    #[tool(description = "Search memories by meaning. Returns salience-ranked results.\n\
+Params: query (required), limit (1-100, default 20), fields (array of field names for projection), \
+min_salience (0.0-1.0, server-side quality filter), cursor (pagination token), \
+tags (array, all must match), audience, created_after/created_before (ISO-8601), \
+bm25_weight/vector_weight/symbolic_weight (0-1).\n\
+Default output: {\"memories\": [{\"id\": \"uuid\", \"content\": \"text\", \"type_hint\": \"fact\", \
+\"source\": \"default\", \"tags\": [\"t1\"], \"created_at\": \"ISO8601\", \"updated_at\": \"ISO8601\", \
+\"access_count\": 0, \"relevance_score\": 0.85, \"match_source\": \"hybrid\", \
+\"rrf_score\": 0.031, \"actor\": null, \"actor_type\": \"agent\", \"audience\": \"global\"}], \
+\"total_results\": 1, \"query\": \"...\", \"next_cursor\": \"...\", \"has_more\": false}.\n\
+With fields=[\"id\",\"content\"]: each result has only {\"id\": \"uuid\", \"content\": \"text\"}.\n\
+Callable from code_execution_20260120 sandboxes.")]
     async fn search_memory(
         &self,
         Parameters(params): Parameters<SearchMemoryParams>,
