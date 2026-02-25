@@ -9,6 +9,8 @@ default = ["local-embed"]
 local-embed = ["dep:fastembed"]
 # Phase 07.5 Wave 0 test stubs — enable when apply_feedback and hybrid_search_paged exist
 wave0_07_5 = []
+# Phase 07.7 Wave 0 test stubs — enable when idempotency implementation ships (Task 2)
+wave0_07_7 = []
 
 [dependencies]
 rmcp = { version = "0.15", features = ["server", "transport-io", "macros"] }
