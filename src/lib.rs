@@ -15,6 +15,7 @@ pub mod gc;
 pub mod ipc;
 pub mod logging;
 pub mod query_intelligence;
+pub mod recall;
 pub mod search;
 pub mod server;
 pub mod store;

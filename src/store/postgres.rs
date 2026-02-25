@@ -2292,6 +2292,122 @@ impl PostgresMemoryStore {
         Ok(result.rows_affected())
     }
 
+    /// Query recall candidates using a tiered strategy, excluding already-recalled memories.
+    ///
+    /// Two tiers:
+    /// - Extraction enabled: query against extracted_facts (one fact per memory via DISTINCT ON).
+    /// - Extraction disabled: filter to type_hint IN ('fact', 'summary') or source = 'assistant'.
+    ///
+    /// Session dedup: memories already in session_recalls for this session are excluded via LEFT JOIN.
+    ///
+    /// Returns Vec of (memory_id, content, relevance) tuples sorted by relevance DESC, stability DESC.
+    pub async fn recall_candidates(
+        &self,
+        query_embedding: &[f32],
+        session_id: &str,
+        min_relevance: f64,
+        max_memories: usize,
+        extraction_enabled: bool,
+    ) -> Result<Vec<(String, String, f32)>, MemcpError> {
+        // Serialize embedding to pgvector literal format: '[0.1,0.2,...]'
+        let emb_str = format!(
+            "[{}]",
+            query_embedding
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let limit = max_memories as i64;
+
+        if extraction_enabled {
+            // Extraction-on tier: query against extracted_facts.
+            // DISTINCT ON (m.id) picks the highest-relevance fact per memory.
+            // Outer query sorts and caps at max_memories.
+            let sql = "
+                SELECT memory_id, content, relevance FROM (
+                    SELECT DISTINCT ON (m.id)
+                        m.id AS memory_id,
+                        ef.fact AS content,
+                        (1.0 - (me.embedding <=> $1::vector)) AS relevance,
+                        COALESCE(ms.stability, 1.0) AS stability
+                    FROM memories m
+                    JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = true
+                    LEFT JOIN memory_salience ms ON ms.memory_id = m.id
+                    LEFT JOIN session_recalls sr ON sr.session_id = $2 AND sr.memory_id = m.id
+                    CROSS JOIN LATERAL jsonb_array_elements_text(m.extracted_facts) AS ef(fact)
+                    WHERE m.deleted_at IS NULL
+                      AND m.embedding_status = 'complete'
+                      AND sr.memory_id IS NULL
+                      AND m.extracted_facts IS NOT NULL
+                      AND jsonb_array_length(m.extracted_facts) > 0
+                      AND (1.0 - (me.embedding <=> $1::vector)) >= $3
+                    ORDER BY m.id, (1.0 - (me.embedding <=> $1::vector)) DESC
+                ) sub
+                ORDER BY relevance DESC, stability DESC
+                LIMIT $4
+            ";
+            let rows = sqlx::query(sql)
+                .bind(&emb_str)
+                .bind(session_id)
+                .bind(min_relevance)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| MemcpError::Storage(format!("recall_candidates (extraction) failed: {}", e)))?;
+
+            let results = rows
+                .iter()
+                .map(|row| {
+                    let memory_id: String = row.get("memory_id");
+                    let content: String = row.get("content");
+                    let relevance: f32 = row.get("relevance");
+                    (memory_id, content, relevance)
+                })
+                .collect();
+            Ok(results)
+        } else {
+            // Extraction-off tier: filter to fact/summary type_hint memories.
+            let sql = "
+                SELECT
+                    m.id AS memory_id,
+                    m.content,
+                    (1.0 - (me.embedding <=> $1::vector)) AS relevance,
+                    COALESCE(ms.stability, 1.0) AS stability
+                FROM memories m
+                JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = true
+                LEFT JOIN memory_salience ms ON ms.memory_id = m.id
+                LEFT JOIN session_recalls sr ON sr.session_id = $2 AND sr.memory_id = m.id
+                WHERE m.deleted_at IS NULL
+                  AND m.embedding_status = 'complete'
+                  AND sr.memory_id IS NULL
+                  AND (m.type_hint IN ('fact', 'summary') OR m.source = 'assistant')
+                  AND (1.0 - (me.embedding <=> $1::vector)) >= $3
+                ORDER BY relevance DESC, stability DESC
+                LIMIT $4
+            ";
+            let rows = sqlx::query(sql)
+                .bind(&emb_str)
+                .bind(session_id)
+                .bind(min_relevance)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| MemcpError::Storage(format!("recall_candidates (no-extraction) failed: {}", e)))?;
+
+            let results = rows
+                .iter()
+                .map(|row| {
+                    let memory_id: String = row.get("memory_id");
+                    let content: String = row.get("content");
+                    let relevance: f32 = row.get("relevance");
+                    (memory_id, content, relevance)
+                })
+                .collect();
+            Ok(results)
+        }
+    }
+
     /// Update GC metrics in daemon_status after a GC run.
     pub async fn update_gc_metrics(&self, pruned: i64) -> Result<(), MemcpError> {
         sqlx::query(
