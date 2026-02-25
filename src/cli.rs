@@ -188,6 +188,29 @@ pub async fn cmd_store(
     Ok(())
 }
 
+/// Apply field projection to a search result JSON object.
+///
+/// When `fields` is None or empty, returns the object unchanged (backwards compatible).
+/// When `fields` is Some(vec), returns only the keys listed in the vec.
+/// Unknown field names are silently ignored — same behaviour as the MCP path in server.rs.
+fn apply_field_projection(obj: serde_json::Value, fields: &Option<Vec<String>>) -> serde_json::Value {
+    match fields {
+        None => obj,
+        Some(requested) if requested.is_empty() => obj,
+        Some(requested) => {
+            if let serde_json::Value::Object(map) = obj {
+                let filtered: serde_json::Map<String, serde_json::Value> = map
+                    .into_iter()
+                    .filter(|(k, _)| requested.iter().any(|r| r == k))
+                    .collect();
+                serde_json::Value::Object(filtered)
+            } else {
+                obj
+            }
+        }
+    }
+}
+
 /// Search memories using the full hybrid pipeline (vector + BM25 + symbolic) when the daemon
 /// is running, degrading gracefully to BM25+symbolic when the daemon is offline.
 ///
@@ -214,9 +237,29 @@ pub async fn cmd_search(
     json: bool,
     compact: bool,
     cursor: Option<String>,
+    fields: Option<String>,
+    min_salience: Option<f64>,
 ) -> Result<()> {
     let ca = created_after.as_deref().map(parse_datetime).transpose()?;
     let cb = created_before.as_deref().map(parse_datetime).transpose()?;
+
+    // Validate min_salience and compute effective threshold (mirrors MCP path).
+    if let Some(ms) = min_salience {
+        if !(0.0..=1.0).contains(&ms) {
+            return Err(anyhow::anyhow!("min_salience must be between 0.0 and 1.0"));
+        }
+    }
+    let effective_min = min_salience
+        .or(config.search.default_min_salience)
+        .unwrap_or(0.0);
+
+    // Parse comma-separated fields into a projection list.
+    let field_list: Option<Vec<String>> = fields.map(|f| {
+        f.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    });
 
     // Decode cursor if provided to get (last_salience_score, last_id) for application-level filtering.
     let cursor_position: Option<(f64, String)> = if let Some(ref c) = cursor {
@@ -368,6 +411,13 @@ pub async fn cmd_search(
         }
     }
 
+    // Apply salience threshold filtering AFTER re-ranking, BEFORE cursor/take (mirrors MCP path).
+    let scored_hits: Vec<ScoredHit> = if effective_min > 0.0 {
+        scored_hits.into_iter().filter(|h| h.salience_score >= effective_min).collect()
+    } else {
+        scored_hits
+    };
+
     // Apply cursor-based filtering: skip items at or before the cursor position.
     // Cursor encodes (salience_score, id) of the LAST item on the previous page.
     // Skip items where: score > last_score OR (score == last_score AND id <= last_id).
@@ -410,7 +460,8 @@ pub async fn cmd_search(
                     obj.insert("rrf_score".to_string(), json!(h.rrf_score));
                     obj.insert("match_source".to_string(), json!(h.match_source));
                 }
-                entry
+                // Apply field projection (no-op when fields is None or empty).
+                apply_field_projection(entry, &field_list)
             })
             .collect();
 
@@ -422,31 +473,43 @@ pub async fn cmd_search(
         println!("{}", serde_json::to_string(&output)?);
     } else if compact {
         // --compact: one line per result: "{id_short} {score:.3} {snippet_80} [{tags}]"
+        // When --fields is specified, only the requested fields are included in the output.
         for h in &scored_hits {
-            let id_short = &h.memory.id[..8.min(h.memory.id.len())];
-            let snippet: String = h.memory.content
-                .chars()
-                .take(80)
-                .collect();
-            let snippet = if h.memory.content.len() > 80 {
-                format!("{}…", snippet)
+            if field_list.is_some() {
+                // Projected compact: build full object then project and print as JSON.
+                let mut entry = format_memory_json(&h.memory, true);
+                if let Some(obj) = entry.as_object_mut() {
+                    obj.insert("id".to_string(), json!(h.memory.id));
+                    obj.insert("salience_score".to_string(), json!(h.salience_score));
+                }
+                let projected = apply_field_projection(entry, &field_list);
+                println!("{}", serde_json::to_string(&projected)?);
             } else {
-                snippet
-            };
-            let tags_str = h.memory.tags
-                .as_ref()
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|t| t.as_str())
-                        .collect::<Vec<_>>()
-                        .join(",")
-                })
-                .unwrap_or_default();
-            println!(
-                "{} {:.3} {} [{}]",
-                id_short, h.salience_score, snippet, tags_str
-            );
+                let id_short = &h.memory.id[..8.min(h.memory.id.len())];
+                let snippet: String = h.memory.content
+                    .chars()
+                    .take(80)
+                    .collect();
+                let snippet = if h.memory.content.len() > 80 {
+                    format!("{}…", snippet)
+                } else {
+                    snippet
+                };
+                let tags_str = h.memory.tags
+                    .as_ref()
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|t| t.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .unwrap_or_default();
+                println!(
+                    "{} {:.3} {} [{}]",
+                    id_short, h.salience_score, snippet, tags_str
+                );
+            }
         }
         // Print next cursor for compact mode if has_more
         if has_more {
@@ -468,7 +531,8 @@ pub async fn cmd_search(
                     obj.insert("rrf_score".to_string(), json!(h.rrf_score));
                     obj.insert("match_source".to_string(), json!(h.match_source));
                 }
-                entry
+                // Apply field projection (no-op when fields is None or empty).
+                apply_field_projection(entry, &field_list)
             })
             .collect();
 

@@ -103,6 +103,12 @@ enum Commands {
         /// Pagination cursor from a previous search (next_cursor value)
         #[arg(long)]
         cursor: Option<String>,
+        /// Field projection (comma-separated: content,tags,id). Returns only specified fields.
+        #[arg(long)]
+        fields: Option<String>,
+        /// Minimum salience threshold (0.0-1.0). Excludes results below this score.
+        #[arg(long)]
+        min_salience: Option<f64>,
     },
     /// List memories with optional filters and pagination
     List {
@@ -453,9 +459,9 @@ async fn main() -> Result<()> {
             cli::cmd_store(&store, content, type_hint, source, tags, actor, actor_type, audience).await?;
         }
 
-        Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor } => {
+        Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor).await?;
+            cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience).await?;
         }
 
         Commands::Recent { since, source, actor, limit, verbose } => {
