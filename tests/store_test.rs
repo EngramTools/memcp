@@ -3,9 +3,12 @@
 //! Each test gets its own temporary database — created before, dropped after — so tests
 //! run in parallel with zero interference. No cleanup code needed.
 
+mod common;
+use common::builders::MemoryBuilder;
+
 use std::sync::Arc;
 use memcp::store::postgres::PostgresMemoryStore;
-use memcp::store::{CreateMemory, ListFilter, MemoryStore, UpdateMemory};
+use memcp::store::{ListFilter, MemoryStore, UpdateMemory};
 use memcp::config::Config;
 use sqlx::PgPool;
 
@@ -14,17 +17,7 @@ async fn test_store_and_get_memory(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let created = store
-        .store(CreateMemory {
-            content: "Rust is great".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test-agent".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-        })
+        .store(MemoryBuilder::new().content("Rust is great").build())
         .await
         .unwrap();
 
@@ -45,17 +38,7 @@ async fn test_update_memory(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let created = store
-        .store(CreateMemory {
-            content: "Original content".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-        })
+        .store(MemoryBuilder::new().content("Original content").source("test").build())
         .await
         .unwrap();
 
@@ -82,17 +65,7 @@ async fn test_delete_memory(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let created = store
-        .store(CreateMemory {
-            content: "Memory to delete".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-        })
+        .store(MemoryBuilder::new().content("Memory to delete").source("test").build())
         .await
         .unwrap();
 
@@ -108,17 +81,7 @@ async fn test_list_memories_with_pagination(pool: PgPool) {
 
     for i in 0..5 {
         store
-            .store(CreateMemory {
-                content: format!("Memory {}", i),
-                type_hint: "fact".to_string(),
-                source: "test".to_string(),
-                tags: None,
-                created_at: None,
-                actor: None,
-                actor_type: "agent".to_string(),
-                audience: "global".to_string(),
-                idempotency_key: None,
-            })
+            .store(MemoryBuilder::new().content(&format!("Memory {}", i)).source("test").build())
             .await
             .unwrap();
     }
@@ -174,17 +137,7 @@ async fn test_list_memories_with_filter(pool: PgPool) {
 
     for (content, type_hint) in [("Fact 1", "fact"), ("Fact 2", "fact"), ("Pref 1", "preference"), ("Event 1", "event")] {
         store
-            .store(CreateMemory {
-                content: content.to_string(),
-                type_hint: type_hint.to_string(),
-                source: "test".to_string(),
-                tags: None,
-                created_at: None,
-                actor: None,
-                actor_type: "agent".to_string(),
-                audience: "global".to_string(),
-                idempotency_key: None,
-            })
+            .store(MemoryBuilder::new().content(content).type_hint(type_hint).source("test").build())
             .await
             .unwrap();
     }
@@ -207,30 +160,16 @@ async fn test_bulk_delete(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     for i in 0..3 {
-        store.store(CreateMemory {
-            content: format!("Temp {}", i),
-            type_hint: "temporary".to_string(),
-            source: "test".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-        }).await.unwrap();
+        store
+            .store(MemoryBuilder::new().content(&format!("Temp {}", i)).type_hint("temporary").source("test").build())
+            .await
+            .unwrap();
     }
     for i in 0..2 {
-        store.store(CreateMemory {
-            content: format!("Perm {}", i),
-            type_hint: "permanent".to_string(),
-            source: "test".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-        }).await.unwrap();
+        store
+            .store(MemoryBuilder::new().content(&format!("Perm {}", i)).type_hint("permanent").source("test").build())
+            .await
+            .unwrap();
     }
 
     let filter = ListFilter {
@@ -316,17 +255,7 @@ async fn test_feedback_useful(pool: PgPool) {
 
     // Store a memory
     let mem = store
-        .store(CreateMemory {
-            content: "Rust is a systems programming language".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test-agent".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-        })
+        .store(MemoryBuilder::new().content("Rust is a systems programming language").build())
         .await
         .unwrap();
 
@@ -365,17 +294,7 @@ async fn test_feedback_irrelevant(pool: PgPool) {
 
     // Store a memory
     let mem = store
-        .store(CreateMemory {
-            content: "Python is a general-purpose scripting language".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test-agent".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-        })
+        .store(MemoryBuilder::new().content("Python is a general-purpose scripting language").build())
         .await
         .unwrap();
 
@@ -418,17 +337,7 @@ async fn test_search_cursor_pagination(pool: PgPool) {
     // Store 5 memories with distinct content
     for i in 0..5usize {
         store
-            .store(CreateMemory {
-                content: format!("Unique search content item number {}", i),
-                type_hint: "fact".to_string(),
-                source: "test-agent".to_string(),
-                tags: None,
-                created_at: None,
-                actor: None,
-                actor_type: "agent".to_string(),
-                audience: "global".to_string(),
-                idempotency_key: None,
-            })
+            .store(MemoryBuilder::new().content(&format!("Unique search content item number {}", i)).build())
             .await
             .unwrap();
     }
@@ -487,17 +396,7 @@ async fn test_search_result_has_id(pool: PgPool) {
 
     // Store a memory
     store
-        .store(CreateMemory {
-            content: "The memory id field must always be present in search results".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test-agent".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-        })
+        .store(MemoryBuilder::new().content("The memory id field must always be present in search results").build())
         .await
         .unwrap();
 
@@ -537,17 +436,7 @@ async fn test_offset_deprecation_warning(pool: PgPool) {
 
     // Store a memory so the search has something to find
     store
-        .store(CreateMemory {
-            content: "Offset pagination backward compatibility test".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test-agent".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-        })
+        .store(MemoryBuilder::new().content("Offset pagination backward compatibility test").build())
         .await
         .unwrap();
 
@@ -602,32 +491,12 @@ async fn test_store_dedup_within_window(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let first = store
-        .store(CreateMemory {
-            content: "hello world".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-        })
+        .store(MemoryBuilder::new().content("hello world").source("test").build())
         .await
         .unwrap();
 
     let second = store
-        .store(CreateMemory {
-            content: "hello world".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-        })
+        .store(MemoryBuilder::new().content("hello world").source("test").build())
         .await
         .unwrap();
 
@@ -649,33 +518,13 @@ async fn test_store_dedup_expired_window(pool: PgPool) {
     // When dedup_window_secs is 60 (default), this is outside the window.
     let old_time = chrono::Utc::now() - Duration::seconds(3600);
     let first = store
-        .store(CreateMemory {
-            content: "dedup expiry test".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test".to_string(),
-            tags: None,
-            created_at: Some(old_time),
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-        })
+        .store(MemoryBuilder::new().content("dedup expiry test").source("test").created_at(old_time).build())
         .await
         .unwrap();
 
     // Store same content now — the first entry is outside the 60s window.
     let second = store
-        .store(CreateMemory {
-            content: "dedup expiry test".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-        })
+        .store(MemoryBuilder::new().content("dedup expiry test").source("test").build())
         .await
         .unwrap();
 
@@ -691,32 +540,12 @@ async fn test_idempotency_key_returns_original(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let first = store
-        .store(CreateMemory {
-            content: "content A".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: Some("test-key-abc".to_string()),
-        })
+        .store(MemoryBuilder::new().content("content A").source("test").idempotency_key("test-key-abc").build())
         .await
         .unwrap();
 
     let second = store
-        .store(CreateMemory {
-            content: "content A".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: Some("test-key-abc".to_string()),
-        })
+        .store(MemoryBuilder::new().content("content A").source("test").idempotency_key("test-key-abc").build())
         .await
         .unwrap();
 
@@ -733,33 +562,13 @@ async fn test_idempotency_key_conflict(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let first = store
-        .store(CreateMemory {
-            content: "content A".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: Some("conflict-key-k1".to_string()),
-        })
+        .store(MemoryBuilder::new().content("content A").source("test").idempotency_key("conflict-key-k1").build())
         .await
         .unwrap();
 
     // Different content, same key — must return original (first wins)
     let second = store
-        .store(CreateMemory {
-            content: "content B — different!".to_string(),
-            type_hint: "fact".to_string(),
-            source: "test".to_string(),
-            tags: None,
-            created_at: None,
-            actor: None,
-            actor_type: "agent".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: Some("conflict-key-k1".to_string()),
-        })
+        .store(MemoryBuilder::new().content("content B — different!").source("test").idempotency_key("conflict-key-k1").build())
         .await
         .unwrap();
 
