@@ -4,7 +4,7 @@ use rmcp::{
     model::{
         ServerCapabilities, Implementation, ProtocolVersion, CallToolResult,
         RawResource, ListResourcesResult, ReadResourceResult, ResourceContents,
-        ReadResourceRequestParams, AnnotateAble,
+        ReadResourceRequestParams, AnnotateAble, Meta,
     },
     handler::server::wrapper::Parameters,
     service::{RequestContext, RoleServer},
@@ -78,6 +78,29 @@ impl MemoryService {
 
     fn uptime_seconds(&self) -> u64 {
         self.start_time.elapsed().as_secs()
+    }
+
+    /// Returns the tool router with `_meta.allowed_callers` injected into sandbox-safe tools.
+    ///
+    /// CEX-03: `search_memory` and `store_memory` are annotated as callable from
+    /// `code_execution_20260120` sandboxes. Destructive tools (`delete_memory`,
+    /// `bulk_delete_memories`) are intentionally excluded.
+    fn tool_router_with_meta() -> rmcp::handler::server::router::tool::ToolRouter<Self> {
+        let mut router = Self::tool_router();
+        let sandbox_meta = {
+            let mut obj = serde_json::Map::new();
+            obj.insert(
+                "allowed_callers".to_string(),
+                serde_json::json!(["direct", "code_execution_20260120"]),
+            );
+            Meta(obj)
+        };
+        for name in &["search_memory", "store_memory"] {
+            if let Some(route) = router.map.get_mut(*name) {
+                route.attr.meta = Some(sandbox_meta.clone());
+            }
+        }
+        router
     }
 }
 
@@ -1319,7 +1342,7 @@ fn format_memories_text(memories: &[Memory]) -> String {
 }
 
 // ServerHandler implementation
-#[rmcp::tool_handler(router = Self::tool_router())]
+#[rmcp::tool_handler(router = Self::tool_router_with_meta())]
 impl ServerHandler for MemoryService {
     fn get_info(&self) -> rmcp::model::InitializeResult {
         rmcp::model::InitializeResult {
