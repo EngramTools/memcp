@@ -89,8 +89,8 @@ enum Commands {
         created_before: Option<String>,
         #[arg(long, value_delimiter = ',')]
         tags: Option<Vec<String>>,
-        #[arg(long)]
-        source: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        source: Option<Vec<String>>,
         #[arg(long)]
         audience: Option<String>,
         /// Filter by memory type (e.g., fact, preference, instruction, decision)
@@ -212,6 +212,17 @@ enum Commands {
         id: String,
         /// Feedback signal: "useful" or "irrelevant"
         signal: String,
+    },
+    /// Recall relevant memories for automatic context injection
+    Recall {
+        /// Query text to find relevant memories
+        query: String,
+        /// Session ID (auto-generated if omitted)
+        #[arg(long)]
+        session_id: Option<String>,
+        /// Clear session recall history before recalling (for context compaction)
+        #[arg(long)]
+        reset: bool,
     },
 }
 
@@ -529,6 +540,11 @@ async fn main() -> Result<()> {
             }
         }
 
+        Commands::Recall { query, session_id, reset } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_recall(&store, &config, &query, session_id, reset).await?;
+        }
+
         Commands::Serve => {
             // Start the MCP server
             tracing::info!(
@@ -687,7 +703,7 @@ async fn main() -> Result<()> {
 
             // 10. Create service with store, pipeline, embedding provider, salience config, extraction pipeline, and QI providers
             let pg_store_for_search = store.clone();
-            let service = MemoryService::new(
+            let mut service = MemoryService::new(
                 store as Arc<dyn memcp::store::MemoryStore + Send + Sync>,
                 Some(pipeline),
                 Some(provider_for_search),
@@ -700,6 +716,7 @@ async fn main() -> Result<()> {
                 config.query_intelligence.clone(),
                 content_filter,
             );
+            service.set_recall_config(config.recall.clone(), config.extraction.enabled);
 
             // 11. Serve via stdio transport
             let (stdin, stdout) = rmcp::transport::io::stdio();

@@ -19,7 +19,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use crate::query_intelligence::{RankedCandidate, temporal::parse_temporal_hint};
 
-use crate::config::{IdempotencyConfig, SalienceConfig, SearchConfig};
+use crate::config::{IdempotencyConfig, RecallConfig, SalienceConfig, SearchConfig};
 use crate::content_filter::{ContentFilter, FilterVerdict};
 use crate::embedding::{EmbeddingJob, EmbeddingProvider};
 use crate::errors::MemcpError;
@@ -45,6 +45,8 @@ pub struct MemoryService {
     qi_config: crate::config::QueryIntelligenceConfig,
     content_filter: Option<Arc<dyn ContentFilter>>,
     idempotency_config: IdempotencyConfig,
+    recall_config: RecallConfig,
+    extraction_enabled: bool,
 }
 
 impl MemoryService {
@@ -75,7 +77,17 @@ impl MemoryService {
             qi_config,
             content_filter,
             idempotency_config: IdempotencyConfig::default(),
+            recall_config: RecallConfig::default(),
+            extraction_enabled: false,
         }
+    }
+
+    /// Update the recall configuration and extraction flag.
+    ///
+    /// Call after construction to wire config values from the full Config (e.g., in main.rs).
+    pub fn set_recall_config(&mut self, config: RecallConfig, extraction_enabled: bool) {
+        self.recall_config = config;
+        self.extraction_enabled = extraction_enabled;
     }
 
     /// Update the idempotency configuration.
@@ -104,7 +116,7 @@ impl MemoryService {
             );
             Meta(obj)
         };
-        for name in &["search_memory", "store_memory"] {
+        for name in &["search_memory", "store_memory", "recall_memory"] {
             if let Some(route) = router.map.get_mut(*name) {
                 route.attr.meta = Some(sandbox_meta.clone());
             }
@@ -225,6 +237,16 @@ pub struct FeedbackMemoryParams {
     pub id: String,
     /// Feedback signal: "useful" or "irrelevant"
     pub signal: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RecallMemoryParams {
+    /// Query text to find relevant memories for context injection
+    pub query: String,
+    /// Session ID for dedup tracking. Auto-generated if omitted; return value includes session_id.
+    pub session_id: Option<String>,
+    /// Set to true to clear session recall history (e.g., after context compaction).
+    pub reset: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -1331,6 +1353,83 @@ Callable from code_execution_20260120 sandboxes.")]
 
         match pg_store.apply_feedback(&params.id, &params.signal).await {
             Ok(()) => Ok(CallToolResult::structured(json!({ "ok": true }))),
+            Err(e) => Ok(store_error_to_result(e)),
+        }
+    }
+
+    #[tool(description = "Recall relevant memories for automatic context injection. \
+Returns up to N memories above relevance threshold, excluding already-recalled memories for this session. \
+Session-scoped dedup prevents re-injection within a conversation. \
+Returns {\"session_id\": \"...\", \"count\": N, \"memories\": [{\"memory_id\": \"uuid\", \"content\": \"...\", \"relevance\": 0.84}]}. \
+Callable from code_execution_20260120 sandboxes.")]
+    async fn recall_memory(
+        &self,
+        Parameters(params): Parameters<RecallMemoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tracing::info!(
+            tool = "recall_memory",
+            session_id = ?params.session_id,
+            reset = params.reset.unwrap_or(false),
+            "Tool called"
+        );
+
+        if params.query.trim().is_empty() {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": "Field 'query' is required and cannot be empty",
+                "field": "query"
+            })));
+        }
+
+        // Embed query using inline embedding provider (same as search_memory).
+        let embedding_provider = match &self.embedding_provider {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": "recall_memory requires an embedding provider — start with 'memcp serve' which loads the provider on startup"
+                })));
+            }
+        };
+
+        let query_embedding = match embedding_provider.embed(&params.query).await {
+            Ok(emb) => emb,
+            Err(e) => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": format!("Embedding failed: {}", e)
+                })));
+            }
+        };
+
+        // Get pg_store (required for recall session methods).
+        let pg_store = match &self.pg_store {
+            Some(s) => Arc::clone(s),
+            None => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": "recall_memory requires PostgreSQL store"
+                })));
+            }
+        };
+
+        // Create RecallEngine and execute.
+        let engine = crate::recall::RecallEngine::new(
+            pg_store,
+            self.recall_config.clone(),
+            self.extraction_enabled,
+        );
+
+        let result = engine
+            .recall(&query_embedding, params.session_id, params.reset.unwrap_or(false))
+            .await;
+
+        match result {
+            Ok(r) => Ok(CallToolResult::structured(json!({
+                "session_id": r.session_id,
+                "count": r.count,
+                "memories": r.memories,
+            }))),
             Err(e) => Ok(store_error_to_result(e)),
         }
     }

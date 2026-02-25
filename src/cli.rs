@@ -232,7 +232,7 @@ pub async fn cmd_search(
     created_after: Option<String>,
     created_before: Option<String>,
     tags: Option<Vec<String>>,
-    source: Option<String>,
+    source: Option<Vec<String>>,
     audience: Option<String>,
     type_hint: Option<String>,
     verbose: bool,
@@ -308,7 +308,7 @@ pub async fn cmd_search(
             Some(60.0),  // bm25_k default
             vector_k,    // Some(60.0) when daemon alive, None when offline
             Some(40.0),  // symbolic_k default
-            source.as_deref(),
+            source.as_deref(),  // multi-source OR filter
             audience.as_deref(),
         )
         .await
@@ -508,8 +508,8 @@ pub async fn cmd_search(
                     })
                     .unwrap_or_default();
                 println!(
-                    "{} {:.3} {} [{}]",
-                    id_short, h.salience_score, snippet, tags_str
+                    "{} {:.3} {} ({}) [{}]",
+                    id_short, h.salience_score, snippet, h.memory.source, tags_str
                 );
             }
         }
@@ -1007,6 +1007,53 @@ pub async fn cmd_gc(
         });
         println!("{}", serde_json::to_string(&output)?);
     }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Recall
+// ---------------------------------------------------------------------------
+
+/// Recall relevant memories for automatic context injection.
+///
+/// Requires the daemon to be running (for query embedding via IPC).
+/// Outputs JSON: { "session_id": "...", "count": N, "memories": [...] }
+pub async fn cmd_recall(
+    store: &Arc<PostgresMemoryStore>,
+    config: &Config,
+    query: &str,
+    session_id: Option<String>,
+    reset: bool,
+) -> Result<()> {
+    // Recall requires vector similarity — embed via daemon.
+    let query_embedding = match embed_via_daemon(query).await {
+        Some(emb) => emb,
+        None => {
+            eprintln!("error: recall requires the daemon to be running for query embedding");
+            eprintln!("hint: start the daemon with 'memcp daemon start'");
+            std::process::exit(1);
+        }
+    };
+
+    // Create RecallEngine with store, config, and extraction flag.
+    let engine = crate::recall::RecallEngine::new(
+        Arc::clone(store),
+        config.recall.clone(),
+        config.extraction.enabled,
+    );
+
+    // Execute recall.
+    let result = engine.recall(&query_embedding, session_id, reset).await
+        .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?;
+
+    // Output compact JSON projection (per CONTEXT.md: only memory_id, content, relevance).
+    let output = serde_json::json!({
+        "session_id": result.session_id,
+        "count": result.count,
+        "memories": result.memories,
+    });
+    println!("{}", serde_json::to_string_pretty(&output)?);
 
     Ok(())
 }
