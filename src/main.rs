@@ -73,6 +73,10 @@ enum Commands {
         actor_type: String,
         #[arg(long, default_value = "global")]
         audience: String,
+        /// Optional idempotency key for at-most-once store semantics.
+        /// Repeated calls with the same key return the original memory.
+        #[arg(long)]
+        idempotency_key: Option<String>,
     },
     /// Search memories by keyword + metadata matching with salience ranking
     Search {
@@ -454,9 +458,9 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        Commands::Store { content, type_hint, source, tags, actor, actor_type, audience } => {
+        Commands::Store { content, type_hint, source, tags, actor, actor_type, audience, idempotency_key } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_store(&store, content, type_hint, source, tags, actor, actor_type, audience).await?;
+            cli::cmd_store(&store, content, type_hint, source, tags, actor, actor_type, audience, idempotency_key).await?;
         }
 
         Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience } => {

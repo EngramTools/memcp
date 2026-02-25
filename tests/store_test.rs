@@ -23,6 +23,7 @@ async fn test_store_and_get_memory(pool: PgPool) {
             actor: None,
             actor_type: "agent".to_string(),
             audience: "global".to_string(),
+            idempotency_key: None,
         })
         .await
         .unwrap();
@@ -53,6 +54,7 @@ async fn test_update_memory(pool: PgPool) {
             actor: None,
             actor_type: "agent".to_string(),
             audience: "global".to_string(),
+            idempotency_key: None,
         })
         .await
         .unwrap();
@@ -89,6 +91,7 @@ async fn test_delete_memory(pool: PgPool) {
             actor: None,
             actor_type: "agent".to_string(),
             audience: "global".to_string(),
+            idempotency_key: None,
         })
         .await
         .unwrap();
@@ -114,6 +117,7 @@ async fn test_list_memories_with_pagination(pool: PgPool) {
                 actor: None,
                 actor_type: "agent".to_string(),
                 audience: "global".to_string(),
+                idempotency_key: None,
             })
             .await
             .unwrap();
@@ -179,6 +183,7 @@ async fn test_list_memories_with_filter(pool: PgPool) {
                 actor: None,
                 actor_type: "agent".to_string(),
                 audience: "global".to_string(),
+                idempotency_key: None,
             })
             .await
             .unwrap();
@@ -211,6 +216,7 @@ async fn test_bulk_delete(pool: PgPool) {
             actor: None,
             actor_type: "agent".to_string(),
             audience: "global".to_string(),
+            idempotency_key: None,
         }).await.unwrap();
     }
     for i in 0..2 {
@@ -223,6 +229,7 @@ async fn test_bulk_delete(pool: PgPool) {
             actor: None,
             actor_type: "agent".to_string(),
             audience: "global".to_string(),
+            idempotency_key: None,
         }).await.unwrap();
     }
 
@@ -318,6 +325,7 @@ async fn test_feedback_useful(pool: PgPool) {
             actor: None,
             actor_type: "agent".to_string(),
             audience: "global".to_string(),
+            idempotency_key: None,
         })
         .await
         .unwrap();
@@ -366,6 +374,7 @@ async fn test_feedback_irrelevant(pool: PgPool) {
             actor: None,
             actor_type: "agent".to_string(),
             audience: "global".to_string(),
+            idempotency_key: None,
         })
         .await
         .unwrap();
@@ -418,6 +427,7 @@ async fn test_search_cursor_pagination(pool: PgPool) {
                 actor: None,
                 actor_type: "agent".to_string(),
                 audience: "global".to_string(),
+                idempotency_key: None,
             })
             .await
             .unwrap();
@@ -486,6 +496,7 @@ async fn test_search_result_has_id(pool: PgPool) {
             actor: None,
             actor_type: "agent".to_string(),
             audience: "global".to_string(),
+            idempotency_key: None,
         })
         .await
         .unwrap();
@@ -535,6 +546,7 @@ async fn test_offset_deprecation_warning(pool: PgPool) {
             actor: None,
             actor_type: "agent".to_string(),
             audience: "global".to_string(),
+            idempotency_key: None,
         })
         .await
         .unwrap();
@@ -582,189 +594,181 @@ async fn test_delete_nonexistent_is_ok(pool: PgPool) {
     );
 }
 
-// IDP-01 and IDP-02 tests require content_hash column and idempotency_keys table
-// (migration 013). Gate them behind wave0_07_7 feature so they compile before the
-// migration exists but are skipped in CI until Task 2 ships.
-#[cfg(feature = "wave0_07_7")]
-mod idempotency_tests {
-    use super::*;
+// IDP-01 and IDP-02 tests — migration 013 ships with Task 2, always compiled.
 
-    /// IDP-01a: Storing identical content within the dedup window returns the same memory ID.
-    #[sqlx::test(migrator = "memcp::MIGRATOR")]
-    async fn test_store_dedup_within_window(pool: PgPool) {
-        let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
+/// IDP-01a: Storing identical content within the dedup window returns the same memory ID.
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_store_dedup_within_window(pool: PgPool) {
+    let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
-        let first = store
-            .store(CreateMemory {
-                content: "hello world".to_string(),
-                type_hint: "fact".to_string(),
-                source: "test".to_string(),
-                tags: None,
-                created_at: None,
-                actor: None,
-                actor_type: "agent".to_string(),
-                audience: "global".to_string(),
-                idempotency_key: None,
-            })
-            .await
-            .unwrap();
+    let first = store
+        .store(CreateMemory {
+            content: "hello world".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "agent".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: None,
+        })
+        .await
+        .unwrap();
 
-        let second = store
-            .store(CreateMemory {
-                content: "hello world".to_string(),
-                type_hint: "fact".to_string(),
-                source: "test".to_string(),
-                tags: None,
-                created_at: None,
-                actor: None,
-                actor_type: "agent".to_string(),
-                audience: "global".to_string(),
-                idempotency_key: None,
-            })
-            .await
-            .unwrap();
+    let second = store
+        .store(CreateMemory {
+            content: "hello world".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "agent".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: None,
+        })
+        .await
+        .unwrap();
 
-        assert_eq!(
-            first.id, second.id,
-            "Duplicate content within dedup window must return the same memory ID"
-        );
-    }
+    assert_eq!(
+        first.id, second.id,
+        "Duplicate content within dedup window must return the same memory ID"
+    );
+}
 
-    /// IDP-01b: Storing identical content after the dedup window expires creates a new memory.
-    ///
-    /// This test fakes an expired window by using created_at far enough in the past
-    /// (relative to a very small dedup_window_secs). The store layer must respect
-    /// the window boundary so this returns a distinct ID.
-    #[sqlx::test(migrator = "memcp::MIGRATOR")]
-    async fn test_store_dedup_expired_window(pool: PgPool) {
-        use chrono::Duration;
-        let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
+/// IDP-01b: Storing identical content after the dedup window expires creates a new memory.
+///
+/// Uses created_at far in the past (3600s ago), which is outside the 60s dedup window.
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_store_dedup_expired_window(pool: PgPool) {
+    use chrono::Duration;
+    let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
-        // Store the first memory with a timestamp far in the past (3600s ago).
-        // When dedup_window_secs is 60 (default), this is outside the window.
-        let old_time = chrono::Utc::now() - Duration::seconds(3600);
-        let first = store
-            .store(CreateMemory {
-                content: "dedup expiry test".to_string(),
-                type_hint: "fact".to_string(),
-                source: "test".to_string(),
-                tags: None,
-                created_at: Some(old_time),
-                actor: None,
-                actor_type: "agent".to_string(),
-                audience: "global".to_string(),
-                idempotency_key: None,
-            })
-            .await
-            .unwrap();
+    // Store the first memory with a timestamp far in the past (3600s ago).
+    // When dedup_window_secs is 60 (default), this is outside the window.
+    let old_time = chrono::Utc::now() - Duration::seconds(3600);
+    let first = store
+        .store(CreateMemory {
+            content: "dedup expiry test".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: Some(old_time),
+            actor: None,
+            actor_type: "agent".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: None,
+        })
+        .await
+        .unwrap();
 
-        // Store same content now — the first entry is outside the 60s window.
-        let second = store
-            .store(CreateMemory {
-                content: "dedup expiry test".to_string(),
-                type_hint: "fact".to_string(),
-                source: "test".to_string(),
-                tags: None,
-                created_at: None,
-                actor: None,
-                actor_type: "agent".to_string(),
-                audience: "global".to_string(),
-                idempotency_key: None,
-            })
-            .await
-            .unwrap();
+    // Store same content now — the first entry is outside the 60s window.
+    let second = store
+        .store(CreateMemory {
+            content: "dedup expiry test".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "agent".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: None,
+        })
+        .await
+        .unwrap();
 
-        assert_ne!(
-            first.id, second.id,
-            "Content stored after dedup window expiry must get a new memory ID"
-        );
-    }
+    assert_ne!(
+        first.id, second.id,
+        "Content stored after dedup window expiry must get a new memory ID"
+    );
+}
 
-    /// IDP-02a: Repeated calls with the same idempotency_key return the original memory ID.
-    #[sqlx::test(migrator = "memcp::MIGRATOR")]
-    async fn test_idempotency_key_returns_original(pool: PgPool) {
-        let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
+/// IDP-02a: Repeated calls with the same idempotency_key return the original memory ID.
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_idempotency_key_returns_original(pool: PgPool) {
+    let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
-        let first = store
-            .store(CreateMemory {
-                content: "content A".to_string(),
-                type_hint: "fact".to_string(),
-                source: "test".to_string(),
-                tags: None,
-                created_at: None,
-                actor: None,
-                actor_type: "agent".to_string(),
-                audience: "global".to_string(),
-                idempotency_key: Some("test-key-abc".to_string()),
-            })
-            .await
-            .unwrap();
+    let first = store
+        .store(CreateMemory {
+            content: "content A".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "agent".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: Some("test-key-abc".to_string()),
+        })
+        .await
+        .unwrap();
 
-        let second = store
-            .store(CreateMemory {
-                content: "content A".to_string(),
-                type_hint: "fact".to_string(),
-                source: "test".to_string(),
-                tags: None,
-                created_at: None,
-                actor: None,
-                actor_type: "agent".to_string(),
-                audience: "global".to_string(),
-                idempotency_key: Some("test-key-abc".to_string()),
-            })
-            .await
-            .unwrap();
+    let second = store
+        .store(CreateMemory {
+            content: "content A".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "agent".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: Some("test-key-abc".to_string()),
+        })
+        .await
+        .unwrap();
 
-        assert_eq!(
-            first.id, second.id,
-            "Same idempotency_key must return the original memory ID"
-        );
-    }
+    assert_eq!(
+        first.id, second.id,
+        "Same idempotency_key must return the original memory ID"
+    );
+}
 
-    /// IDP-02b: Storing different content with an already-used idempotency_key returns
-    /// the original memory (AWS/Stripe convention: first wins).
-    #[sqlx::test(migrator = "memcp::MIGRATOR")]
-    async fn test_idempotency_key_conflict(pool: PgPool) {
-        let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
+/// IDP-02b: Storing different content with an already-used idempotency_key returns
+/// the original memory (AWS/Stripe convention: first wins).
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_idempotency_key_conflict(pool: PgPool) {
+    let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
-        let first = store
-            .store(CreateMemory {
-                content: "content A".to_string(),
-                type_hint: "fact".to_string(),
-                source: "test".to_string(),
-                tags: None,
-                created_at: None,
-                actor: None,
-                actor_type: "agent".to_string(),
-                audience: "global".to_string(),
-                idempotency_key: Some("conflict-key-k1".to_string()),
-            })
-            .await
-            .unwrap();
+    let first = store
+        .store(CreateMemory {
+            content: "content A".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "agent".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: Some("conflict-key-k1".to_string()),
+        })
+        .await
+        .unwrap();
 
-        // Different content, same key — must return original (first wins)
-        let second = store
-            .store(CreateMemory {
-                content: "content B — different!".to_string(),
-                type_hint: "fact".to_string(),
-                source: "test".to_string(),
-                tags: None,
-                created_at: None,
-                actor: None,
-                actor_type: "agent".to_string(),
-                audience: "global".to_string(),
-                idempotency_key: Some("conflict-key-k1".to_string()),
-            })
-            .await
-            .unwrap();
+    // Different content, same key — must return original (first wins)
+    let second = store
+        .store(CreateMemory {
+            content: "content B — different!".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "agent".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: Some("conflict-key-k1".to_string()),
+        })
+        .await
+        .unwrap();
 
-        assert_eq!(
-            first.id, second.id,
-            "Conflicting idempotency_key must return original memory ID (first wins)"
-        );
-        assert_eq!(
-            second.content, "content A",
-            "Conflicting idempotency_key must return original memory content"
-        );
-    }
+    assert_eq!(
+        first.id, second.id,
+        "Conflicting idempotency_key must return original memory ID (first wins)"
+    );
+    assert_eq!(
+        second.content, "content A",
+        "Conflicting idempotency_key must return original memory content"
+    );
 }

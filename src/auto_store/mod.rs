@@ -237,6 +237,7 @@ async fn run_worker(
             actor: entry.actor.clone(),
             actor_type: "auto-store".to_string(),
             audience: "global".to_string(),
+            idempotency_key: None,
         };
 
         match store.store(create).await {

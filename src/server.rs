@@ -19,7 +19,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use crate::query_intelligence::{RankedCandidate, temporal::parse_temporal_hint};
 
-use crate::config::{SalienceConfig, SearchConfig};
+use crate::config::{IdempotencyConfig, SalienceConfig, SearchConfig};
 use crate::content_filter::{ContentFilter, FilterVerdict};
 use crate::embedding::{EmbeddingJob, EmbeddingProvider};
 use crate::errors::MemcpError;
@@ -44,6 +44,7 @@ pub struct MemoryService {
     qi_reranking_provider: Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
     qi_config: crate::config::QueryIntelligenceConfig,
     content_filter: Option<Arc<dyn ContentFilter>>,
+    idempotency_config: IdempotencyConfig,
 }
 
 impl MemoryService {
@@ -73,7 +74,15 @@ impl MemoryService {
             qi_reranking_provider,
             qi_config,
             content_filter,
+            idempotency_config: IdempotencyConfig::default(),
         }
+    }
+
+    /// Update the idempotency configuration.
+    ///
+    /// Call after construction with the full Config values (e.g., from main.rs).
+    pub fn set_idempotency_config(&mut self, config: IdempotencyConfig) {
+        self.idempotency_config = config;
     }
 
     fn uptime_seconds(&self) -> u64 {
@@ -122,6 +131,10 @@ pub struct StoreMemoryParams {
     pub actor_type: Option<String>,
     /// Audience scope
     pub audience: Option<String>,
+    /// Optional caller-provided idempotency key for at-most-once store semantics.
+    /// Repeated calls with the same key return the original memory (first wins).
+    /// When absent, content-hash dedup applies within the server's dedup window.
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -343,6 +356,20 @@ Callable from code_execution_20260120 sandboxes.")]
             })));
         }
 
+        // Validate idempotency_key length
+        if let Some(ref key) = params.idempotency_key {
+            if key.len() > self.idempotency_config.max_key_length {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": format!(
+                        "Field 'idempotency_key' exceeds maximum length of {} bytes",
+                        self.idempotency_config.max_key_length
+                    ),
+                    "field": "idempotency_key"
+                })));
+            }
+        }
+
         // Content filter check (before storage)
         if let Some(ref filter) = self.content_filter {
             match filter.check(&params.content).await {
@@ -370,6 +397,7 @@ Callable from code_execution_20260120 sandboxes.")]
             actor: params.actor,
             actor_type: params.actor_type.unwrap_or_else(|| "agent".to_string()),
             audience: params.audience.unwrap_or_else(|| "global".to_string()),
+            idempotency_key: params.idempotency_key,
         };
 
         match self.store.store(input).await {

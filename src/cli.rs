@@ -157,6 +157,7 @@ pub async fn cmd_store(
     actor: Option<String>,
     actor_type: String,
     audience: String,
+    idempotency_key: Option<String>,
 ) -> Result<()> {
     let input = CreateMemory {
         content,
@@ -167,6 +168,7 @@ pub async fn cmd_store(
         actor,
         actor_type,
         audience,
+        idempotency_key,
     };
 
     let memory = store

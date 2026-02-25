@@ -540,6 +540,45 @@ impl Default for DedupConfig {
     }
 }
 
+/// Configuration for the idempotency subsystem.
+///
+/// Controls content-hash dedup window for store operations (IDP-01) and
+/// caller-provided idempotency key TTL and length limits (IDP-02).
+/// Nested env var overrides use double underscores:
+///   MEMCP_IDEMPOTENCY__DEDUP_WINDOW_SECS=120
+///   MEMCP_IDEMPOTENCY__KEY_TTL_SECS=3600
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdempotencyConfig {
+    /// Time window in seconds during which identical content (same hash) is deduplicated.
+    /// Default: 60 seconds. Set to 0 to disable content-hash dedup.
+    #[serde(default = "default_dedup_window_secs")]
+    pub dedup_window_secs: u64,
+
+    /// TTL for idempotency keys in seconds (default: 86400 — 24 hours).
+    /// Keys older than this are eligible for cleanup by the GC worker.
+    #[serde(default = "default_key_ttl_secs")]
+    pub key_ttl_secs: u64,
+
+    /// Maximum allowed length for a caller-provided idempotency_key (default: 256 bytes).
+    /// Requests with longer keys return a Validation error.
+    #[serde(default = "default_max_key_length")]
+    pub max_key_length: usize,
+}
+
+fn default_dedup_window_secs() -> u64 { 60 }
+fn default_key_ttl_secs() -> u64 { 86400 }
+fn default_max_key_length() -> usize { 256 }
+
+impl Default for IdempotencyConfig {
+    fn default() -> Self {
+        IdempotencyConfig {
+            dedup_window_secs: default_dedup_window_secs(),
+            key_ttl_secs: default_key_ttl_secs(),
+            max_key_length: default_max_key_length(),
+        }
+    }
+}
+
 /// Configuration for the garbage collection subsystem.
 ///
 /// GC runs on a schedule (gc_interval_secs) and prunes memories that are
@@ -837,6 +876,11 @@ pub struct Config {
     /// Existing configs without [dedup] section still work (serde default applied).
     #[serde(default)]
     pub dedup: DedupConfig,
+
+    /// Idempotency configuration (content-hash dedup + caller-provided keys).
+    /// Existing configs without [idempotency] section still work (serde default applied).
+    #[serde(default)]
+    pub idempotency: IdempotencyConfig,
 }
 
 fn default_log_level() -> String {
@@ -865,6 +909,7 @@ impl Default for Config {
             status_line: StatusLineConfig::default(),
             gc: GcConfig::default(),
             dedup: DedupConfig::default(),
+            idempotency: IdempotencyConfig::default(),
         }
     }
 }

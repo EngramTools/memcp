@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::config::SearchConfig;
+use crate::config::{IdempotencyConfig, SearchConfig};
 use crate::errors::MemcpError;
 use crate::store::{
     decode_search_keyset_cursor, encode_search_keyset_cursor,
@@ -57,6 +57,8 @@ pub struct PostgresMemoryStore {
     /// None when created by CLI (no embedding provider loaded).
     /// Used for explicit casts in vector queries when needed.
     embedding_dimension: Option<usize>,
+    /// Idempotency configuration: dedup window, key TTL, max key length.
+    idempotency_config: IdempotencyConfig,
 }
 
 impl PostgresMemoryStore {
@@ -119,7 +121,7 @@ impl PostgresMemoryStore {
             false
         };
 
-        Ok(PostgresMemoryStore { pool, paradedb_available, use_paradedb, embedding_dimension: None })
+        Ok(PostgresMemoryStore { pool, paradedb_available, use_paradedb, embedding_dimension: None, idempotency_config: IdempotencyConfig::default() })
     }
 
     /// Create a PostgresMemoryStore from an existing connection pool.
@@ -139,7 +141,35 @@ impl PostgresMemoryStore {
             paradedb_available,
             use_paradedb,
             embedding_dimension: None,
+            idempotency_config: IdempotencyConfig::default(),
         })
+    }
+
+    /// Create a PostgresMemoryStore from an existing pool with an explicit IdempotencyConfig.
+    ///
+    /// Used in production paths where the full Config is available.
+    pub async fn from_pool_with_idempotency(pool: PgPool, idempotency_config: IdempotencyConfig) -> Result<Self, MemcpError> {
+        let search_config = SearchConfig::default();
+        let paradedb_available = Self::detect_paradedb(&pool).await;
+        let use_paradedb = if search_config.bm25_backend == "paradedb" {
+            paradedb_available
+        } else {
+            false
+        };
+        Ok(Self {
+            pool,
+            paradedb_available,
+            use_paradedb,
+            embedding_dimension: None,
+            idempotency_config,
+        })
+    }
+
+    /// Update the idempotency configuration after construction.
+    ///
+    /// Typically called after loading the full Config, before the store handles requests.
+    pub fn set_idempotency_config(&mut self, config: IdempotencyConfig) {
+        self.idempotency_config = config;
     }
 
     /// Truncate all benchmark-relevant tables: memories, memory_embeddings, memory_salience, memory_consolidations.
@@ -253,6 +283,19 @@ fn decode_cursor(cursor: &str) -> Result<(DateTime<Utc>, String), MemcpError> {
     Ok((created_at, id_str.to_string()))
 }
 
+/// Compute FNV-1a 64-bit hash of content string.
+///
+/// FNV-1a is deterministic, cross-process stable, and requires no external dependencies.
+/// Used for content-hash dedup: identical content produces the same hex string.
+fn content_hash(content: &str) -> String {
+    let mut hash: u64 = 14695981039346656037;
+    for byte in content.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    format!("{:016x}", hash)
+}
+
 /// Map a sqlx PgRow to a Memory struct.
 ///
 /// PostgreSQL native types map directly:
@@ -286,7 +329,68 @@ fn row_to_memory(row: &PgRow) -> Result<Memory, MemcpError> {
 
 #[async_trait]
 impl MemoryStore for PostgresMemoryStore {
+    /// Store a new memory with idempotency guarantees.
+    ///
+    /// Dedup priority (highest first):
+    ///   1. Caller-provided idempotency_key: if key exists and is not expired, return original.
+    ///   2. Content-hash dedup: if identical content was stored within dedup_window_secs, return existing.
+    ///   3. Otherwise: insert new memory, write content_hash, register idempotency key if provided.
+    ///
+    /// Per CONTEXT.md locked decisions:
+    ///   - Silent return: same response shape as new store — caller cannot distinguish dedup hit.
+    ///   - No metadata updates: existing memory stays exactly as originally stored (true no-op).
     async fn store(&self, input: CreateMemory) -> Result<Memory, MemcpError> {
+        // --- Step 1: Idempotency key lookup (highest priority) ---
+        if let Some(ref key) = input.idempotency_key {
+            let existing_row = sqlx::query(
+                "SELECT m.id, m.content, m.type_hint, m.source, m.tags, m.created_at, m.updated_at, \
+                 m.last_accessed_at, m.access_count, m.embedding_status, \
+                 m.extracted_entities, m.extracted_facts, m.extraction_status, \
+                 m.is_consolidated_original, m.consolidated_into, m.actor, m.actor_type, m.audience \
+                 FROM idempotency_keys ik \
+                 JOIN memories m ON m.id = ik.memory_id \
+                 WHERE ik.key = $1 AND ik.expires_at > NOW() AND m.deleted_at IS NULL",
+            )
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to query idempotency key: {}", e)))?;
+
+            if let Some(row) = existing_row {
+                tracing::info!(idempotency_key = %key, "store: idempotency key hit, returning existing memory");
+                return row_to_memory(&row);
+            }
+        }
+
+        // --- Step 2: Content-hash dedup ---
+        let hash = content_hash(&input.content);
+        if self.idempotency_config.dedup_window_secs > 0 {
+            let window = self.idempotency_config.dedup_window_secs as i64;
+            let existing_row = sqlx::query(
+                "SELECT id, content, type_hint, source, tags, created_at, updated_at, \
+                 last_accessed_at, access_count, embedding_status, \
+                 extracted_entities, extracted_facts, extraction_status, \
+                 is_consolidated_original, consolidated_into, actor, actor_type, audience \
+                 FROM memories \
+                 WHERE content_hash = $1 AND deleted_at IS NULL \
+                   AND created_at > NOW() - ($2 || ' seconds')::interval \
+                 ORDER BY created_at DESC \
+                 LIMIT 1",
+            )
+            .bind(&hash)
+            .bind(window.to_string())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to query content hash dedup: {}", e)))?;
+
+            if let Some(row) = existing_row {
+                let existing_id: String = row.try_get("id").map_err(|e| MemcpError::Storage(e.to_string()))?;
+                tracing::info!(content_hash = %hash, existing_id = %existing_id, "store: content-hash dedup hit, returning existing memory");
+                return row_to_memory(&row);
+            }
+        }
+
+        // --- Step 3: Insert new memory ---
         let id = Uuid::new_v4().to_string();
         let now = input.created_at.unwrap_or_else(Utc::now);
 
@@ -297,8 +401,8 @@ impl MemoryStore for PostgresMemoryStore {
             .map(|t| serde_json::json!(t));
 
         sqlx::query(
-            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10)",
+            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11)",
         )
         .bind(&id)
         .bind(&input.content)
@@ -310,9 +414,33 @@ impl MemoryStore for PostgresMemoryStore {
         .bind(&input.actor)
         .bind(&input.actor_type)
         .bind(&input.audience)
+        .bind(&hash)          // content_hash for dedup
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to insert memory: {}", e)))?;
+
+        // --- Step 4: Register idempotency key if provided ---
+        if let Some(ref key) = input.idempotency_key {
+            let ttl = self.idempotency_config.key_ttl_secs as i64;
+            if let Err(e) = sqlx::query(
+                "INSERT INTO idempotency_keys (key, memory_id, expires_at) \
+                 VALUES ($1, $2, NOW() + ($3 || ' seconds')::interval) \
+                 ON CONFLICT (key) DO NOTHING",
+            )
+            .bind(key)
+            .bind(&id)
+            .bind(ttl.to_string())
+            .execute(&self.pool)
+            .await
+            {
+                // Log but don't fail — the memory was already inserted
+                tracing::warn!(
+                    idempotency_key = %key,
+                    error = %e,
+                    "store: failed to register idempotency key (memory was still stored)"
+                );
+            }
+        }
 
         Ok(Memory {
             id,
@@ -438,17 +566,18 @@ impl MemoryStore for PostgresMemoryStore {
         row_to_memory(&updated_row)
     }
 
+    /// Delete a memory by ID. Idempotent: returns Ok(()) even if the memory does not exist.
+    ///
+    /// Per IDP-03: callers (MCP sandboxes, CLI) can safely retry delete without errors.
+    /// If the memory already doesn't exist (or was already deleted), this is a silent no-op.
     async fn delete(&self, id: &str) -> Result<(), MemcpError> {
-        let result = sqlx::query("DELETE FROM memories WHERE id = $1")
+        sqlx::query("DELETE FROM memories WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await
             .map_err(|e| MemcpError::Storage(e.to_string()))?;
 
-        if result.rows_affected() == 0 {
-            return Err(MemcpError::NotFound { id: id.to_string() });
-        }
-
+        // Idempotent: rows_affected == 0 is fine — memory already didn't exist
         Ok(())
     }
 

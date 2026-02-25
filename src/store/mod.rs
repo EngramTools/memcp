@@ -81,6 +81,11 @@ pub struct CreateMemory {
     /// Audience scope: "global" (default), "self", "tenant"
     #[serde(default = "default_audience")]
     pub audience: String,
+    /// Optional caller-provided idempotency key for at-most-once store semantics.
+    /// Repeated calls with the same key return the original memory (first wins).
+    /// When absent, content-hash dedup applies within the configured window.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 fn default_type_hint() -> String {
