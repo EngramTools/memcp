@@ -1,3 +1,9 @@
+//! Hybrid search with salience scoring.
+//!
+//! Combines BM25 text search and pgvector cosine similarity (RRF fusion).
+//! Salience scoring adjusts results by recency, access frequency, reinforcement, and FSRS stability.
+//! Feeds from storage/ (search queries) and intelligence/embedding/ (query vectors).
+
 pub mod salience;
 
 // Re-export key types for convenience

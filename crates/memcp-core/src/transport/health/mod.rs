@@ -1,3 +1,9 @@
+//! Health HTTP server — axum-based liveness and status endpoints.
+//!
+//! Provides /health (liveness probe, sub-ms AtomicBool check) and /status
+//! (component health + resource usage). Runs on separate configurable port.
+//! Spawned by transport/daemon, queries storage/ for live metrics.
+
 /// Health HTTP server for container lifecycle probes.
 ///
 /// Provides:

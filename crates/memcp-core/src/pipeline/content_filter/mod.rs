@@ -1,3 +1,9 @@
+//! Ingestion-time content filtering — regex patterns and semantic topic exclusion.
+//!
+//! CompositeFilter applies regex pattern matching and optional semantic similarity
+//! to exclude unwanted content at ingestion time. Used by transport/server (MCP store)
+//! and pipeline/auto_store/ (sidecar ingestion).
+
 /// Content filtering module for ingestion-time topic exclusion.
 ///
 /// Two-tier system: regex patterns (fast, deterministic) then semantic

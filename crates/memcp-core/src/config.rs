@@ -1,3 +1,8 @@
+//! Configuration structs loaded from memcp.toml, environment variables, and defaults.
+//!
+//! Uses figment for layered config (defaults -> file -> env). Every subsystem has its own
+//! config struct (EmbeddingConfig, SalienceConfig, GcConfig, etc.) nested under the root Config.
+
 /// Configuration management using figment
 ///
 /// Loads configuration with this precedence (highest wins):

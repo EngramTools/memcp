@@ -1,3 +1,9 @@
+//! Auto-summarization of AI responses before storage.
+//!
+//! SummarizationProvider trait with Ollama and OpenAI implementations.
+//! Used by auto-store sidecar to compress assistant responses.
+//! Feeds into pipeline/auto_store/ (summarized content for storage).
+
 /// Summarization provider trait and supporting types.
 ///
 /// Provides a pluggable interface for summarizing AI assistant responses

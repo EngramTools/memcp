@@ -1,3 +1,8 @@
+//! Search quality benchmark harness (LongMemEval).
+//!
+//! Provides dataset ingestion, search evaluation, and reporting for
+//! benchmarking the memcp search pipeline. Used by the benchmark binary.
+
 /// Benchmark module for LongMemEval evaluation pipeline.
 ///
 /// Provides dataset types, ingestion logic, and shared result types

@@ -1,3 +1,8 @@
+//! Error types for memcp operations.
+//!
+//! MemcpError covers validation, not-found, config, storage, and cap-exceeded errors.
+//! Used across all layers.
+
 /// Domain-specific error types for memcp
 ///
 /// Provides actionable error messages with detailed context to enable

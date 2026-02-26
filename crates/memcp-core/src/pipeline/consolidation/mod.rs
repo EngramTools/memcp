@@ -1,3 +1,8 @@
+//! Memory consolidation — deduplication by semantic similarity.
+//!
+//! Groups similar memories and merges them into consolidated entries.
+//! Triggered after embedding pipeline completes. Feeds from storage/ + intelligence/embedding/.
+
 /// Memory consolidation module.
 ///
 /// Non-destructive memory deduplication pipeline:

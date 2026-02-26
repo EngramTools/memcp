@@ -1,7 +1,8 @@
-/// Memory store abstraction layer
-///
-/// Provides the MemoryStore trait and associated types for CRUD operations on memories.
-/// The trait abstraction enables multiple database backends — currently PostgreSQL.
+//! Memory store abstraction layer.
+//!
+//! Provides the MemoryStore trait and associated types (Memory, CreateMemory, SearchFilter, etc.)
+//! for CRUD operations on memories. The PostgreSQL implementation lives in `postgres.rs`.
+//! All intelligence/ and pipeline/ modules depend on types exported here.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

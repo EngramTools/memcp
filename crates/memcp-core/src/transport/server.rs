@@ -1,3 +1,9 @@
+//! MCP server — rmcp-based tool handler for stdio transport.
+//!
+//! MemoryService implements ServerHandler with tools: store_memory, search_memory,
+//! update_memory, delete_memory, list_memories, recall_memory, feedback_memory, etc.
+//! Wires together storage/, intelligence/, and pipeline/ layers.
+
 use rmcp::{
     ServerHandler,
     tool,

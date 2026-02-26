@@ -1,3 +1,9 @@
+//! CLI subcommand handlers.
+//!
+//! Each cmd_* function implements a CLI subcommand (store, search, list, get, delete, etc.).
+//! Called from the binary crate's main.rs dispatcher. Uses storage/ for DB access,
+//! intelligence/ for search/recall, and transport/ipc for daemon communication.
+
 /// CLI subcommand handlers for memcp
 ///
 /// Each `cmd_*` function takes primitive args (not the Commands enum from main.rs)

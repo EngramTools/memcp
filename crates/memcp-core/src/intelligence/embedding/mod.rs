@@ -1,7 +1,8 @@
-/// Embedding provider trait and supporting types
-///
-/// Provides a pluggable interface for text embedding generation.
-/// Supports local fastembed models (default, no API key) and OpenAI API.
+//! Embedding generation pipeline.
+//!
+//! Provides the EmbeddingProvider trait with local (fastembed) and OpenAI implementations.
+//! The pipeline module handles async batch processing. Feeds from storage/ (memories to embed),
+//! feeds into intelligence/search/ (query embedding) and pipeline/consolidation/ (similarity).
 
 #[cfg(feature = "local-embed")]
 pub mod local;

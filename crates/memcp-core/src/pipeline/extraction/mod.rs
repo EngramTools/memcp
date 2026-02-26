@@ -1,3 +1,9 @@
+//! Entity and fact extraction pipeline.
+//!
+//! Extracts named entities and facts from memory content via LLM providers (Ollama/OpenAI).
+//! Feeds from storage/ (memories with extraction_status=pending),
+//! feeds into storage/ (updates extracted_entities, extracted_facts columns).
+
 /// Extraction provider trait and supporting types
 ///
 /// Provides a pluggable interface for entity and fact extraction from memory content.

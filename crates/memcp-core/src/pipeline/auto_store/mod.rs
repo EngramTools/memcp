@@ -1,3 +1,9 @@
+//! Auto-store sidecar — watches JSONL session files and ingests memories.
+//!
+//! Parses Claude Code / OpenClaw session logs, applies category filtering,
+//! optional summarization, and stores memories via storage/. Watches directories
+//! for new files. Feeds from pipeline/content_filter/ and pipeline/summarization/.
+
 /// Auto-store sidecar — automatic memory ingestion from conversation logs.
 ///
 /// Watches configured log files, parses new entries, filters for relevance,

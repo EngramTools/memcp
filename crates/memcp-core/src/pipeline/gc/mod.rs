@@ -1,3 +1,9 @@
+//! Garbage collection — salience-threshold pruning, TTL expiry, and hard purge.
+//!
+//! Background worker prunes low-salience memories after configurable age.
+//! Soft-delete via deleted_at, hard purge after grace period.
+//! Feeds from storage/ (candidate queries), runs as daemon worker via transport/daemon.
+
 /// Garbage collection module for memory hygiene.
 ///
 /// Provides salience-based pruning, TTL expiry, dry-run support, hard purge,

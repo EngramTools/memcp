@@ -1,3 +1,9 @@
+//! Query expansion and LLM-based re-ranking.
+//!
+//! QueryIntelligenceProvider trait with Ollama and OpenAI implementations.
+//! Expansion generates alternative query terms; reranking scores search candidates.
+//! Feeds from transport/server + transport/ipc into intelligence/search/.
+
 /// Query intelligence provider trait and supporting types
 ///
 /// Provides a pluggable interface for LLM-based query expansion and re-ranking.

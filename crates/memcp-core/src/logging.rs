@@ -1,3 +1,8 @@
+//! Tracing/logging initialization.
+//!
+//! Configures tracing-subscriber with env-filter. All output goes to stderr
+//! (stdout reserved for JSON-RPC in MCP serve mode).
+
 /// Structured logging setup using tracing
 ///
 /// CRITICAL: Writes to stderr ONLY (never stdout) to avoid corrupting JSON-RPC stream.
