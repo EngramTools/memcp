@@ -2361,7 +2361,10 @@ impl PostgresMemoryStore {
                 .map(|row| {
                     let memory_id: String = row.get("memory_id");
                     let content: String = row.get("content");
-                    let relevance: f32 = row.get("relevance");
+                    // pgvector cosine distance returns FLOAT8; read as f64 then downcast
+                    let relevance: f32 = row.try_get::<f64, _>("relevance").map(|v| v as f32)
+                        .or_else(|_| row.try_get::<f32, _>("relevance"))
+                        .unwrap_or(0.0);
                     (memory_id, content, relevance)
                 })
                 .collect();
@@ -2400,7 +2403,10 @@ impl PostgresMemoryStore {
                 .map(|row| {
                     let memory_id: String = row.get("memory_id");
                     let content: String = row.get("content");
-                    let relevance: f32 = row.get("relevance");
+                    // pgvector cosine distance returns FLOAT8; read as f64 then downcast
+                    let relevance: f32 = row.try_get::<f64, _>("relevance").map(|v| v as f32)
+                        .or_else(|_| row.try_get::<f32, _>("relevance"))
+                        .unwrap_or(0.0);
                     (memory_id, content, relevance)
                 })
                 .collect();
