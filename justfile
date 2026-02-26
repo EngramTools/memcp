@@ -18,6 +18,30 @@ build-release:
 test:
     DATABASE_URL=postgres://memcp:memcp@localhost:5433/memcp cargo test
 
+# Run unit tests only
+test-unit:
+    cargo test --test unit
+
+# Run integration tests only
+test-integration:
+    DATABASE_URL=postgres://memcp:memcp@localhost:5433/memcp cargo test --test recall_test --test feedback_test --test embedding_pipeline_test --test gc_dedup_test --test summarization_test --test store_test
+
+# Run E2E tests only
+test-e2e:
+    DATABASE_URL=postgres://memcp:memcp@localhost:5433/memcp cargo test --test journey_test --test auto_store_e2e --test mcp_contract
+
+# Run golden search quality tests (requires fastembed model via local-embed feature)
+test-golden:
+    DATABASE_URL=postgres://memcp:memcp@localhost:5433/memcp cargo test --test search_quality -- --ignored --nocapture
+
+# Run all tests with coverage report (opens HTML report in browser)
+coverage:
+    DATABASE_URL=postgres://memcp:memcp@localhost:5433/memcp cargo llvm-cov --all-features --workspace --html --open
+
+# Run all tests with coverage and fail if below threshold (matches CI threshold)
+coverage-check:
+    DATABASE_URL=postgres://memcp:memcp@localhost:5433/memcp cargo llvm-cov --all-features --workspace --fail-under-lines 75
+
 # Run clippy lints
 lint:
     cargo clippy -- -D warnings
