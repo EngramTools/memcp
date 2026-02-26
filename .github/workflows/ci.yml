@@ -33,7 +33,7 @@ jobs:
       - run: cargo clippy -- -D warnings
 
   test:
-    name: Test
+    name: Test + Coverage
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -52,9 +52,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
-      - name: Run tests
-        run: cargo test --verbose
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Run tests with coverage
+        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info --fail-under-lines 75
+        env:
+          DATABASE_URL: postgres://memcp:memcp@localhost:5432/memcp
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: lcov.info
+
+  golden-tests:
+    name: Search Quality
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: memcp
+          POSTGRES_PASSWORD: memcp
+          POSTGRES_DB: memcp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memcp"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run golden search quality tests
+        run: cargo test --test search_quality -- --ignored --nocapture
         env:
           DATABASE_URL: postgres://memcp:memcp@localhost:5432/memcp
 
