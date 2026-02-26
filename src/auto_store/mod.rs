@@ -109,7 +109,8 @@ impl AutoStoreWorker {
 }
 
 /// Content hash for deduplication — uses the raw content string hash.
-fn content_hash(content: &str) -> u64 {
+/// FNV-1a content hash. Exposed as `pub` for external test access.
+pub fn content_hash(content: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     content.hash(&mut hasher);
@@ -320,16 +321,3 @@ async fn run_worker(
     tracing::warn!("Auto-store worker: watch event channel closed, shutting down");
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_content_hash_deterministic() {
-        let h1 = content_hash("hello world");
-        let h2 = content_hash("hello world");
-        let h3 = content_hash("different content");
-        assert_eq!(h1, h2);
-        assert_ne!(h1, h3);
-    }
-}

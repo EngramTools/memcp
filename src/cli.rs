@@ -709,7 +709,8 @@ pub async fn cmd_reinforce(
 }
 
 /// Format a timestamp as a human-readable relative time string (e.g., "5m ago").
-fn format_relative_time(dt: DateTime<Utc>) -> String {
+/// Exposed as `pub` for external test access.
+pub fn format_relative_time(dt: DateTime<Utc>) -> String {
     let secs = (Utc::now() - dt).num_seconds().max(0);
     match secs {
         s if s < 60 => format!("{}s ago", s),
@@ -1117,23 +1118,3 @@ pub fn cmd_statusline_remove() -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_format_relative_time() {
-        let now = Utc::now();
-        assert!(format_relative_time(now).contains("s ago"));
-        assert!(format_relative_time(now - chrono::Duration::minutes(5)).contains("5m ago"));
-        assert!(format_relative_time(now - chrono::Duration::hours(2)).contains("2h ago"));
-        assert!(format_relative_time(now - chrono::Duration::days(3)).contains("3d ago"));
-    }
-
-    #[test]
-    fn test_format_relative_time_negative_clamps_to_zero() {
-        // Future time should clamp to 0s ago
-        let future = Utc::now() + chrono::Duration::hours(1);
-        assert!(format_relative_time(future).contains("0s ago"));
-    }
-}

@@ -91,7 +91,8 @@ impl SemanticTopicFilter {
 /// Compute cosine similarity between two vectors.
 ///
 /// Returns 0.0 if either vector has zero norm (degenerate case).
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+/// Compute cosine similarity between two f32 vectors. Exposed as `pub` for external test access.
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -101,31 +102,3 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     (dot / (norm_a * norm_b)) as f64
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cosine_similarity_identical() {
-        let a = vec![1.0, 0.0, 0.0];
-        let b = vec![1.0, 0.0, 0.0];
-        let sim = cosine_similarity(&a, &b);
-        assert!((sim - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_cosine_similarity_orthogonal() {
-        let a = vec![1.0, 0.0, 0.0];
-        let b = vec![0.0, 1.0, 0.0];
-        let sim = cosine_similarity(&a, &b);
-        assert!(sim.abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_cosine_similarity_zero_vector() {
-        let a = vec![1.0, 2.0, 3.0];
-        let b = vec![0.0, 0.0, 0.0];
-        let sim = cosine_similarity(&a, &b);
-        assert_eq!(sim, 0.0);
-    }
-}
