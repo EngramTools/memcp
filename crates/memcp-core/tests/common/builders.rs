@@ -86,6 +86,9 @@ impl MemoryBuilder {
             actor_type: self.actor_type,
             audience: self.audience,
             idempotency_key: self.idempotency_key,
+            parent_id: None,
+            chunk_index: None,
+            total_chunks: None,
         }
     }
 }

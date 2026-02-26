@@ -259,6 +259,9 @@ async fn run_worker(
             actor_type: "auto-store".to_string(),
             audience: "global".to_string(),
             idempotency_key: None,
+            parent_id: None,
+            chunk_index: None,
+            total_chunks: None,
         };
 
         match store.store(create).await {

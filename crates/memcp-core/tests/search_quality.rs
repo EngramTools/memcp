@@ -80,6 +80,9 @@ async fn store_with_real_embedding(
             audience: "global".to_string(),
             idempotency_key: None,
             created_at: None,
+            parent_id: None,
+            chunk_index: None,
+            total_chunks: None,
         })
         .await
         .expect("Failed to store golden memory");

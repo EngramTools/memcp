@@ -545,6 +545,52 @@ impl Default for DedupConfig {
     }
 }
 
+/// Configuration for memory chunking.
+///
+/// When enabled, long auto-store content is split into overlapping sentence-grouped
+/// chunks with separate embeddings for better retrieval granularity. Only affects
+/// auto-store ingestion — explicit store operations are never chunked.
+///
+/// Nested env var overrides use double underscores:
+///   MEMCP_CHUNKING__ENABLED=false
+///   MEMCP_CHUNKING__MAX_CHUNK_CHARS=1024
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkingConfig {
+    /// Enable chunking for auto-store content (default: true)
+    #[serde(default = "default_chunking_enabled")]
+    pub enabled: bool,
+
+    /// Maximum characters per chunk (~4 chars/token, so 1024 chars ~= 256 tokens).
+    #[serde(default = "default_max_chunk_chars")]
+    pub max_chunk_chars: usize,
+
+    /// Number of sentences to overlap between adjacent chunks (default: 2).
+    #[serde(default = "default_overlap_sentences")]
+    pub overlap_sentences: usize,
+
+    /// Minimum content length (in chars) to trigger chunking.
+    /// Content shorter than this is stored as a single memory.
+    /// ~512 tokens = ~2048 chars.
+    #[serde(default = "default_min_content_chars")]
+    pub min_content_chars: usize,
+}
+
+fn default_chunking_enabled() -> bool { true }
+fn default_max_chunk_chars() -> usize { 1024 }
+fn default_overlap_sentences() -> usize { 2 }
+fn default_min_content_chars() -> usize { 2048 }
+
+impl Default for ChunkingConfig {
+    fn default() -> Self {
+        ChunkingConfig {
+            enabled: default_chunking_enabled(),
+            max_chunk_chars: default_max_chunk_chars(),
+            overlap_sentences: default_overlap_sentences(),
+            min_content_chars: default_min_content_chars(),
+        }
+    }
+}
+
 /// Configuration for the recall subsystem (automatic context injection).
 ///
 /// Recall surfaces the most relevant memories at the start of a session
@@ -1028,6 +1074,12 @@ pub struct Config {
     /// Existing configs without [resource_caps] section still work (serde default applied).
     #[serde(default)]
     pub resource_caps: ResourceCapsConfig,
+
+    /// Memory chunking configuration.
+    /// When enabled, long auto-store content is split into overlapping chunks.
+    /// Existing configs without [chunking] section still work (serde default applied).
+    #[serde(default)]
+    pub chunking: ChunkingConfig,
 }
 
 fn default_log_level() -> String {
@@ -1060,6 +1112,7 @@ impl Default for Config {
             recall: RecallConfig::default(),
             health: HealthConfig::default(),
             resource_caps: ResourceCapsConfig::default(),
+            chunking: ChunkingConfig::default(),
         }
     }
 }

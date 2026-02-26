@@ -324,6 +324,9 @@ fn row_to_memory(row: &PgRow) -> Result<Memory, MemcpError> {
         actor: row.try_get("actor").unwrap_or(None),
         actor_type: row.try_get("actor_type").unwrap_or_else(|_| "agent".to_string()),
         audience: row.try_get("audience").unwrap_or_else(|_| "global".to_string()),
+        parent_id: row.try_get("parent_id").unwrap_or(None),
+        chunk_index: row.try_get("chunk_index").unwrap_or(None),
+        total_chunks: row.try_get("total_chunks").unwrap_or(None),
     })
 }
 
@@ -346,7 +349,8 @@ impl MemoryStore for PostgresMemoryStore {
                 "SELECT m.id, m.content, m.type_hint, m.source, m.tags, m.created_at, m.updated_at, \
                  m.last_accessed_at, m.access_count, m.embedding_status, \
                  m.extracted_entities, m.extracted_facts, m.extraction_status, \
-                 m.is_consolidated_original, m.consolidated_into, m.actor, m.actor_type, m.audience \
+                 m.is_consolidated_original, m.consolidated_into, m.actor, m.actor_type, m.audience, \
+                 m.parent_id, m.chunk_index, m.total_chunks \
                  FROM idempotency_keys ik \
                  JOIN memories m ON m.id = ik.memory_id \
                  WHERE ik.key = $1 AND ik.expires_at > NOW() AND m.deleted_at IS NULL",
@@ -370,7 +374,8 @@ impl MemoryStore for PostgresMemoryStore {
                 "SELECT id, content, type_hint, source, tags, created_at, updated_at, \
                  last_accessed_at, access_count, embedding_status, \
                  extracted_entities, extracted_facts, extraction_status, \
-                 is_consolidated_original, consolidated_into, actor, actor_type, audience \
+                 is_consolidated_original, consolidated_into, actor, actor_type, audience, \
+                 parent_id, chunk_index, total_chunks \
                  FROM memories \
                  WHERE content_hash = $1 AND deleted_at IS NULL \
                    AND created_at > NOW() - ($2 || ' seconds')::interval \
@@ -401,8 +406,8 @@ impl MemoryStore for PostgresMemoryStore {
             .map(|t| serde_json::json!(t));
 
         sqlx::query(
-            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11)",
+            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind(&id)
         .bind(&input.content)
@@ -415,6 +420,9 @@ impl MemoryStore for PostgresMemoryStore {
         .bind(&input.actor_type)
         .bind(&input.audience)
         .bind(&hash)          // content_hash for dedup
+        .bind(&input.parent_id)
+        .bind(&input.chunk_index)
+        .bind(&input.total_chunks)
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to insert memory: {}", e)))?;
@@ -461,6 +469,9 @@ impl MemoryStore for PostgresMemoryStore {
             actor: input.actor,
             actor_type: input.actor_type,
             audience: input.audience,
+            parent_id: input.parent_id,
+            chunk_index: input.chunk_index,
+            total_chunks: input.total_chunks,
         })
     }
 
@@ -468,7 +479,7 @@ impl MemoryStore for PostgresMemoryStore {
         let row = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks \
              FROM memories WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(id)
@@ -555,7 +566,7 @@ impl MemoryStore for PostgresMemoryStore {
         let updated_row = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks \
              FROM memories WHERE id = $1",
         )
         .bind(id)
@@ -644,7 +655,7 @@ impl MemoryStore for PostgresMemoryStore {
         let sql = format!(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks \
              FROM memories {} ORDER BY created_at DESC, id ASC LIMIT ${}",
             where_clause, param_idx
         );
@@ -936,7 +947,7 @@ impl PostgresMemoryStore {
         let rows = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks \
              FROM memories WHERE embedding_status IN ('pending', 'failed') AND deleted_at IS NULL \
              ORDER BY created_at ASC LIMIT $1",
         )
@@ -1378,6 +1389,7 @@ impl PostgresMemoryStore {
                     m.extracted_entities, m.extracted_facts, m.extraction_status, \
                     m.is_consolidated_original, m.consolidated_into, \
                     m.actor, m.actor_type, m.audience, \
+                    m.parent_id, m.chunk_index, m.total_chunks, \
                     (1 - (me.embedding <=> $1)) AS similarity \
              FROM memories m \
              JOIN memory_embeddings me ON me.memory_id = m.id \
@@ -1500,7 +1512,7 @@ impl PostgresMemoryStore {
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, \
              last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks \
              FROM memories WHERE id = ANY($1) AND deleted_at IS NULL",
         )
         .bind(ids)
@@ -2594,5 +2606,37 @@ impl PostgresMemoryStore {
                 Ok(Some(embedding))
             }
         }
+    }
+
+    /// Delete all chunks belonging to a parent memory.
+    ///
+    /// Used for re-chunking when parent content changes.
+    /// Returns the number of deleted chunk rows.
+    pub async fn delete_chunks_by_parent(&self, parent_id: &str) -> Result<u64, MemcpError> {
+        let result = sqlx::query("DELETE FROM memories WHERE parent_id = $1")
+            .bind(parent_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to delete chunks for parent {}: {}", parent_id, e)))?;
+        Ok(result.rows_affected())
+    }
+
+    /// Get all chunks for a parent memory, ordered by chunk_index.
+    pub async fn get_chunks_by_parent(&self, parent_id: &str) -> Result<Vec<crate::store::Memory>, MemcpError> {
+        let rows = sqlx::query(
+            "SELECT id, content, type_hint, source, tags, created_at, updated_at, \
+             last_accessed_at, access_count, embedding_status, \
+             extracted_entities, extracted_facts, extraction_status, \
+             is_consolidated_original, consolidated_into, \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks \
+             FROM memories WHERE parent_id = $1 AND deleted_at IS NULL \
+             ORDER BY chunk_index ASC",
+        )
+        .bind(parent_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to get chunks for parent {}: {}", parent_id, e)))?;
+
+        rows.iter().map(row_to_memory).collect()
     }
 }

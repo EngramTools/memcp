@@ -459,6 +459,9 @@ Callable from code_execution_20260120 sandboxes.")]
             actor_type: params.actor_type.unwrap_or_else(|| "agent".to_string()),
             audience: params.audience.unwrap_or_else(|| "global".to_string()),
             idempotency_key: params.idempotency_key,
+            parent_id: None,
+            chunk_index: None,
+            total_chunks: None,
         };
 
         match self.store.store(input).await {

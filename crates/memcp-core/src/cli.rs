@@ -188,6 +188,9 @@ pub async fn cmd_store(
         actor_type,
         audience,
         idempotency_key,
+        parent_id: None,
+        chunk_index: None,
+        total_chunks: None,
     };
 
     let memory = store

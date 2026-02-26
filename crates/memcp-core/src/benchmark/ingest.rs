@@ -63,6 +63,9 @@ pub async fn ingest_question(
                 actor_type: "system".to_string(),
                 audience: "global".to_string(),
                 idempotency_key: None,
+                parent_id: None,
+                chunk_index: None,
+                total_chunks: None,
             };
 
             let stored = store.store(memory).await?;

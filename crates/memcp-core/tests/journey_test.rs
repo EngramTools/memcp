@@ -340,6 +340,9 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
         actor_type: "test".to_string(),
         audience: "global".to_string(),
         idempotency_key: Some("journey-key-1".to_string()),
+        parent_id: None,
+        chunk_index: None,
+        total_chunks: None,
     }).await.unwrap();
 
     // b. Store again with same idempotency_key — should return same ID
@@ -353,6 +356,9 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
         actor_type: "test".to_string(),
         audience: "global".to_string(),
         idempotency_key: Some("journey-key-1".to_string()),
+        parent_id: None,
+        chunk_index: None,
+        total_chunks: None,
     }).await.unwrap();
 
     assert_eq!(
@@ -371,6 +377,9 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
         actor_type: "test".to_string(),
         audience: "global".to_string(),
         idempotency_key: None,
+        parent_id: None,
+        chunk_index: None,
+        total_chunks: None,
     }).await.unwrap();
 
     let fourth = store.store(CreateMemory {
@@ -383,6 +392,9 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
         actor_type: "test".to_string(),
         audience: "global".to_string(),
         idempotency_key: None,
+        parent_id: None,
+        chunk_index: None,
+        total_chunks: None,
     }).await.unwrap();
 
     assert_eq!(
@@ -409,6 +421,9 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
         actor_type: "test".to_string(),
         audience: "global".to_string(),
         idempotency_key: None,
+        parent_id: None,
+        chunk_index: None,
+        total_chunks: None,
     }).await.unwrap();
 
     assert_ne!(
@@ -438,6 +453,9 @@ async fn test_store_list_get_delete_journey(pool: PgPool) {
             actor_type: "test".to_string(),
             audience: "global".to_string(),
             idempotency_key: None,
+            parent_id: None,
+            chunk_index: None,
+            total_chunks: None,
         }).await.unwrap();
     }
 

@@ -53,6 +53,12 @@ pub struct Memory {
     pub actor_type: String,
     /// Audience scope: "global", "self", "tenant"
     pub audience: String,
+    /// Parent memory ID for chunks (None for standalone/parent memories)
+    pub parent_id: Option<String>,
+    /// Zero-based index of this chunk within the parent's chunk family
+    pub chunk_index: Option<i32>,
+    /// Total number of chunks the parent was split into
+    pub total_chunks: Option<i32>,
 }
 
 /// Input type for creating a new memory.
@@ -87,6 +93,15 @@ pub struct CreateMemory {
     /// When absent, content-hash dedup applies within the configured window.
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Parent memory ID — set when creating a chunk
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    /// Chunk index within parent (0-based)
+    #[serde(default)]
+    pub chunk_index: Option<i32>,
+    /// Total chunks in the parent family
+    #[serde(default)]
+    pub total_chunks: Option<i32>,
 }
 
 fn default_type_hint() -> String {
