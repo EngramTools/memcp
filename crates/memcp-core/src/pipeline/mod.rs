@@ -11,3 +11,4 @@ pub mod consolidation;
 pub mod summarization;
 pub mod auto_store;
 pub mod content_filter;
+pub mod chunking;
