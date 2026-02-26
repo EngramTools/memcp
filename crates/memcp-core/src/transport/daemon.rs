@@ -575,7 +575,7 @@ pub fn install_service() -> Result<()> {
 
 /// Install as a macOS launchd user agent.
 fn install_launchd(binary_path: &str, log_dir: &str) -> Result<()> {
-    let template = include_str!("../contrib/launchd/com.memcp.daemon.plist");
+    let template = include_str!("../../contrib/launchd/com.memcp.daemon.plist");
     let plist = template
         .replace("MEMCP_BINARY_PATH", binary_path)
         .replace("MEMCP_LOG_DIR", log_dir);
@@ -598,7 +598,7 @@ fn install_launchd(binary_path: &str, log_dir: &str) -> Result<()> {
 
 /// Install as a Linux systemd user service.
 fn install_systemd(binary_path: &str) -> Result<()> {
-    let template = include_str!("../contrib/systemd/memcp-daemon.service");
+    let template = include_str!("../../contrib/systemd/memcp-daemon.service");
     let unit = template.replace("MEMCP_BINARY_PATH", binary_path);
 
     let systemd_dir = dirs::config_dir()
