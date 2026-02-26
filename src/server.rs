@@ -19,7 +19,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use crate::query_intelligence::{RankedCandidate, temporal::parse_temporal_hint};
 
-use crate::config::{IdempotencyConfig, RecallConfig, SalienceConfig, SearchConfig};
+use crate::config::{IdempotencyConfig, RecallConfig, ResourceCapsConfig, SalienceConfig, SearchConfig};
 use crate::content_filter::{ContentFilter, FilterVerdict};
 use crate::embedding::{EmbeddingJob, EmbeddingProvider};
 use crate::errors::MemcpError;
@@ -46,6 +46,7 @@ pub struct MemoryService {
     content_filter: Option<Arc<dyn ContentFilter>>,
     idempotency_config: IdempotencyConfig,
     recall_config: RecallConfig,
+    resource_caps: ResourceCapsConfig,
     extraction_enabled: bool,
 }
 
@@ -78,6 +79,7 @@ impl MemoryService {
             content_filter,
             idempotency_config: IdempotencyConfig::default(),
             recall_config: RecallConfig::default(),
+            resource_caps: ResourceCapsConfig::default(),
             extraction_enabled: false,
         }
     }
@@ -95,6 +97,14 @@ impl MemoryService {
     /// Call after construction with the full Config values (e.g., from main.rs).
     pub fn set_idempotency_config(&mut self, config: IdempotencyConfig) {
         self.idempotency_config = config;
+    }
+
+    /// Update the resource caps configuration.
+    ///
+    /// Call after construction to wire container-level resource limits.
+    /// Used by engram.host to enforce per-instance caps (max_memories, max_search_results).
+    pub fn set_resource_caps(&mut self, config: ResourceCapsConfig) {
+        self.resource_caps = config;
     }
 
     fn uptime_seconds(&self) -> u64 {
@@ -408,6 +418,27 @@ Callable from code_execution_20260120 sandboxes.")]
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "store_memory: content filter error, proceeding with store");
+                }
+            }
+        }
+
+        // Resource cap: max_memories — fail-open on count query errors (Pitfall 4)
+        if let Some(max) = self.resource_caps.max_memories {
+            if let Some(ref pg) = self.pg_store {
+                match pg.count_live_memories().await {
+                    Ok(count) if count as u64 >= max => {
+                        return Ok(CallToolResult::structured_error(json!({
+                            "isError": true,
+                            "error": format!("Resource cap exceeded: max_memories (limit: {}, current: {})", max, count),
+                            "cap": "max_memories",
+                            "limit": max,
+                            "current": count,
+                        })));
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to check memory count for cap enforcement — proceeding");
+                    }
+                    _ => {}
                 }
             }
         }
@@ -887,8 +918,12 @@ Callable from code_execution_20260120 sandboxes.")]
             })));
         }
 
-        // 2. Validate limit (default 20 per CONTEXT.md)
-        let limit = params.limit.unwrap_or(20).clamp(1, 100);
+        // 2. Validate limit (default 20 per CONTEXT.md), clamped to resource cap
+        let user_limit = params.limit.unwrap_or(20).clamp(1, 100);
+        let limit = std::cmp::min(
+            user_limit as i64,
+            self.resource_caps.max_search_results,
+        ) as u32;
 
         // 2a. Validate min_salience and compute effective threshold.
         if let Some(ms) = params.min_salience {
