@@ -2,6 +2,7 @@
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 pub mod auto_store;
+pub mod health;
 pub mod benchmark;
 pub mod cli;
 pub mod config;
