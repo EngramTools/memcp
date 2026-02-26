@@ -471,7 +471,7 @@ async fn main() -> Result<()> {
 
         Commands::Store { content, type_hint, source, tags, actor, actor_type, audience, idempotency_key } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_store(&store, content, type_hint, source, tags, actor, actor_type, audience, idempotency_key).await?;
+            cli::cmd_store(&store, &config, content, type_hint, source, tags, actor, actor_type, audience, idempotency_key).await?;
         }
 
         Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience } => {

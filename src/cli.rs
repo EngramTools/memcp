@@ -148,8 +148,11 @@ fn parse_datetime(s: &str) -> Result<DateTime<Utc>> {
 // ---------------------------------------------------------------------------
 
 /// Store a new memory. Outputs the created memory as JSON.
+///
+/// Enforces max_memories resource cap if configured. Exits with error when cap exceeded.
 pub async fn cmd_store(
     store: &Arc<PostgresMemoryStore>,
+    config: &Config,
     content: String,
     type_hint: String,
     source: String,
@@ -159,6 +162,16 @@ pub async fn cmd_store(
     audience: String,
     idempotency_key: Option<String>,
 ) -> Result<()> {
+    // Resource cap: max_memories
+    if let Some(max) = config.resource_caps.max_memories {
+        let count = store.count_live_memories().await
+            .map_err(|e| anyhow::anyhow!("Failed to check memory count: {}", e))?;
+        if count as u64 >= max {
+            eprintln!("Error: Resource cap exceeded — max_memories limit is {} (current: {})", max, count);
+            std::process::exit(1);
+        }
+    }
+
     let input = CreateMemory {
         content,
         type_hint,
