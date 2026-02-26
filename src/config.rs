@@ -851,6 +851,83 @@ impl Default for SummarizationConfig {
     }
 }
 
+/// Configuration for the health HTTP server (container lifecycle probes).
+///
+/// Provides /health and /status endpoints for orchestrators (Fly.io, Railway, k8s).
+/// Runs on a separate port from the MCP stdio transport.
+/// Nested env var overrides use double underscores:
+///   MEMCP_HEALTH__PORT=9090
+///   MEMCP_HEALTH__ENABLED=false
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthConfig {
+    /// Enable the health HTTP server (default: true in daemon mode)
+    #[serde(default = "default_health_enabled")]
+    pub enabled: bool,
+
+    /// Port for the health HTTP server
+    #[serde(default = "default_health_port")]
+    pub port: u16,
+
+    /// Bind address for the health HTTP server
+    #[serde(default = "default_health_bind")]
+    pub bind: String,
+}
+
+fn default_health_enabled() -> bool { true }
+fn default_health_port() -> u16 { 9090 }
+fn default_health_bind() -> String { "0.0.0.0".to_string() }
+
+impl Default for HealthConfig {
+    fn default() -> Self {
+        HealthConfig {
+            enabled: default_health_enabled(),
+            port: default_health_port(),
+            bind: default_health_bind(),
+        }
+    }
+}
+
+/// Resource caps configuration for container deployments.
+///
+/// Controls resource limits for deployed instances. Used by /status endpoint
+/// to surface current usage vs limits.
+/// Nested env var overrides use double underscores:
+///   MEMCP_RESOURCE_CAPS__MAX_MEMORIES=10000
+///   MEMCP_RESOURCE_CAPS__MAX_DB_CONNECTIONS=5
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceCapsConfig {
+    /// Max number of live (non-deleted) memories. None = unlimited.
+    #[serde(default)]
+    pub max_memories: Option<u64>,
+
+    /// Max batch size for embedding pipeline processing.
+    #[serde(default = "default_max_embedding_batch_size")]
+    pub max_embedding_batch_size: usize,
+
+    /// Max search results returned per query.
+    #[serde(default = "default_max_search_results")]
+    pub max_search_results: i64,
+
+    /// Max DB connection pool size.
+    #[serde(default = "default_max_db_connections")]
+    pub max_db_connections: u32,
+}
+
+fn default_max_embedding_batch_size() -> usize { 64 }
+fn default_max_search_results() -> i64 { 100 }
+fn default_max_db_connections() -> u32 { 10 }
+
+impl Default for ResourceCapsConfig {
+    fn default() -> Self {
+        ResourceCapsConfig {
+            max_memories: None,
+            max_embedding_batch_size: default_max_embedding_batch_size(),
+            max_search_results: default_max_search_results(),
+            max_db_connections: default_max_db_connections(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Log level: trace, debug, info, warn, error
@@ -936,6 +1013,16 @@ pub struct Config {
     /// Existing configs without [recall] section still work (serde default applied).
     #[serde(default)]
     pub recall: RecallConfig,
+
+    /// Health HTTP server configuration (container lifecycle probes).
+    /// Existing configs without [health] section still work (serde default applied).
+    #[serde(default)]
+    pub health: HealthConfig,
+
+    /// Resource caps configuration (container deployment limits).
+    /// Existing configs without [resource_caps] section still work (serde default applied).
+    #[serde(default)]
+    pub resource_caps: ResourceCapsConfig,
 }
 
 fn default_log_level() -> String {
@@ -966,6 +1053,8 @@ impl Default for Config {
             dedup: DedupConfig::default(),
             idempotency: IdempotencyConfig::default(),
             recall: RecallConfig::default(),
+            health: HealthConfig::default(),
+            resource_caps: ResourceCapsConfig::default(),
         }
     }
 }

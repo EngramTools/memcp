@@ -24,6 +24,13 @@ pub enum MemcpError {
 
     #[error("Storage error: {0}")]
     Storage(String),
+
+    #[error("Resource cap exceeded: {cap} (limit: {limit}, current: {current})")]
+    CapExceeded {
+        cap: String,
+        limit: u64,
+        current: u64,
+    },
 }
 
 impl From<sqlx::Error> for MemcpError {
