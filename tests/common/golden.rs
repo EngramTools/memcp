@@ -2,8 +2,11 @@
 #[derive(serde::Deserialize)]
 pub struct GoldenQuery {
     pub query: String,
+    pub seed_content: String,
     pub expected_top_content: String,
     pub min_score: f32,
+    #[serde(default)]
+    pub category: String,
 }
 
 /// Load golden queries from the bundled fixture file.

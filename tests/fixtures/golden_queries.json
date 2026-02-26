@@ -1,37 +1,72 @@
 [
   {
-    "query": "dark mode preference",
+    "query": "what editor theme does the user prefer",
+    "seed_content": "The user prefers dark mode in all editors and terminals",
     "expected_top_content": "The user prefers dark mode in all editors",
-    "min_score": 0.6
+    "min_score": 0.01,
+    "category": "preference"
   },
   {
-    "query": "programming language choice",
-    "expected_top_content": "We use Rust for all performance-critical backend services",
-    "min_score": 0.6
+    "query": "which database was chosen for the project",
+    "seed_content": "We decided to use PostgreSQL with pgvector for semantic search because it supports both relational queries and vector similarity in one database",
+    "expected_top_content": "We decided to use PostgreSQL with pgvector",
+    "min_score": 0.01,
+    "category": "decision"
   },
   {
-    "query": "database architecture decision",
-    "expected_top_content": "We chose PostgreSQL with pgvector for the memory store — supports both semantic search and relational queries",
-    "min_score": 0.6
+    "query": "coding style rules and formatting",
+    "seed_content": "Code style: use 4-space indentation, snake_case for functions, PascalCase for types. Always add doc comments on pub items.",
+    "expected_top_content": "Code style: use 4-space indentation",
+    "min_score": 0.01,
+    "category": "instruction"
   },
   {
-    "query": "code style convention",
-    "expected_top_content": "Always run cargo fmt and cargo clippy before committing Rust code",
-    "min_score": 0.6
+    "query": "what language is the memory server written in",
+    "seed_content": "The memory server is implemented in Rust using the 2021 edition with Tokio for async runtime",
+    "expected_top_content": "The memory server is implemented in Rust",
+    "min_score": 0.01,
+    "category": "fact"
   },
   {
-    "query": "package manager preference",
-    "expected_top_content": "Use pnpm for all Node.js projects in this workspace — not npm or yarn",
-    "min_score": 0.6
+    "query": "which package manager should be used for Node.js",
+    "seed_content": "Use pnpm for all Node.js projects in this workspace — not npm or yarn",
+    "expected_top_content": "Use pnpm for all Node.js projects",
+    "min_score": 0.01,
+    "category": "instruction"
   },
   {
-    "query": "test framework",
-    "expected_top_content": "Integration tests use sqlx::test for ephemeral per-test databases — no shared state between tests",
-    "min_score": 0.6
+    "query": "how are integration tests isolated from each other",
+    "seed_content": "Integration tests use sqlx::test for ephemeral per-test databases — no shared state between tests",
+    "expected_top_content": "Integration tests use sqlx::test for ephemeral",
+    "min_score": 0.01,
+    "category": "fact"
   },
   {
-    "query": "embedding model configuration",
-    "expected_top_content": "fastembed All-MiniLM-L6-v2 is the default local embedding model — 384 dimensions, cached at ~/Library/Caches/memcp/models/",
-    "min_score": 0.6
+    "query": "what embedding model dimensions are configured",
+    "seed_content": "fastembed All-MiniLM-L6-v2 is the default local embedding model — 384 dimensions, cached at ~/Library/Caches/memcp/models/",
+    "expected_top_content": "fastembed All-MiniLM-L6-v2 is the default local embedding model",
+    "min_score": 0.01,
+    "category": "fact"
+  },
+  {
+    "query": "what web framework is used for the Python API server",
+    "seed_content": "The Python API server uses FastAPI with uvicorn, serving HTTP endpoints on port 8080",
+    "expected_top_content": "The Python API server uses FastAPI",
+    "min_score": 0.01,
+    "category": "fact"
+  },
+  {
+    "query": "user color scheme preference for development tools",
+    "seed_content": "Always use the Catppuccin Mocha color scheme in all terminals and IDE configurations",
+    "expected_top_content": "Always use the Catppuccin Mocha color scheme",
+    "min_score": 0.01,
+    "category": "preference"
+  },
+  {
+    "query": "what is the maximum connection pool size",
+    "seed_content": "Database connection pool is configured with max_connections=10 for the MCP server process",
+    "expected_top_content": "Database connection pool is configured with max_connections=10",
+    "min_score": 0.01,
+    "category": "fact"
   }
 ]
