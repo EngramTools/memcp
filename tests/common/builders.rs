@@ -4,7 +4,6 @@ use memcp::store::CreateMemory;
 ///
 /// Provides fluent overrides for all fields so tests only specify what matters,
 /// keeping construction concise and readable.
-#[allow(dead_code)]
 pub struct MemoryBuilder {
     content: String,
     type_hint: String,
@@ -17,7 +16,6 @@ pub struct MemoryBuilder {
     idempotency_key: Option<String>,
 }
 
-#[allow(dead_code)]
 impl MemoryBuilder {
     /// Create a new builder with realistic defaults.
     pub fn new() -> Self {

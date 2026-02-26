@@ -1,0 +1,37 @@
+[
+  {
+    "query": "dark mode preference",
+    "expected_top_content": "The user prefers dark mode in all editors",
+    "min_score": 0.6
+  },
+  {
+    "query": "programming language choice",
+    "expected_top_content": "We use Rust for all performance-critical backend services",
+    "min_score": 0.6
+  },
+  {
+    "query": "database architecture decision",
+    "expected_top_content": "We chose PostgreSQL with pgvector for the memory store — supports both semantic search and relational queries",
+    "min_score": 0.6
+  },
+  {
+    "query": "code style convention",
+    "expected_top_content": "Always run cargo fmt and cargo clippy before committing Rust code",
+    "min_score": 0.6
+  },
+  {
+    "query": "package manager preference",
+    "expected_top_content": "Use pnpm for all Node.js projects in this workspace — not npm or yarn",
+    "min_score": 0.6
+  },
+  {
+    "query": "test framework",
+    "expected_top_content": "Integration tests use sqlx::test for ephemeral per-test databases — no shared state between tests",
+    "min_score": 0.6
+  },
+  {
+    "query": "embedding model configuration",
+    "expected_top_content": "fastembed All-MiniLM-L6-v2 is the default local embedding model — 384 dimensions, cached at ~/Library/Caches/memcp/models/",
+    "min_score": 0.6
+  }
+]
