@@ -38,13 +38,35 @@ use crate::summarization::create_summarization_provider;
 pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     let run_migrations = !skip_migrate;
 
-    // 1. Initialize store
-    let store = Arc::new(
-        PostgresMemoryStore::new(&config.database_url, run_migrations)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to initialize database: {}", e))?,
-    );
-    tracing::info!(database_url = %config.database_url, "PostgreSQL store initialized");
+    // 0. Create readiness flag for health probes (false until DB + migrations + HNSW ready)
+    let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    // 1. Initialize store with exponential backoff (containers: DB may not be ready)
+    let store = {
+        let mut delay = std::time::Duration::from_secs(1);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match PostgresMemoryStore::new(&config.database_url, run_migrations).await {
+                Ok(s) => {
+                    tracing::info!(database_url = %config.database_url, "PostgreSQL store initialized");
+                    break Arc::new(s);
+                }
+                Err(e) if tokio::time::Instant::now() < deadline => {
+                    tracing::warn!(
+                        error = %e,
+                        delay_secs = delay.as_secs(),
+                        "DB not ready, retrying..."
+                    );
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(std::time::Duration::from_secs(16));
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "DB unreachable after 30s — exiting");
+                    std::process::exit(1);
+                }
+            }
+        }
+    };
 
     // 2. Create embedding provider (loads fastembed model into memory)
     let provider = create_embedding_provider(config).await?;
@@ -57,6 +79,10 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     store.ensure_hnsw_index(dim).await
         .map_err(|e| anyhow::anyhow!("Failed to ensure HNSW index: {}", e))?;
     tracing::info!(dimension = dim, "HNSW index ready");
+
+    // Mark as ready for health probes (DB connected + migrations applied + HNSW ready)
+    ready.store(true, std::sync::atomic::Ordering::Release);
+    tracing::info!("Daemon ready — accepting health probes");
 
     // 3. Create consolidation worker if enabled
     let consolidation_sender = if config.consolidation.enabled {
