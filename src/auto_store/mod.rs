@@ -65,7 +65,21 @@ impl AutoStoreWorker {
         let embedding_sender = embedding_pipeline.map(|p| p.sender());
         let extraction_sender = extraction_pipeline.map(|p| p.sender());
 
-        let watch_paths = config.watch_paths.clone();
+        let mut watch_paths = config.watch_paths.clone();
+
+        // Auto-discover Claude Code JSONL directory if no watch paths configured
+        if watch_paths.is_empty() {
+            if let Some(home) = dirs::home_dir() {
+                let claude_dir = home.join(".claude").join("projects");
+                if claude_dir.exists() {
+                    tracing::info!(
+                        path = %claude_dir.display(),
+                        "Auto-discovered Claude Code projects directory"
+                    );
+                    watch_paths.push(claude_dir.to_string_lossy().to_string());
+                }
+            }
+        }
 
         tracing::info!(
             paths = ?watch_paths,

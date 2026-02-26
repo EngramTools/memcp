@@ -1,0 +1,87 @@
+# memcp configuration example
+# Copy to memcp.toml and customize as needed.
+# All values shown are defaults — uncomment and change what you need.
+# Environment variables override config: MEMCP_DATABASE_URL, MEMCP_LOG_LEVEL, etc.
+# Nested sections use double underscores: MEMCP_AUTO_STORE__ENABLED=true
+
+# log_level = "info"
+# log_file = "/tmp/memcp.log"  # optional file log (in addition to stderr)
+
+# PostgreSQL connection URL
+# Also settable via DATABASE_URL or MEMCP_DATABASE_URL env var
+# database_url = "postgres://memcp:memcp@localhost:5432/memcp"
+
+[embedding]
+# provider = "fastembed"          # "fastembed" (local, default) or "openai"
+# model = "BAAI/bge-small-en-v1.5"
+# dimension = 384
+# batch_size = 32
+
+[search]
+# bm25_backend = "native"        # "native" (PostgreSQL tsvector) or "paradedb" (pg_search extension)
+# default_min_salience = 0.3     # global floor for search results (0.0–1.0), omit to disable
+# salience_hint_mode = false     # include hint when all results filtered by salience
+
+[salience]
+# base_stability = 2.5
+# reinforcement_bonus = 0.3
+# rrf_weight = 0.6               # how much search relevance counts vs memory strength
+# salience_weight = 0.4
+
+[extraction]
+# enabled = true
+# provider = "ollama"            # "ollama" or "openai"
+# model = "llama3.2"
+
+[consolidation]
+# enabled = false
+# similarity_threshold = 0.92
+# max_cluster_size = 5
+
+[query_intelligence]
+# expansion_enabled = false      # LLM-powered query expansion
+# rerank_enabled = false         # LLM-powered re-ranking of top results
+# provider = "ollama"
+# model = "llama3.2"
+
+[auto_store]
+# enabled = false                # set to true to activate the auto-store sidecar
+# watch_paths = []               # directories or files to watch for JSONL
+                                 # leave empty to auto-discover ~/.claude/projects/
+# format = "claude-code"         # "claude-code", "openclaw", or "generic-jsonl"
+# filter_mode = "none"           # "none" (default), "category", "heuristic", or "llm"
+                                 # "none" works out of the box — no external deps needed
+                                 # set to "llm" for AI-powered filtering (requires Ollama)
+# filter_provider = "ollama"
+# filter_model = "llama3.2"
+# poll_interval_secs = 5         # fallback polling interval for directory scanning
+# dedup_window_secs = 300        # time window for content dedup (seconds)
+
+[auto_store.category_filter]
+# block_tool_narration = true
+# tool_narration_patterns = []   # additional regex patterns to block (extends built-in list)
+
+[content_filter]
+# enabled = false                # topic exclusion filter
+# excluded_topics = []           # e.g. ["medical", "financial"]
+
+[summarization]
+# enabled = false                # summarize assistant responses before storing
+# provider = "ollama"            # "ollama" or "openai"
+# model = "llama3.2"
+
+[dedup]
+# enabled = true                 # semantic deduplication (embedding-based)
+# similarity_threshold = 0.95
+
+[idempotency]
+# enabled = true                 # content-hash dedup + caller-provided idempotency keys
+# ttl_secs = 86400               # how long to remember seen content hashes (24h default)
+
+[gc]
+# enabled = false                # garbage collection for low-salience memories
+# min_age_days = 30
+# salience_threshold = 0.1
+
+[status_line]
+# enabled = false                # Claude Code status line integration
