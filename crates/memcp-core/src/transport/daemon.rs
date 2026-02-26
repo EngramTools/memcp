@@ -274,6 +274,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         }
         let _auto_store_handle = crate::auto_store::AutoStoreWorker::spawn(
             config.auto_store.clone(),
+            config.chunking.clone(),
             store.clone(),
             Some(&pipeline),
             extraction_pipeline.as_ref(),

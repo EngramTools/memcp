@@ -67,7 +67,19 @@ pub async fn run_gc(
         store.soft_delete_memories(&expired_ids).await?
     };
 
-    // Step 6c: Update GC metrics in daemon_status
+    // Step 6c: Cascade soft-delete to chunks of pruned/expired parents.
+    // FK ON DELETE CASCADE only triggers on hard-delete, so we must explicitly
+    // soft-delete orphaned chunks when their parent is soft-deleted.
+    let mut all_deleted_parents: Vec<String> = candidate_ids;
+    all_deleted_parents.extend(expired_ids.iter().cloned());
+    if !all_deleted_parents.is_empty() {
+        let chunk_count = store.soft_delete_chunks_by_parents(&all_deleted_parents).await?;
+        if chunk_count > 0 {
+            tracing::info!(chunk_count, "GC: cascade soft-deleted orphaned chunks");
+        }
+    }
+
+    // Step 6d: Update GC metrics in daemon_status
     let total_pruned = (pruned_count + expired_count) as i64;
     if total_pruned > 0 {
         if let Err(e) = store.update_gc_metrics(total_pruned).await {

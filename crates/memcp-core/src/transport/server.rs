@@ -31,7 +31,7 @@ use crate::embedding::{EmbeddingJob, EmbeddingProvider};
 use crate::errors::MemcpError;
 use crate::extraction::ExtractionJob;
 use crate::search::{SalienceScorer, ScoredHit};
-use crate::search::salience::SalienceInput;
+use crate::search::salience::{SalienceInput, dedup_parent_chunks};
 use crate::store::{
     decode_search_keyset_cursor, encode_search_keyset_cursor,
     CreateMemory, ListFilter, Memory, MemoryStore, UpdateMemory,
@@ -1215,11 +1215,14 @@ Callable from code_execution_20260120 sandboxes.")]
         // 12.5. Apply salience threshold filtering AFTER re-ranking, BEFORE cursor/take.
         // Count below-threshold results first (needed for hint mode).
         let below_threshold = scored_hits.iter().filter(|h| h.salience_score < effective_min).count();
-        let scored_hits: Vec<ScoredHit> = if effective_min > 0.0 {
+        let mut scored_hits: Vec<ScoredHit> = if effective_min > 0.0 {
             scored_hits.into_iter().filter(|h| h.salience_score >= effective_min).collect()
         } else {
             scored_hits
         };
+
+        // 12.6. Deduplicate parent/chunk collisions — prefer chunks over parents.
+        dedup_parent_chunks(&mut scored_hits);
 
         // 13. Apply cursor-based filtering: skip items at or before the cursor position.
         // Cursor encodes (salience_score, id) of the LAST item on the previous page.

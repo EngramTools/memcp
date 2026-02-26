@@ -2121,6 +2121,27 @@ impl PostgresMemoryStore {
         Ok(result.rows_affected() as usize)
     }
 
+    /// Soft-delete all chunks whose parent_id is in the given set.
+    ///
+    /// Used by the GC worker to cascade soft-deletes to chunks when a parent
+    /// memory is garbage-collected. FK ON DELETE CASCADE only triggers on
+    /// hard-delete (DELETE), not on UPDATE of deleted_at.
+    pub async fn soft_delete_chunks_by_parents(&self, parent_ids: &[String]) -> Result<usize, MemcpError> {
+        if parent_ids.is_empty() {
+            return Ok(0);
+        }
+        let result = sqlx::query(
+            "UPDATE memories SET deleted_at = NOW()
+             WHERE parent_id = ANY($1) AND deleted_at IS NULL",
+        )
+        .bind(parent_ids)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to soft-delete chunks by parent: {}", e)))?;
+
+        Ok(result.rows_affected() as usize)
+    }
+
     /// Hard purge memories soft-deleted more than grace_days ago.
     ///
     /// Also removes associated rows from memory_embeddings, memory_salience,

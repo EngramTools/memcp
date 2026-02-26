@@ -19,7 +19,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
-use crate::config::AutoStoreConfig;
+use crate::config::{AutoStoreConfig, ChunkingConfig};
+use crate::chunking::chunk_content;
 use crate::content_filter::{ContentFilter, FilterVerdict};
 use crate::embedding::{EmbeddingJob, build_embedding_text};
 use crate::embedding::pipeline::EmbeddingPipeline;
@@ -49,6 +50,7 @@ impl AutoStoreWorker {
     /// 6. Enqueues to embedding and extraction pipelines
     pub fn spawn(
         config: AutoStoreConfig,
+        chunking_config: ChunkingConfig,
         store: Arc<PostgresMemoryStore>,
         embedding_pipeline: Option<&EmbeddingPipeline>,
         extraction_pipeline: Option<&ExtractionPipeline>,
@@ -108,6 +110,7 @@ impl AutoStoreWorker {
                 extraction_sender,
                 content_filter,
                 summarization_provider,
+                chunking_config,
             )
             .await;
         })
@@ -135,6 +138,7 @@ async fn run_worker(
     extraction_sender: Option<tokio::sync::mpsc::Sender<ExtractionJob>>,
     content_filter: Option<Arc<dyn ContentFilter>>,
     summarization_provider: Option<Arc<dyn SummarizationProvider>>,
+    chunking_config: ChunkingConfig,
 ) {
     // Channel for watch events
     let (tx, mut rx) = tokio::sync::mpsc::channel::<WatchEvent>(1000);
@@ -315,6 +319,80 @@ async fn run_worker(
                         content: memory.content.clone(),
                         attempt: 0,
                     });
+                }
+
+                // Chunk long content for better retrieval granularity
+                let chunks = chunk_content(&memory.content, &chunking_config);
+                if !chunks.is_empty() {
+                    tracing::info!(
+                        memory_id = %memory.id,
+                        chunk_count = chunks.len(),
+                        "Chunking auto-store content"
+                    );
+
+                    for chunk_output in &chunks {
+                        let mut chunk_tags = tags.clone();
+                        chunk_tags.push(format!("chunk:{}/{}", chunk_output.index + 1, chunk_output.total));
+
+                        let chunk_create = CreateMemory {
+                            content: chunk_output.content.clone(),
+                            type_hint: if is_summarized { "summary".to_string() } else { "auto".to_string() },
+                            source: entry.source.clone(),
+                            tags: Some(chunk_tags),
+                            created_at: entry.timestamp,
+                            actor: entry.actor.clone(),
+                            actor_type: "auto-store".to_string(),
+                            audience: "global".to_string(),
+                            idempotency_key: None,
+                            parent_id: Some(memory.id.clone()),
+                            chunk_index: Some(chunk_output.index as i32),
+                            total_chunks: Some(chunk_output.total as i32),
+                        };
+
+                        match store.store(chunk_create).await {
+                            Ok(chunk_mem) => {
+                                // Seed chunk salience from parent values
+                                if let Err(e) = store.upsert_salience(&chunk_mem.id, 2.5, 5.0, 0, None).await {
+                                    tracing::warn!(error = %e, chunk_id = %chunk_mem.id, "Failed to seed chunk salience");
+                                }
+
+                                // Enqueue chunk to embedding pipeline
+                                if let Some(ref sender) = embedding_sender {
+                                    let text = build_embedding_text(&chunk_mem.content, &chunk_mem.tags);
+                                    let _ = sender.try_send(EmbeddingJob {
+                                        memory_id: chunk_mem.id.clone(),
+                                        text,
+                                        attempt: 0,
+                                    });
+                                }
+
+                                // Enqueue chunk to extraction pipeline
+                                if let Some(ref sender) = extraction_sender {
+                                    let _ = sender.try_send(ExtractionJob {
+                                        memory_id: chunk_mem.id.clone(),
+                                        content: chunk_mem.content.clone(),
+                                        attempt: 0,
+                                    });
+                                }
+
+                                tracing::debug!(
+                                    chunk_id = %chunk_mem.id,
+                                    parent_id = %memory.id,
+                                    index = chunk_output.index,
+                                    total = chunk_output.total,
+                                    "Stored chunk"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    error = %e,
+                                    parent_id = %memory.id,
+                                    chunk_index = chunk_output.index,
+                                    "Failed to store chunk"
+                                );
+                            }
+                        }
+                    }
                 }
             }
             Err(e) => {

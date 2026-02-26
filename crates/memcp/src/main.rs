@@ -660,6 +660,7 @@ async fn main() -> Result<()> {
             if config.auto_store.enabled {
                 let _auto_store_handle = memcp::auto_store::AutoStoreWorker::spawn(
                     config.auto_store.clone(),
+                    config.chunking.clone(),
                     store.clone(),
                     Some(&pipeline),
                     extraction_pipeline.as_ref(),

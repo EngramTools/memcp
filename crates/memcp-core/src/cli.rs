@@ -25,7 +25,7 @@ use sqlx::Row;
 use crate::config::Config;
 use crate::gc;
 use crate::ipc::{embed_via_daemon, rerank_via_daemon};
-use crate::search::salience::SalienceInput;
+use crate::search::salience::{SalienceInput, dedup_parent_chunks};
 use crate::search::{SalienceScorer, ScoredHit};
 use crate::store::postgres::PostgresMemoryStore;
 use crate::store::{
@@ -436,11 +436,14 @@ pub async fn cmd_search(
     }
 
     // Apply salience threshold filtering AFTER re-ranking, BEFORE cursor/take (mirrors MCP path).
-    let scored_hits: Vec<ScoredHit> = if effective_min > 0.0 {
+    let mut scored_hits: Vec<ScoredHit> = if effective_min > 0.0 {
         scored_hits.into_iter().filter(|h| h.salience_score >= effective_min).collect()
     } else {
         scored_hits
     };
+
+    // Deduplicate parent/chunk collisions — prefer chunks over parents.
+    dedup_parent_chunks(&mut scored_hits);
 
     // Apply cursor-based filtering: skip items at or before the cursor position.
     // Cursor encodes (salience_score, id) of the LAST item on the previous page.
