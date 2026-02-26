@@ -76,6 +76,7 @@ pub async fn ingest_question(
                 memory_id: stored.id,
                 text,
                 attempt: 0,
+                completion_tx: None,
             });
 
             turn_count += 1;

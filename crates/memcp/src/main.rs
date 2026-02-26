@@ -77,6 +77,10 @@ enum Commands {
         /// Repeated calls with the same key return the original memory.
         #[arg(long)]
         idempotency_key: Option<String>,
+        /// Block until embedding completes (or timeout). Returns enriched response
+        /// with embedding_status and embedding_dimension.
+        #[arg(long)]
+        wait: bool,
     },
     /// Search memories by keyword + metadata matching with salience ranking
     Search {
@@ -469,9 +473,9 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        Commands::Store { content, type_hint, source, tags, actor, actor_type, audience, idempotency_key } => {
+        Commands::Store { content, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_store(&store, &config, content, type_hint, source, tags, actor, actor_type, audience, idempotency_key).await?;
+            cli::cmd_store(&store, &config, content, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait).await?;
         }
 
         Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience } => {
@@ -719,6 +723,9 @@ async fn main() -> Result<()> {
             );
             service.set_recall_config(config.recall.clone(), config.extraction.enabled);
             service.set_resource_caps(config.resource_caps.clone());
+            service.set_store_config(config.store.clone());
+            service.set_reembed_on_tag_change(config.embedding.reembed_on_tag_change);
+            service.set_resource_limits(config.resource_limits.clone(), config.gc.clone());
 
             // 11. Serve via stdio transport
             let (stdin, stdout) = rmcp::transport::io::stdio();

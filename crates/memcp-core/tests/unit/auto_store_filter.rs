@@ -48,6 +48,9 @@ fn make_category_filter(extra_patterns: Vec<String>) -> CategoryFilter {
         enabled: true,
         block_tool_narration: true,
         tool_narration_patterns: extra_patterns,
+        category_actions: std::collections::HashMap::new(),
+        llm_provider: None,
+        llm_model: None,
     };
     CategoryFilter::new(&config, None)
 }

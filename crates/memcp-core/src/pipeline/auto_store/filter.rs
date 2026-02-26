@@ -8,15 +8,26 @@ use regex::Regex;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::Mutex;
 
 use crate::errors::MemcpError;
 use super::parser::ParsedEntry;
+
+/// Category classification result from LLM or heuristic.
+#[derive(Debug, Clone)]
+pub struct CategoryResult {
+    pub category: String,
+    pub action: String,  // "store", "skip", "store-low"
+}
 
 /// Trait for deciding whether a parsed entry should be stored.
 #[async_trait]
 pub trait FilterStrategy: Send + Sync {
     /// Returns true if the entry contains information worth remembering.
     async fn should_store(&self, entry: &ParsedEntry) -> Result<bool, MemcpError>;
+
+    /// Get the last classification result (if any). Only CategoryFilter with LLM returns Some.
+    fn last_classification(&self) -> Option<CategoryResult> { None }
 }
 
 /// LLM-based filter — calls Ollama or OpenAI to decide relevance.
@@ -155,6 +166,127 @@ impl FilterStrategy for LlmFilter {
     }
 }
 
+/// LLM-based category classifier.
+///
+/// Sends content to an LLM with a taxonomy prompt and parses the response
+/// into one of 10 predefined categories. Each category maps to a configurable
+/// action (store, skip, store-low). Falls back to "store" for unknown categories.
+pub struct LlmCategoryClassifier {
+    client: reqwest::Client,
+    base_url: String,
+    model: String,
+    provider: String,
+    api_key: Option<String>,
+    category_actions: std::collections::HashMap<String, String>,
+}
+
+impl LlmCategoryClassifier {
+    pub fn new(
+        provider: String,
+        base_url: String,
+        model: String,
+        api_key: Option<String>,
+        category_actions: std::collections::HashMap<String, String>,
+    ) -> Self {
+        LlmCategoryClassifier {
+            client: reqwest::Client::new(),
+            base_url,
+            model,
+            provider,
+            api_key,
+            category_actions,
+        }
+    }
+
+    fn build_classification_prompt(content: &str) -> String {
+        let truncated = &content[..content.len().min(2000)];
+        format!(
+            "Classify the following text into exactly ONE category. \
+            Respond with ONLY the category name, nothing else.\n\n\
+            Categories:\n\
+            - decision: A choice or decision made\n\
+            - preference: A user preference or setting\n\
+            - architecture: Technical architecture or design pattern\n\
+            - fact: A factual statement worth remembering\n\
+            - instruction: An instruction or rule to follow\n\
+            - correction: A correction to previous information\n\
+            - tool-narration: Narration of tool usage (e.g. 'Let me read the file...')\n\
+            - ephemeral: Temporary or transient content\n\
+            - code-output: Raw code output or terminal results\n\
+            - error-trace: Error messages or stack traces\n\n\
+            Text:\n{}",
+            truncated
+        )
+    }
+
+    /// Classify content into a category. Returns None on failure (fail-open).
+    pub async fn classify(&self, content: &str) -> Option<CategoryResult> {
+        let prompt = Self::build_classification_prompt(content);
+
+        let response_text = match self.provider.as_str() {
+            "openai" => {
+                let api_key = self.api_key.as_deref()?;
+                let body = serde_json::json!({
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 10,
+                    "temperature": 0.0
+                });
+                let resp = self
+                    .client
+                    .post(format!("{}/chat/completions", self.base_url))
+                    .header("Authorization", format!("Bearer {}", api_key))
+                    .json(&body)
+                    .send()
+                    .await
+                    .ok()?;
+
+                if !resp.status().is_success() {
+                    tracing::warn!(status = %resp.status(), "LLM category classifier API error");
+                    return None;
+                }
+
+                let parsed: OpenAIResponse = resp.json().await.ok()?;
+                parsed.choices.first()?.message.content.clone()?
+            }
+            _ => {
+                // Ollama
+                let body = serde_json::json!({
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": false,
+                    "options": {"temperature": 0.0, "num_predict": 10}
+                });
+                let resp = self
+                    .client
+                    .post(format!("{}/api/chat", self.base_url))
+                    .json(&body)
+                    .send()
+                    .await
+                    .ok()?;
+
+                if !resp.status().is_success() {
+                    tracing::warn!(status = %resp.status(), "LLM category classifier API error");
+                    return None;
+                }
+
+                let parsed: OllamaChatResponse = resp.json().await.ok()?;
+                parsed.message.content
+            }
+        };
+
+        let category = response_text.trim().to_lowercase().replace(' ', "-");
+
+        // Look up action for this category, default to "store" for unknown categories
+        let action = self.category_actions
+            .get(&category)
+            .cloned()
+            .unwrap_or_else(|| "store".to_string());
+
+        Some(CategoryResult { category, action })
+    }
+}
+
 /// Heuristic keyword-based filter.
 ///
 /// Triggers on patterns indicating decisions, preferences, conventions, or rules.
@@ -222,12 +354,16 @@ impl FilterStrategy for HeuristicFilter {
 /// (e.g. "Let me read the file...", "Now I'll edit...", "Running command...").
 /// Decisions, preferences, errors, and architecture notes pass through unfiltered.
 ///
-/// Operates purely heuristically — no LLM required. An optional `llm_fallback`
-/// can be provided for ambiguous content (deferred; currently pass-through).
+/// When an `LlmCategoryClassifier` is provided, it classifies content into a
+/// 10-category taxonomy (decision, preference, architecture, fact, instruction,
+/// correction, tool-narration, ephemeral, code-output, error-trace). Each category
+/// maps to a configurable action (store, skip, store-low). Falls back to heuristic
+/// patterns when LLM is unavailable or times out.
 pub struct CategoryFilter {
     patterns: Vec<Regex>,
-    llm_fallback: Option<Box<dyn FilterStrategy>>,
+    llm_classifier: Option<LlmCategoryClassifier>,
     filtered_count: Arc<AtomicU64>,
+    last_result: Arc<Mutex<Option<CategoryResult>>>,
 }
 
 /// Default tool narration patterns compiled at construction time.
@@ -246,11 +382,12 @@ impl CategoryFilter {
     /// from `config.tool_narration_patterns`. Invalid patterns are skipped with a warning
     /// (fail-open — a bad pattern never prevents storing).
     ///
-    /// An optional `llm_fallback` can be provided for ambiguous content classification
-    /// (currently unused; deferred per CONTEXT.md).
+    /// An optional `LlmCategoryClassifier` enables rich category taxonomy classification.
+    /// When provided, content is classified into one of 10 categories with configurable
+    /// per-category actions. When absent, only heuristic patterns are used.
     pub fn new(
         config: &crate::config::CategoryFilterConfig,
-        llm_fallback: Option<Box<dyn FilterStrategy>>,
+        llm_classifier: Option<LlmCategoryClassifier>,
     ) -> Self {
         let mut patterns = Vec::new();
 
@@ -274,10 +411,15 @@ impl CategoryFilter {
             }
         }
 
+        if llm_classifier.is_some() {
+            tracing::info!("CategoryFilter: LLM category classifier enabled");
+        }
+
         CategoryFilter {
             patterns,
-            llm_fallback,
+            llm_classifier,
             filtered_count: Arc::new(AtomicU64::new(0)),
+            last_result: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -290,24 +432,58 @@ impl CategoryFilter {
 #[async_trait]
 impl FilterStrategy for CategoryFilter {
     async fn should_store(&self, entry: &ParsedEntry) -> Result<bool, MemcpError> {
-        // Step 1: Check tool narration patterns
+        // Clear last classification
+        *self.last_result.lock().await = None;
+
+        // Step 1: Try LLM classification if available (with 3s timeout)
+        if let Some(ref classifier) = self.llm_classifier {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                classifier.classify(&entry.content),
+            ).await {
+                Ok(Some(result)) => {
+                    tracing::debug!(
+                        category = %result.category,
+                        action = %result.action,
+                        content_preview = %entry.content.chars().take(80).collect::<String>(),
+                        "LLM category classification"
+                    );
+                    let should_store = result.action != "skip";
+                    if !should_store {
+                        self.filtered_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    // Cache classification for the auto-store worker to read
+                    *self.last_result.lock().await = Some(result);
+                    return Ok(should_store);
+                }
+                Ok(None) => {
+                    tracing::debug!("LLM category classifier returned None, falling back to heuristic");
+                }
+                Err(_) => {
+                    tracing::warn!("LLM category classifier timed out (3s), falling back to heuristic");
+                }
+            }
+        }
+
+        // Step 2: Heuristic fallback — check tool narration patterns
         for pattern in &self.patterns {
             if pattern.is_match(&entry.content) {
                 self.filtered_count.fetch_add(1, Ordering::Relaxed);
                 tracing::debug!(
                     content = %entry.content.chars().take(80).collect::<String>(),
-                    "Filtered: tool narration"
+                    "Filtered: tool narration (heuristic)"
                 );
                 return Ok(false);
             }
         }
 
-        // Step 2: If LLM fallback available, could check ambiguous content here.
-        // For now, pass through anything that doesn't match patterns.
-        // LLM expansion is deferred per CONTEXT.md.
-        let _ = &self.llm_fallback; // suppress unused warning
-
+        // Pass through anything that doesn't match patterns
         Ok(true)
+    }
+
+    fn last_classification(&self) -> Option<CategoryResult> {
+        // Use try_lock to avoid blocking — if locked, return None
+        self.last_result.try_lock().ok().and_then(|guard| guard.clone())
     }
 }
 
@@ -349,7 +525,28 @@ pub fn create_filter(
             ))
         }
         "category" => {
-            Box::new(CategoryFilter::new(&auto_store_config.category_filter, None))
+            let llm_classifier = auto_store_config.category_filter.llm_provider.as_ref().map(|provider| {
+                let model = auto_store_config.category_filter.llm_model.clone()
+                    .unwrap_or_else(|| model.to_string());
+                let (base_url, api_key) = match provider.as_str() {
+                    "openai" => (
+                        "https://api.openai.com/v1".to_string(),
+                        extraction_config.openai_api_key.clone(),
+                    ),
+                    _ => (
+                        extraction_config.ollama_base_url.clone(),
+                        None,
+                    ),
+                };
+                LlmCategoryClassifier::new(
+                    provider.clone(),
+                    base_url,
+                    model,
+                    api_key,
+                    auto_store_config.category_filter.category_actions.clone(),
+                )
+            });
+            Box::new(CategoryFilter::new(&auto_store_config.category_filter, llm_classifier))
         }
         "heuristic" => Box::new(HeuristicFilter),
         "none" => Box::new(NoFilter),

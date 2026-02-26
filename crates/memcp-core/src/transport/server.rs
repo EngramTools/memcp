@@ -54,6 +54,11 @@ pub struct MemoryService {
     recall_config: RecallConfig,
     resource_caps: ResourceCapsConfig,
     extraction_enabled: bool,
+    store_config: crate::config::StoreConfig,
+    reembed_on_tag_change: bool,
+    resource_limits: crate::config::ResourceLimitsConfig,
+    gc_config: crate::config::GcConfig,
+    last_auto_gc: Arc<std::sync::Mutex<Option<Instant>>>,
 }
 
 impl MemoryService {
@@ -87,6 +92,11 @@ impl MemoryService {
             recall_config: RecallConfig::default(),
             resource_caps: ResourceCapsConfig::default(),
             extraction_enabled: false,
+            store_config: crate::config::StoreConfig::default(),
+            reembed_on_tag_change: false,
+            resource_limits: crate::config::ResourceLimitsConfig::default(),
+            gc_config: crate::config::GcConfig::default(),
+            last_auto_gc: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -111,6 +121,22 @@ impl MemoryService {
     /// Used by engram.host to enforce per-instance caps (max_memories, max_search_results).
     pub fn set_resource_caps(&mut self, config: ResourceCapsConfig) {
         self.resource_caps = config;
+    }
+
+    /// Update the store configuration (sync timeout, etc.).
+    pub fn set_store_config(&mut self, config: crate::config::StoreConfig) {
+        self.store_config = config;
+    }
+
+    /// Update the embedding re-embed policy.
+    pub fn set_reembed_on_tag_change(&mut self, reembed: bool) {
+        self.reembed_on_tag_change = reembed;
+    }
+
+    /// Update the resource limits and GC config for capacity warnings and auto-GC.
+    pub fn set_resource_limits(&mut self, limits: crate::config::ResourceLimitsConfig, gc: crate::config::GcConfig) {
+        self.resource_limits = limits;
+        self.gc_config = gc;
     }
 
     fn uptime_seconds(&self) -> u64 {
@@ -163,6 +189,10 @@ pub struct StoreMemoryParams {
     /// Repeated calls with the same key return the original memory (first wins).
     /// When absent, content-hash dedup applies within the server's dedup window.
     pub idempotency_key: Option<String>,
+    /// When true, block until embedding completes (or timeout). Default: false (async).
+    /// Returns enriched response with embedding_status and embedding_dimension on completion.
+    #[serde(default)]
+    pub wait: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -349,17 +379,45 @@ fn parse_datetime(s: &str, field: &str) -> Result<chrono::DateTime<chrono::Utc>,
 // When `fields` is Some(vec), returns only the keys present in the vec.
 // Unknown field names are silently ignored (forward-compatible — callers won't break when
 // new fields are added to the schema).
+/// Apply field projection to a JSON object.
+///
+/// Supports one-level dot-notation (e.g., "metadata.source" extracts
+/// `{ "metadata": { "source": ... } }`). Deeper paths (more than one dot)
+/// are silently ignored. Non-object parents are silently skipped.
 fn apply_field_projection(obj: serde_json::Value, fields: &Option<Vec<String>>) -> serde_json::Value {
     match fields {
         None => obj,
         Some(requested) if requested.is_empty() => obj,
         Some(requested) => {
             if let serde_json::Value::Object(map) = obj {
-                let filtered: serde_json::Map<String, serde_json::Value> = map
-                    .into_iter()
-                    .filter(|(k, _)| requested.iter().any(|r| r == k))
-                    .collect();
-                serde_json::Value::Object(filtered)
+                let mut result = serde_json::Map::new();
+                for field in requested {
+                    if let Some(dot_pos) = field.find('.') {
+                        let parent_key = &field[..dot_pos];
+                        let child_key = &field[dot_pos + 1..];
+                        // Reject deeper paths (more than one dot): silently skip
+                        if child_key.contains('.') {
+                            continue;
+                        }
+                        if let Some(parent_val) = map.get(parent_key) {
+                            if let serde_json::Value::Object(nested) = parent_val {
+                                if let Some(child_val) = nested.get(child_key) {
+                                    let entry = result.entry(parent_key.to_string())
+                                        .or_insert_with(|| serde_json::json!({}));
+                                    if let serde_json::Value::Object(ref mut m) = entry {
+                                        m.insert(child_key.to_string(), child_val.clone());
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Simple top-level field (existing behavior)
+                        if let Some(val) = map.get(field.as_str()) {
+                            result.insert(field.clone(), val.clone());
+                        }
+                    }
+                }
+                serde_json::Value::Object(result)
             } else {
                 obj
             }
@@ -373,7 +431,8 @@ impl MemoryService {
     #[tool(description = "Store a new memory. Returns {\"id\": \"uuid\", \"message\": \"Memory stored\"}.\n\
 Params: content (required), type_hint (fact|preference|instruction|decision), \
 tags (array), source (string), actor (string), actor_type (agent|human|system, default agent), \
-audience (global|personal|team:X), idempotency_key (optional string).\n\
+audience (global|personal|team:X), idempotency_key (optional string), \
+wait (bool, default false — when true, blocks until embedding completes; returns embedding_status and embedding_dimension).\n\
 Dedup: identical content within the server dedup window returns the existing memory (no duplicate). \
 Optional idempotency_key for caller-controlled at-most-once semantics — same key always returns original result.\n\
 Callable from code_execution_20260120 sandboxes.")]
@@ -428,23 +487,26 @@ Callable from code_execution_20260120 sandboxes.")]
             }
         }
 
-        // Resource cap: max_memories — fail-open on count query errors (Pitfall 4)
+        // Resource cap: max_memories — hard reject at hard_cap_percent (default 110%)
         if let Some(max) = self.resource_caps.max_memories {
             if let Some(ref pg) = self.pg_store {
                 match pg.count_live_memories().await {
-                    Ok(count) if count as u64 >= max => {
-                        return Ok(CallToolResult::structured_error(json!({
-                            "isError": true,
-                            "error": format!("Resource cap exceeded: max_memories (limit: {}, current: {})", max, count),
-                            "cap": "max_memories",
-                            "limit": max,
-                            "current": count,
-                        })));
+                    Ok(count) => {
+                        let ratio = count as f64 / max as f64;
+                        let hard_cap = self.resource_limits.hard_cap_percent as f64 / 100.0;
+                        if ratio >= hard_cap {
+                            return Ok(CallToolResult::structured_error(json!({
+                                "isError": true,
+                                "error": format!("Resource cap exceeded: max_memories (limit: {}, current: {}, hard_cap: {}%)", max, count, self.resource_limits.hard_cap_percent),
+                                "cap": "max_memories",
+                                "limit": max,
+                                "current": count,
+                            })));
+                        }
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "Failed to check memory count for cap enforcement — proceeding");
                     }
-                    _ => {}
                 }
             }
         }
@@ -464,6 +526,9 @@ Callable from code_execution_20260120 sandboxes.")]
             total_chunks: None,
         };
 
+        // Determine if sync store is requested
+        let sync_store = params.wait.unwrap_or(false);
+
         match self.store.store(input).await {
             Ok(memory) => {
                 // Seed salience: explicit stores get stability=3.0 (stronger than auto-store's 2.5)
@@ -472,16 +537,26 @@ Callable from code_execution_20260120 sandboxes.")]
                         tracing::warn!(error = %e, memory_id = %memory.id, "Failed to seed salience for explicit store");
                     }
                 }
-                // Enqueue background embedding job (non-blocking)
+
+                // Create oneshot channel for sync store (if requested)
+                let (completion_tx, completion_rx) = if sync_store {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    (Some(tx), Some(rx))
+                } else {
+                    (None, None)
+                };
+
+                // Enqueue background embedding job
                 if let Some(ref pipeline) = self.pipeline {
                     let text = crate::embedding::build_embedding_text(&memory.content, &memory.tags);
                     pipeline.enqueue(EmbeddingJob {
                         memory_id: memory.id.clone(),
                         text,
                         attempt: 0,
+                        completion_tx,
                     });
                 }
-                // Enqueue background extraction job (non-blocking)
+                // Enqueue background extraction job (non-blocking, never sync)
                 if let Some(ref extraction_pipeline) = self.extraction_pipeline {
                     extraction_pipeline.enqueue(ExtractionJob {
                         memory_id: memory.id.clone(),
@@ -489,7 +564,9 @@ Callable from code_execution_20260120 sandboxes.")]
                         attempt: 0,
                     });
                 }
-                Ok(CallToolResult::structured(json!({
+
+                // Build response
+                let mut response_obj = json!({
                     "id": memory.id,
                     "content": memory.content,
                     "type_hint": memory.type_hint,
@@ -503,7 +580,63 @@ Callable from code_execution_20260120 sandboxes.")]
                     "actor_type": memory.actor_type,
                     "audience": memory.audience,
                     "hint": "Use get_memory with this ID to retrieve, or update_memory to modify"
-                })))
+                });
+
+                // Sync store: wait for embedding completion
+                if let Some(rx) = completion_rx {
+                    let timeout = Duration::from_secs(self.store_config.sync_timeout_secs);
+                    match tokio::time::timeout(timeout, rx).await {
+                        Ok(Ok(completion)) => {
+                            response_obj["embedding_status"] = json!(completion.status);
+                            if let Some(dim) = completion.dimension {
+                                response_obj["embedding_dimension"] = json!(dim);
+                            }
+                        }
+                        _ => {
+                            // Timeout or channel error — embedding still pending
+                            response_obj["embedding_status"] = json!("pending");
+                        }
+                    }
+                }
+
+                // Capacity warning: check memory count vs limits
+                if let Some(max) = self.resource_caps.max_memories {
+                    if let Some(ref pg) = self.pg_store {
+                        if let Ok(count) = pg.count_live_memories().await {
+                            let ratio = count as f64 / max as f64;
+                            let warn_threshold = self.resource_limits.warn_percent as f64 / 100.0;
+                            if ratio >= warn_threshold {
+                                response_obj["warning"] = json!(format!(
+                                    "Memory usage at {}%. Upgrade storage at engram.host/upgrade",
+                                    (ratio * 100.0).round()
+                                ));
+                                // Auto-GC trigger (fire-and-forget with cooldown)
+                                if self.resource_limits.auto_gc {
+                                    let should_gc = {
+                                        let mut last = self.last_auto_gc.lock().unwrap();
+                                        let cooldown = Duration::from_secs(self.resource_limits.auto_gc_cooldown_mins * 60);
+                                        match *last {
+                                            Some(t) if t.elapsed() < cooldown => false,
+                                            _ => { *last = Some(Instant::now()); true }
+                                        }
+                                    };
+                                    if should_gc {
+                                        let store = pg.clone();
+                                        let gc_config = self.gc_config.clone();
+                                        tokio::spawn(async move {
+                                            tracing::info!("Auto-GC triggered (capacity near limit)");
+                                            if let Err(e) = crate::gc::worker::run_gc(&store, &gc_config, false).await {
+                                                tracing::warn!(error = %e, "Auto-GC failed");
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Ok(CallToolResult::structured(response_obj))
             }
             Err(e) => Ok(store_error_to_result(e)),
         }
@@ -628,14 +761,17 @@ Callable from code_execution_20260120 sandboxes.")]
 
         match self.store.update(&params.id, input).await {
             Ok(memory) => {
-                // Re-embed when content or tags change (tags are part of the embedding text)
-                if content_changed || tags_changed {
+                // Re-embed when content changes. Tag-only changes skip re-embed by default
+                // (configurable via embedding.reembed_on_tag_change in memcp.toml).
+                let should_reembed = content_changed || (tags_changed && self.reembed_on_tag_change);
+                if should_reembed {
                     if let Some(ref pipeline) = self.pipeline {
                         let text = crate::embedding::build_embedding_text(&memory.content, &memory.tags);
                         pipeline.enqueue(EmbeddingJob {
                             memory_id: memory.id.clone(),
                             text,
                             attempt: 0,
+                            completion_tx: None,
                         });
                     }
                 }
@@ -894,15 +1030,17 @@ Callable from code_execution_20260120 sandboxes.")]
     }
 
     #[tool(description = "Search memories by meaning. Returns salience-ranked results.\n\
-Params: query (required), limit (1-100, default 20), fields (array of field names for projection), \
+Params: query (required), limit (1-100, default 20), fields (array of field names for projection — \
+supports one-level dot-notation e.g. 'metadata.source'), \
 min_salience (0.0-1.0, server-side quality filter), cursor (pagination token), \
 tags (array, all must match), audience, created_after/created_before (ISO-8601), \
 bm25_weight/vector_weight/symbolic_weight (0-1).\n\
 Default output: {\"memories\": [{\"id\": \"uuid\", \"content\": \"text\", \"type_hint\": \"fact\", \
 \"source\": \"default\", \"tags\": [\"t1\"], \"created_at\": \"ISO8601\", \"updated_at\": \"ISO8601\", \
-\"access_count\": 0, \"relevance_score\": 0.85, \"match_source\": \"hybrid\", \
+\"access_count\": 0, \"relevance_score\": 0.85, \"composite_score\": 0.85, \"match_source\": \"hybrid\", \
 \"rrf_score\": 0.031, \"actor\": null, \"actor_type\": \"agent\", \"audience\": \"global\"}], \
 \"total_results\": 1, \"query\": \"...\", \"next_cursor\": \"...\", \"has_more\": false}.\n\
+composite_score is a 0-1 blended relevance combining retrieval similarity and memory importance.\n\
 With fields=[\"id\",\"content\"]: each result has only {\"id\": \"uuid\", \"content\": \"text\"}.\n\
 Idempotent: identical queries always return consistent results (safe to retry).\n\
 Callable from code_execution_20260120 sandboxes.")]
@@ -1112,6 +1250,7 @@ Callable from code_execution_20260120 sandboxes.")]
                 salience_score: 0.0, // populated by rank()
                 match_source: hit.match_source,
                 breakdown: None,     // populated by rank() when debug_scoring=true
+                composite_score: 0.0, // populated after salience scoring
             })
             .collect();
 
@@ -1221,6 +1360,26 @@ Callable from code_execution_20260120 sandboxes.")]
             scored_hits
         };
 
+        // 12.55. Compute composite relevance score (0-1) blending RRF and salience.
+        if scored_hits.len() == 1 {
+            scored_hits[0].composite_score = 1.0;
+        } else if scored_hits.len() > 1 {
+            let max_rrf = scored_hits.iter().map(|h| h.rrf_score).fold(f64::MIN, f64::max);
+            let min_rrf = scored_hits.iter().map(|h| h.rrf_score).fold(f64::MAX, f64::min);
+            let rrf_range = (max_rrf - min_rrf).max(1e-9);
+
+            let max_sal = scored_hits.iter().map(|h| h.salience_score).fold(f64::MIN, f64::max);
+            let min_sal = scored_hits.iter().map(|h| h.salience_score).fold(f64::MAX, f64::min);
+            let sal_range = (max_sal - min_sal).max(1e-9);
+
+            for hit in &mut scored_hits {
+                let norm_rrf = (hit.rrf_score - min_rrf) / rrf_range;
+                let norm_sal = (hit.salience_score - min_sal) / sal_range;
+                // 50% RRF (retrieval relevance) + 50% salience (memory importance)
+                hit.composite_score = 0.5 * norm_rrf + 0.5 * norm_sal;
+            }
+        }
+
         // 12.6. Deduplicate parent/chunk collisions — prefer chunks over parents.
         dedup_parent_chunks(&mut scored_hits);
 
@@ -1264,6 +1423,7 @@ Callable from code_execution_20260120 sandboxes.")]
                 "updated_at": hit.memory.updated_at.to_rfc3339(),
                 "access_count": hit.memory.access_count,
                 "relevance_score": (hit.salience_score * 1000.0).round() / 1000.0,
+                "composite_score": (hit.composite_score * 1000.0).round() / 1000.0,
                 "match_source": hit.match_source,
                 "rrf_score": (hit.rrf_score * 10000.0).round() / 10000.0,
                 "actor": hit.memory.actor,

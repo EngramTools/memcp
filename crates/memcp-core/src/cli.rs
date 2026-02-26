@@ -167,14 +167,23 @@ pub async fn cmd_store(
     actor_type: String,
     audience: String,
     idempotency_key: Option<String>,
+    wait: bool,
 ) -> Result<()> {
-    // Resource cap: max_memories
+    // Resource cap: max_memories — hard reject at hard_cap_percent
     if let Some(max) = config.resource_caps.max_memories {
         let count = store.count_live_memories().await
             .map_err(|e| anyhow::anyhow!("Failed to check memory count: {}", e))?;
-        if count as u64 >= max {
-            eprintln!("Error: Resource cap exceeded — max_memories limit is {} (current: {})", max, count);
+        let ratio = count as f64 / max as f64;
+        let hard_cap = config.resource_limits.hard_cap_percent as f64 / 100.0;
+        if ratio >= hard_cap {
+            eprintln!("Error: Resource cap exceeded — max_memories limit is {} (current: {}, hard_cap: {}%)", max, count, config.resource_limits.hard_cap_percent);
             std::process::exit(1);
+        }
+        // Capacity warning
+        let warn_threshold = config.resource_limits.warn_percent as f64 / 100.0;
+        if ratio >= warn_threshold {
+            eprintln!("Warning: Memory usage at {}%. Upgrade storage at engram.host/upgrade",
+                (ratio * 100.0).round());
         }
     }
 
@@ -203,9 +212,37 @@ pub async fn cmd_store(
         tracing::warn!(error = %e, memory_id = %memory.id, "Failed to seed salience for explicit store");
     }
 
+    // Sync store: poll embedding_status until complete (or timeout)
+    let mut response_json = format_memory_json(&memory, false);
+    if wait {
+        let timeout = std::time::Duration::from_secs(config.store.sync_timeout_secs);
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed() >= timeout {
+                // Timeout — embedding still pending
+                if let serde_json::Value::Object(ref mut map) = response_json {
+                    map.insert("embedding_status".to_string(), serde_json::json!("pending"));
+                }
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            match store.get(&memory.id).await {
+                Ok(m) => {
+                    if m.embedding_status == "complete" || m.embedding_status == "failed" {
+                        if let serde_json::Value::Object(ref mut map) = response_json {
+                            map.insert("embedding_status".to_string(), serde_json::json!(m.embedding_status));
+                        }
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
     println!(
         "{}",
-        serde_json::to_string(&format_memory_json(&memory, false))?
+        serde_json::to_string(&response_json)?
     );
 
     warn_if_no_daemon(store).await;
@@ -217,17 +254,40 @@ pub async fn cmd_store(
 /// When `fields` is None or empty, returns the object unchanged (backwards compatible).
 /// When `fields` is Some(vec), returns only the keys listed in the vec.
 /// Unknown field names are silently ignored — same behaviour as the MCP path in server.rs.
+/// Apply field projection with one-level dot-notation support.
+/// See server.rs apply_field_projection for full documentation.
 fn apply_field_projection(obj: serde_json::Value, fields: &Option<Vec<String>>) -> serde_json::Value {
     match fields {
         None => obj,
         Some(requested) if requested.is_empty() => obj,
         Some(requested) => {
             if let serde_json::Value::Object(map) = obj {
-                let filtered: serde_json::Map<String, serde_json::Value> = map
-                    .into_iter()
-                    .filter(|(k, _)| requested.iter().any(|r| r == k))
-                    .collect();
-                serde_json::Value::Object(filtered)
+                let mut result = serde_json::Map::new();
+                for field in requested {
+                    if let Some(dot_pos) = field.find('.') {
+                        let parent_key = &field[..dot_pos];
+                        let child_key = &field[dot_pos + 1..];
+                        if child_key.contains('.') {
+                            continue;
+                        }
+                        if let Some(parent_val) = map.get(parent_key) {
+                            if let serde_json::Value::Object(nested) = parent_val {
+                                if let Some(child_val) = nested.get(child_key) {
+                                    let entry = result.entry(parent_key.to_string())
+                                        .or_insert_with(|| serde_json::json!({}));
+                                    if let serde_json::Value::Object(ref mut m) = entry {
+                                        m.insert(child_key.to_string(), child_val.clone());
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        if let Some(val) = map.get(field.as_str()) {
+                            result.insert(field.clone(), val.clone());
+                        }
+                    }
+                }
+                serde_json::Value::Object(result)
             } else {
                 obj
             }
@@ -369,6 +429,7 @@ pub async fn cmd_search(
             salience_score: 0.0,
             match_source: h.match_source.clone(),
             breakdown: None,
+            composite_score: 0.0,
         })
         .collect();
 
@@ -442,6 +503,25 @@ pub async fn cmd_search(
         scored_hits
     };
 
+    // Compute composite relevance score (0-1) blending RRF and salience (mirrors MCP path).
+    if scored_hits.len() == 1 {
+        scored_hits[0].composite_score = 1.0;
+    } else if scored_hits.len() > 1 {
+        let max_rrf = scored_hits.iter().map(|h| h.rrf_score).fold(f64::MIN, f64::max);
+        let min_rrf = scored_hits.iter().map(|h| h.rrf_score).fold(f64::MAX, f64::min);
+        let rrf_range = (max_rrf - min_rrf).max(1e-9);
+
+        let max_sal = scored_hits.iter().map(|h| h.salience_score).fold(f64::MIN, f64::max);
+        let min_sal = scored_hits.iter().map(|h| h.salience_score).fold(f64::MAX, f64::min);
+        let sal_range = (max_sal - min_sal).max(1e-9);
+
+        for hit in &mut scored_hits {
+            let norm_rrf = (hit.rrf_score - min_rrf) / rrf_range;
+            let norm_sal = (hit.salience_score - min_sal) / sal_range;
+            hit.composite_score = 0.5 * norm_rrf + 0.5 * norm_sal;
+        }
+    }
+
     // Deduplicate parent/chunk collisions — prefer chunks over parents.
     dedup_parent_chunks(&mut scored_hits);
 
@@ -484,6 +564,7 @@ pub async fn cmd_search(
                     // Ensure id is always top-level (SCF-03)
                     obj.insert("id".to_string(), json!(h.memory.id));
                     obj.insert("salience_score".to_string(), json!(h.salience_score));
+                    obj.insert("composite_score".to_string(), json!((h.composite_score * 1000.0).round() / 1000.0));
                     obj.insert("rrf_score".to_string(), json!(h.rrf_score));
                     obj.insert("match_source".to_string(), json!(h.match_source));
                 }
@@ -555,6 +636,7 @@ pub async fn cmd_search(
                     // Ensure id is always top-level (SCF-03)
                     obj.insert("id".to_string(), json!(h.memory.id));
                     obj.insert("salience_score".to_string(), json!(h.salience_score));
+                    obj.insert("composite_score".to_string(), json!((h.composite_score * 1000.0).round() / 1000.0));
                     obj.insert("rrf_score".to_string(), json!(h.rrf_score));
                     obj.insert("match_source".to_string(), json!(h.match_source));
                 }

@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use super::{EmbeddingJob, EmbeddingProvider, build_embedding_text};
+use super::{EmbeddingCompletion, EmbeddingJob, EmbeddingProvider, build_embedding_text};
 use crate::consolidation::ConsolidationJob;
 use crate::gc::DedupJob;
 use crate::store::MemoryStore;
@@ -70,10 +70,24 @@ impl EmbeddingPipeline {
                             );
                             // Storage error is not retryable — mark as failed
                             let _ = store.update_embedding_status(&job.memory_id, "failed").await;
+                            // Signal sync store caller (if waiting)
+                            if let Some(tx) = job.completion_tx {
+                                let _ = tx.send(EmbeddingCompletion {
+                                    status: "failed".to_string(),
+                                    dimension: None,
+                                });
+                            }
                             worker_pending.fetch_sub(1, Ordering::Relaxed);
                         } else {
                             let _ = store.update_embedding_status(&job.memory_id, "complete").await;
                             tracing::debug!(memory_id = %job.memory_id, "Embedding complete");
+                            // Signal sync store caller (if waiting)
+                            if let Some(tx) = job.completion_tx {
+                                let _ = tx.send(EmbeddingCompletion {
+                                    status: "completed".to_string(),
+                                    dimension: Some(dim),
+                                });
+                            }
 
                             // Trigger consolidation check after successful embedding.
                             // Consolidation requires the embedding to exist first (for cosine similarity).
@@ -122,10 +136,13 @@ impl EmbeddingPipeline {
                         // Exponential backoff: 1s, 2s, 4s
                         let delay = Duration::from_secs(2u64.pow(job.attempt as u32));
                         tokio::time::sleep(delay).await;
-                        // Re-enqueue with incremented attempt (pending_count stays the same — job continues)
+                        // Re-enqueue with incremented attempt (pending_count stays the same — job continues).
+                        // Transfer completion_tx so sync caller gets notified after final attempt.
                         let _ = retry_tx.try_send(EmbeddingJob {
+                            memory_id: job.memory_id,
+                            text: job.text,
                             attempt: job.attempt + 1,
-                            ..job
+                            completion_tx: job.completion_tx,
                         });
                     }
                     Err(e) => {
@@ -136,6 +153,13 @@ impl EmbeddingPipeline {
                             "Embedding failed after 3 retries, marking as failed"
                         );
                         let _ = store.update_embedding_status(&job.memory_id, "failed").await;
+                        // Signal sync store caller (if waiting)
+                        if let Some(tx) = job.completion_tx {
+                            let _ = tx.send(EmbeddingCompletion {
+                                status: "failed".to_string(),
+                                dimension: None,
+                            });
+                        }
                         worker_pending.fetch_sub(1, Ordering::Relaxed);
                     }
                 }
@@ -151,9 +175,16 @@ impl EmbeddingPipeline {
     /// The backfill process will pick up missed memories on next startup.
     pub fn enqueue(&self, job: EmbeddingJob) {
         self.pending_count.fetch_add(1, Ordering::Relaxed);
-        if let Err(_) = self.sender.try_send(job) {
+        if let Err(e) = self.sender.try_send(job) {
             // Job dropped — decrement since no worker will process it
             self.pending_count.fetch_sub(1, Ordering::Relaxed);
+            // Signal sync store caller that embedding is deferred (not failed — backfill will process it)
+            if let Some(tx) = e.into_inner().completion_tx {
+                let _ = tx.send(EmbeddingCompletion {
+                    status: "pending".to_string(),
+                    dimension: None,
+                });
+            }
             tracing::warn!(
                 "Embedding queue full — memory stored, embedding deferred to backfill"
             );
@@ -210,6 +241,7 @@ pub async fn backfill(
                 memory_id: memory.id,
                 text,
                 attempt: 0,
+                completion_tx: None,
             };
             if let Err(_) = sender.try_send(job) {
                 tracing::warn!("Embedding queue full during backfill — some memories deferred");

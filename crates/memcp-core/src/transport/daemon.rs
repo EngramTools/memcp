@@ -413,6 +413,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
                                     memory_id: memory.id,
                                     text,
                                     attempt: 0,
+                                    completion_tx: None,
                                 });
                             }
                             tracing::debug!(count = count, "Polled and queued pending embeddings");

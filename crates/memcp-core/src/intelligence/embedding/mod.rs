@@ -67,8 +67,16 @@ pub enum EmbeddingError {
     NotConfigured(String),
 }
 
-/// A pending embedding job for a memory.
+/// Result of embedding completion, sent through the oneshot channel for sync store.
 #[derive(Debug, Clone)]
+pub struct EmbeddingCompletion {
+    /// "completed" or "failed"
+    pub status: String,
+    /// Vector dimension (present on success)
+    pub dimension: Option<i32>,
+}
+
+/// A pending embedding job for a memory.
 pub struct EmbeddingJob {
     /// The memory ID to generate an embedding for
     pub memory_id: String,
@@ -76,6 +84,9 @@ pub struct EmbeddingJob {
     pub text: String,
     /// Current attempt number (for retry logic)
     pub attempt: u8,
+    /// Optional oneshot sender for sync store — signals embedding completion back to caller.
+    /// When Some, the caller is blocking on the receiver waiting for the result.
+    pub completion_tx: Option<tokio::sync::oneshot::Sender<EmbeddingCompletion>>,
 }
 
 /// Concatenate memory content and tags into a single string for embedding.

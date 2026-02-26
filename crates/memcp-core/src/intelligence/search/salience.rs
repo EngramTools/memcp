@@ -41,6 +41,9 @@ pub struct ScoredHit {
     pub match_source: String,
     /// Dimension breakdown — only populated when SalienceConfig.debug_scoring is true
     pub breakdown: Option<ScoreBreakdown>,
+    /// Composite relevance score (0-1) blending RRF and salience.
+    /// Computed after salience scoring, before final output.
+    pub composite_score: f64,
 }
 
 /// Salience scorer that re-ranks a set of hits using configurable dimension weights.

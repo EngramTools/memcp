@@ -364,6 +364,12 @@ pub struct EmbeddingConfig {
     /// Only needed for custom/unknown models.
     #[serde(default)]
     pub dimension: Option<usize>,
+
+    /// Re-embed when only tags change (default: false).
+    /// When false, only content changes trigger re-embedding. Tag-only updates
+    /// skip re-embed to save compute (symbolic search still works for tags).
+    #[serde(default)]
+    pub reembed_on_tag_change: bool,
 }
 
 fn default_embedding_provider() -> String {
@@ -393,6 +399,7 @@ impl Default for EmbeddingConfig {
             local_model: default_local_model(),
             openai_model: default_openai_model(),
             dimension: None,
+            reembed_on_tag_change: false,
         }
     }
 }
@@ -422,10 +429,41 @@ pub struct CategoryFilterConfig {
     /// Invalid patterns are skipped with a warning (fail-open).
     #[serde(default)]
     pub tool_narration_patterns: Vec<String>,
+
+    /// Per-category actions: "store", "skip", or "store-low" (store with lower stability).
+    /// Keys are category names from the taxonomy (decision, preference, architecture,
+    /// fact, instruction, correction, tool-narration, ephemeral, code-output, error-trace).
+    #[serde(default = "default_category_actions")]
+    pub category_actions: std::collections::HashMap<String, String>,
+
+    /// LLM provider for category classification: "ollama" or "openai".
+    /// Uses extraction config for base URLs and API keys.
+    /// When None, LLM classification is disabled (heuristic-only).
+    #[serde(default)]
+    pub llm_provider: Option<String>,
+
+    /// LLM model for category classification (e.g. "llama3.2", "gpt-4o-mini").
+    #[serde(default)]
+    pub llm_model: Option<String>,
 }
 
 fn default_category_filter_enabled() -> bool { true }
 fn default_block_tool_narration() -> bool { true }
+
+fn default_category_actions() -> std::collections::HashMap<String, String> {
+    let mut m = std::collections::HashMap::new();
+    m.insert("decision".to_string(), "store".to_string());
+    m.insert("preference".to_string(), "store".to_string());
+    m.insert("architecture".to_string(), "store".to_string());
+    m.insert("fact".to_string(), "store".to_string());
+    m.insert("instruction".to_string(), "store".to_string());
+    m.insert("correction".to_string(), "store".to_string());
+    m.insert("tool-narration".to_string(), "skip".to_string());
+    m.insert("ephemeral".to_string(), "skip".to_string());
+    m.insert("code-output".to_string(), "store-low".to_string());
+    m.insert("error-trace".to_string(), "store-low".to_string());
+    m
+}
 
 impl Default for CategoryFilterConfig {
     fn default() -> Self {
@@ -433,6 +471,9 @@ impl Default for CategoryFilterConfig {
             enabled: default_category_filter_enabled(),
             block_tool_narration: default_block_tool_narration(),
             tool_narration_patterns: Vec::new(),
+            category_actions: default_category_actions(),
+            llm_provider: None,
+            llm_model: None,
         }
     }
 }
@@ -979,6 +1020,67 @@ impl Default for ResourceCapsConfig {
     }
 }
 
+/// Configuration for store operations.
+///
+/// Controls sync store timeout and other store-level behaviors.
+/// Nested env var overrides use double underscores:
+///   MEMCP_STORE__SYNC_TIMEOUT_SECS=10
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreConfig {
+    /// Timeout in seconds for sync store (`--wait`/`wait: true`).
+    /// After this timeout, store returns success with `embedding_status: "pending"`.
+    /// Default: 5 seconds (covers local fastembed ~200ms and OpenAI ~2s with margin).
+    #[serde(default = "default_sync_timeout_secs")]
+    pub sync_timeout_secs: u64,
+}
+
+fn default_sync_timeout_secs() -> u64 { 5 }
+
+impl Default for StoreConfig {
+    fn default() -> Self {
+        StoreConfig {
+            sync_timeout_secs: default_sync_timeout_secs(),
+        }
+    }
+}
+
+/// Configuration for resource limits and capacity thresholds.
+///
+/// Controls when to warn about approaching capacity and whether to auto-trigger GC.
+/// Nested env var overrides:
+///   MEMCP_RESOURCE_LIMITS__WARN_PERCENT=80
+///   MEMCP_RESOURCE_LIMITS__AUTO_GC=true
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceLimitsConfig {
+    /// Percentage of max_memories at which to start warning (default: 80)
+    #[serde(default = "default_warn_percent")]
+    pub warn_percent: u64,
+    /// Percentage of max_memories at which to hard-reject stores (default: 110)
+    #[serde(default = "default_hard_cap_percent")]
+    pub hard_cap_percent: u64,
+    /// Auto-trigger GC when above warn_percent (default: false — free tier off, paid tier on)
+    #[serde(default)]
+    pub auto_gc: bool,
+    /// Minimum minutes between auto-GC runs (default: 15)
+    #[serde(default = "default_auto_gc_cooldown_mins")]
+    pub auto_gc_cooldown_mins: u64,
+}
+
+fn default_warn_percent() -> u64 { 80 }
+fn default_hard_cap_percent() -> u64 { 110 }
+fn default_auto_gc_cooldown_mins() -> u64 { 15 }
+
+impl Default for ResourceLimitsConfig {
+    fn default() -> Self {
+        ResourceLimitsConfig {
+            warn_percent: default_warn_percent(),
+            hard_cap_percent: default_hard_cap_percent(),
+            auto_gc: false,
+            auto_gc_cooldown_mins: default_auto_gc_cooldown_mins(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Log level: trace, debug, info, warn, error
@@ -1080,6 +1182,14 @@ pub struct Config {
     /// Existing configs without [chunking] section still work (serde default applied).
     #[serde(default)]
     pub chunking: ChunkingConfig,
+
+    /// Store operation configuration (sync timeout, etc.)
+    #[serde(default)]
+    pub store: StoreConfig,
+
+    /// Resource limits and capacity threshold configuration.
+    #[serde(default)]
+    pub resource_limits: ResourceLimitsConfig,
 }
 
 fn default_log_level() -> String {
@@ -1113,6 +1223,8 @@ impl Default for Config {
             health: HealthConfig::default(),
             resource_caps: ResourceCapsConfig::default(),
             chunking: ChunkingConfig::default(),
+            store: StoreConfig::default(),
+            resource_limits: ResourceLimitsConfig::default(),
         }
     }
 }

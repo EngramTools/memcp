@@ -196,8 +196,11 @@ async fn run_worker(
         }
 
         // Filter check
-        match filter.should_store(&entry).await {
-            Ok(true) => {} // proceed
+        let category_result = match filter.should_store(&entry).await {
+            Ok(true) => {
+                // Get classification result if available (CategoryFilter with LLM)
+                filter.last_classification()
+            }
             Ok(false) => {
                 tracing::debug!(
                     content_preview = %entry.content.chars().take(50).collect::<String>(),
@@ -208,8 +211,9 @@ async fn run_worker(
             Err(e) => {
                 tracing::warn!(error = %e, "Auto-store filter error, storing anyway");
                 // On filter error, default to storing (fail open)
+                None
             }
-        }
+        };
 
         // Summarize assistant responses, store user messages raw
         let is_assistant = entry.metadata.get("role").map(|r| r == "assistant").unwrap_or(false);
@@ -251,6 +255,10 @@ async fn run_worker(
         if let Some(ref project) = entry.project {
             tags.push(format!("project:{}", project));
         }
+        // Add category tag from LLM classification
+        if let Some(ref cr) = category_result {
+            tags.push(format!("category:{}", cr.category));
+        }
 
         // Store the memory
         let create = CreateMemory {
@@ -271,7 +279,12 @@ async fn run_worker(
         match store.store(create).await {
             Ok(memory) => {
                 // Seed salience: auto-store gets stability=2.5 (weaker than explicit store's 3.0)
-                if let Err(e) = store.upsert_salience(&memory.id, 2.5, 5.0, 0, None).await {
+                // "store-low" categories get stability=1.5 (even weaker — ephemeral-ish content)
+                let stability = match &category_result {
+                    Some(cr) if cr.action == "store-low" => 1.5,
+                    _ => 2.5,
+                };
+                if let Err(e) = store.upsert_salience(&memory.id, stability, 5.0, 0, None).await {
                     tracing::warn!(error = %e, memory_id = %memory.id, "Failed to seed salience for auto-store");
                 }
 
@@ -309,6 +322,7 @@ async fn run_worker(
                         memory_id: memory.id.clone(),
                         text,
                         attempt: 0,
+                        completion_tx: None,
                     });
                 }
 
@@ -363,6 +377,7 @@ async fn run_worker(
                                         memory_id: chunk_mem.id.clone(),
                                         text,
                                         attempt: 0,
+                                        completion_tx: None,
                                     });
                                 }
 
