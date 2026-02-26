@@ -84,6 +84,23 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     ready.store(true, std::sync::atomic::Ordering::Release);
     tracing::info!("Daemon ready — accepting health probes");
 
+    // 2.7. Spawn health HTTP server if enabled
+    let health_handle = if config.health.enabled {
+        let addr: std::net::SocketAddr = format!("{}:{}", config.health.bind, config.health.port)
+            .parse()
+            .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], 9090)));
+        let state = crate::health::HealthState {
+            ready: ready.clone(),
+            started_at: tokio::time::Instant::now(),
+            caps: config.resource_caps.clone(),
+            store: Some(store.clone()),
+        };
+        Some(tokio::spawn(crate::health::serve(addr, state)))
+    } else {
+        tracing::info!("Health HTTP server disabled via config");
+        None
+    };
+
     // 3. Create consolidation worker if enabled
     let consolidation_sender = if config.consolidation.enabled {
         let worker = ConsolidationWorker::new(
@@ -432,11 +449,44 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
 
     // 11. Wait for shutdown signal
     shutdown_signal().await;
-    tracing::info!("Shutdown signal received, stopping daemon...");
+    tracing::info!("SIGTERM/SIGINT received — initiating graceful shutdown");
 
-    // 12. Clean shutdown
-    poll_handle.abort();
-    clear_heartbeat(&store).await;
+    // 12. Stop accepting new work
+    ready.store(false, std::sync::atomic::Ordering::Release);
+    tracing::info!("Marked as not-ready — health probes will return 503");
+
+    // 13. Graceful shutdown with 10-second timeout
+    let shutdown_store = store.clone();
+    match tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        // Stop polling for new work
+        tracing::info!("Stopping poll worker...");
+        poll_handle.abort();
+
+        // Flush embedding pipeline: drop sender so in-flight items drain
+        // Items still pending in DB remain as embedding_status='pending' for next startup
+        tracing::info!("Flushing embedding pipeline (pending items persist to DB)...");
+        drop(pipeline);
+
+        // Clear heartbeat
+        tracing::info!("Clearing daemon heartbeat...");
+        clear_heartbeat(&shutdown_store).await;
+
+        // Close DB connection pool
+        tracing::info!("Closing DB connection pool...");
+        shutdown_store.pool().close().await;
+
+        tracing::info!("Clean shutdown complete");
+    }).await {
+        Ok(_) => {}
+        Err(_) => {
+            tracing::warn!("Shutdown timeout (10s) exceeded — forcing exit");
+        }
+    }
+
+    // Abort health server if running
+    if let Some(handle) = health_handle {
+        handle.abort();
+    }
 
     tracing::info!("memcp daemon stopped");
     Ok(())

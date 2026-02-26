@@ -717,6 +717,7 @@ async fn main() -> Result<()> {
                 content_filter,
             );
             service.set_recall_config(config.recall.clone(), config.extraction.enabled);
+            service.set_resource_caps(config.resource_caps.clone());
 
             // 11. Serve via stdio transport
             let (stdin, stdout) = rmcp::transport::io::stdio();
