@@ -18,6 +18,17 @@ use std::thread;
 use std::time::Duration;
 use serde_json::{json, Value};
 
+/// Locate the memcp binary in the workspace target directory.
+fn memcp_bin_path() -> std::path::PathBuf {
+    let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.pop(); // crates/
+    path.pop(); // workspace root
+    path.push("target");
+    path.push("debug");
+    path.push("memcp");
+    path
+}
+
 // ---------------------------------------------------------------------------
 // McpClient — synchronous stdio JSON-RPC client
 // ---------------------------------------------------------------------------
@@ -30,7 +41,7 @@ struct McpClient {
 
 impl McpClient {
     fn spawn_with_env(env_vars: Vec<(&str, String)>) -> Self {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_memcp"));
+        let mut cmd = Command::new(memcp_bin_path());
         cmd.arg("serve")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

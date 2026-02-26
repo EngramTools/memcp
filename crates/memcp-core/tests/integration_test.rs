@@ -5,6 +5,19 @@ use std::thread;
 use std::time::Duration;
 use serde_json::{json, Value};
 
+/// Locate the memcp binary in the workspace target directory.
+/// In a workspace, binaries from other crates are built into the shared target/ dir.
+fn memcp_bin_path() -> std::path::PathBuf {
+    let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Go up from crates/memcp-core to workspace root
+    path.pop(); // crates/
+    path.pop(); // workspace root
+    path.push("target");
+    path.push("debug");
+    path.push("memcp");
+    path
+}
+
 /// Helper struct to manage server process with async I/O
 struct McpClient {
     child: std::process::Child,
@@ -18,7 +31,7 @@ impl McpClient {
     }
 
     fn spawn_with_env(env_vars: Vec<(&str, String)>) -> Self {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_memcp"));
+        let mut cmd = Command::new(memcp_bin_path());
         cmd.arg("serve")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -857,7 +870,7 @@ fn test_cli_search_daemon_offline() {
     // Run `memcp search "test query"` with no daemon running.
     // The daemon socket will not be present, so the CLI should fall back to
     // BM25-only search (current behavior) and warn on stderr (added in Plan 01).
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_memcp"))
+    let output = std::process::Command::new(memcp_bin_path())
         .args(["search", "test query"])
         .env("DATABASE_URL", &database_url)
         .output()

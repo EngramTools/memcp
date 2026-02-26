@@ -1,0 +1,19 @@
+[package]
+name = "memcp-bin"
+version = "0.1.0"
+edition = "2021"
+description = "Memory server for AI agents"
+
+[[bin]]
+name = "memcp"
+path = "src/main.rs"
+
+[dependencies]
+memcp = { path = "../memcp-core", package = "memcp-core" }
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive", "env"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
+tracing = "0.1"
+rmcp = { version = "0.15", features = ["server", "transport-io", "macros"] }
