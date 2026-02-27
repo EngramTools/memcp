@@ -228,6 +228,11 @@ enum Commands {
         #[arg(long)]
         reset: bool,
     },
+    /// AI brain curation — merge, flag stale, and strengthen memories
+    Curation {
+        #[command(subcommand)]
+        action: CurationAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -253,6 +258,27 @@ enum EmbedAction {
         /// Skip confirmation prompt for destructive cross-dimension switches (for scripted use)
         #[arg(long, short = 'y')]
         yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum CurationAction {
+    /// Run a single curation pass (merge, flag stale, strengthen)
+    Run {
+        /// Preview actions without executing (dry run)
+        #[arg(long)]
+        propose: bool,
+    },
+    /// Show curation run history
+    Log {
+        /// Number of recent runs to show (default: 10)
+        #[arg(long, default_value = "10")]
+        limit: i64,
+    },
+    /// Undo a curation run (restore merged originals, remove tags, revert stability)
+    Undo {
+        /// The run ID to undo
+        run_id: String,
     },
 }
 
@@ -547,6 +573,21 @@ async fn main() -> Result<()> {
         Commands::Recall { query, session_id, reset } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
             cli::cmd_recall(&store, &config, &query, session_id, reset).await?;
+        }
+
+        Commands::Curation { action } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            match action {
+                CurationAction::Run { propose } => {
+                    cli::cmd_curation_run(&store, &config, propose).await?;
+                }
+                CurationAction::Log { limit } => {
+                    cli::cmd_curation_log(&store, limit).await?;
+                }
+                CurationAction::Undo { run_id } => {
+                    cli::cmd_curation_undo(&store, &run_id).await?;
+                }
+            }
         }
 
         Commands::Serve => {

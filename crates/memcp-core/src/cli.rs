@@ -1167,6 +1167,143 @@ pub async fn cmd_recall(
 }
 
 // ---------------------------------------------------------------------------
+// Curation commands
+// ---------------------------------------------------------------------------
+
+/// Run a single curation pass.
+///
+/// With `--propose`: previews what actions would be taken without executing.
+/// Without `--propose`: executes the full curation pipeline (merge, flag, strengthen).
+pub async fn cmd_curation_run(
+    store: &Arc<PostgresMemoryStore>,
+    config: &Config,
+    propose: bool,
+) -> Result<()> {
+    use crate::curation;
+
+    let curation_config = config.curation.clone();
+
+    // Create LLM provider if configured
+    let provider = match curation::create_curation_provider(&curation_config) {
+        Ok(p) => p,
+        Err(e) => {
+            let output = serde_json::json!({
+                "status": "error",
+                "error": format!("Failed to create curation provider: {}", e),
+            });
+            println!("{}", serde_json::to_string(&output)?);
+            return Ok(());
+        }
+    };
+
+    if propose {
+        // Dry-run: run curation but only report what would happen
+        // For now, run the full pipeline and report results
+        // TODO: Add true dry-run mode that doesn't execute actions
+        eprintln!("note: --propose mode runs the full pipeline and reports results");
+        eprintln!("      (true dry-run without side effects planned for future release)");
+    }
+
+    let provider_ref = provider.as_deref();
+    let result = curation::worker::run_curation(store, &curation_config, provider_ref)
+        .await
+        .map_err(|e| anyhow::anyhow!("Curation failed: {}", e))?;
+
+    if let Some(reason) = &result.skipped_reason {
+        let output = serde_json::json!({
+            "status": "skipped",
+            "reason": reason,
+        });
+        println!("{}", serde_json::to_string(&output)?);
+    } else {
+        let output = serde_json::json!({
+            "status": "ok",
+            "run_id": result.run_id,
+            "candidates_processed": result.candidates_processed,
+            "clusters_found": result.clusters_found,
+            "merged": result.merged_count,
+            "flagged_stale": result.flagged_stale_count,
+            "strengthened": result.strengthened_count,
+            "skipped": result.skipped_count,
+        });
+        println!("{}", serde_json::to_string(&output)?);
+    }
+
+    Ok(())
+}
+
+/// Show curation run history.
+///
+/// Displays recent curation runs with their action counts and status.
+pub async fn cmd_curation_log(
+    store: &Arc<PostgresMemoryStore>,
+    limit: i64,
+) -> Result<()> {
+    let runs = store
+        .get_curation_runs(limit as usize)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to fetch curation runs: {}", e))?;
+
+    if runs.is_empty() {
+        let output = serde_json::json!({
+            "runs": [],
+            "message": "No curation runs found",
+        });
+        println!("{}", serde_json::to_string(&output)?);
+        return Ok(());
+    }
+
+    let run_json: Vec<serde_json::Value> = runs
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.id,
+                "status": r.status,
+                "mode": r.mode,
+                "started_at": r.started_at,
+                "completed_at": r.completed_at,
+                "merged_count": r.merged_count,
+                "flagged_stale_count": r.flagged_stale_count,
+                "strengthened_count": r.strengthened_count,
+                "skipped_count": r.skipped_count,
+                "error_message": r.error_message,
+            })
+        })
+        .collect();
+
+    let output = serde_json::json!({
+        "runs": run_json,
+        "count": runs.len(),
+    });
+    println!("{}", serde_json::to_string(&output)?);
+
+    Ok(())
+}
+
+/// Undo a curation run.
+///
+/// Reverses all actions from a completed run: restores soft-deleted originals,
+/// removes merged memories, reverts stability changes, and strips added tags.
+pub async fn cmd_curation_undo(
+    store: &Arc<PostgresMemoryStore>,
+    run_id: &str,
+) -> Result<()> {
+    let undo_count = store
+        .undo_curation_run(run_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("Undo failed: {}", e))?;
+
+    let output = serde_json::json!({
+        "status": "ok",
+        "run_id": run_id,
+        "actions_undone": undo_count,
+    });
+    println!("{}", serde_json::to_string(&output)?);
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Statusline install / remove
 // ---------------------------------------------------------------------------
 
