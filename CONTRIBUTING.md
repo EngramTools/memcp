@@ -2,7 +2,7 @@
 
 We welcome contributions! Before submitting a PR, please sign the CLA.
 
-[![CLA assistant](https://cla-assistant.io/readme/badge/engramhq/memcp)](https://cla-assistant.io/engramhq/memcp)
+[![CLA assistant](https://cla-assistant.io/readme/badge/EngramTools/memcp)](https://cla-assistant.io/EngramTools/memcp)
 
 ## Contributor License Agreement
 
