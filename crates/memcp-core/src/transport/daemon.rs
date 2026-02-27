@@ -29,6 +29,7 @@ use crate::query_intelligence::QueryIntelligenceProvider;
 use crate::query_intelligence::ollama::OllamaQueryIntelligenceProvider;
 use crate::query_intelligence::openai::OpenAIQueryIntelligenceProvider;
 use crate::store::postgres::PostgresMemoryStore;
+use crate::curation::{self, create_curation_provider};
 use crate::summarization::create_summarization_provider;
 
 /// Main daemon entry point.
@@ -329,6 +330,52 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         );
     } else {
         tracing::info!("GC disabled via config");
+    }
+
+    // 8.6. Spawn curation worker if enabled
+    if config.curation.enabled {
+        let curation_store = store.clone();
+        let curation_config = config.curation.clone();
+        let curation_provider = match create_curation_provider(&curation_config) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to create curation provider — curation disabled");
+                None
+            }
+        };
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(curation_config.interval_secs));
+            loop {
+                interval.tick().await;
+                let provider_ref = curation_provider.as_deref();
+                match curation::worker::run_curation(&curation_store, &curation_config, provider_ref).await {
+                    Ok(result) => {
+                        if let Some(reason) = &result.skipped_reason {
+                            tracing::debug!(reason = %reason, "Curation pass skipped");
+                        } else {
+                            tracing::info!(
+                                run_id = %result.run_id,
+                                merged = result.merged_count,
+                                flagged = result.flagged_stale_count,
+                                strengthened = result.strengthened_count,
+                                skipped = result.skipped_count,
+                                candidates = result.candidates_processed,
+                                clusters = result.clusters_found,
+                                "Curation pass complete"
+                            );
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "Curation pass failed"),
+                }
+            }
+        });
+        tracing::info!(
+            interval_secs = config.curation.interval_secs,
+            provider = config.curation.llm_provider.as_deref().unwrap_or("algorithmic"),
+            "Curation worker started"
+        );
+    } else {
+        tracing::info!("Curation disabled via config");
     }
 
     // 9. Write initial heartbeat

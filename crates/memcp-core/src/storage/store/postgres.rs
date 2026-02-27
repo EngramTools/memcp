@@ -45,6 +45,36 @@ impl Default for SalienceRow {
     }
 }
 
+/// A curation run record from the curation_runs table.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CurationRunRow {
+    pub id: String,
+    pub started_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub status: String,
+    pub mode: String,
+    pub window_start: Option<DateTime<Utc>>,
+    pub window_end: DateTime<Utc>,
+    pub merged_count: i32,
+    pub flagged_stale_count: i32,
+    pub strengthened_count: i32,
+    pub skipped_count: i32,
+    pub error_message: Option<String>,
+}
+
+/// A curation action record from the curation_actions table.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CurationActionRow {
+    pub id: String,
+    pub run_id: String,
+    pub action_type: String,
+    pub target_memory_ids: Vec<String>,
+    pub merged_memory_id: Option<String>,
+    pub original_salience: Option<f64>,
+    pub details: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// PostgreSQL-backed memory store using sqlx connection pool.
 pub struct PostgresMemoryStore {
     pool: PgPool,
@@ -2640,6 +2670,471 @@ impl PostgresMemoryStore {
             .await
             .map_err(|e| MemcpError::Storage(format!("Failed to delete chunks for parent {}: {}", parent_id, e)))?;
         Ok(result.rows_affected())
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Curation store methods
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Get the window_end of the last successful curation run.
+    /// Returns None if no completed run exists (triggers full-corpus first run).
+    pub async fn get_last_successful_curation_time(
+        &self,
+    ) -> Result<Option<DateTime<Utc>>, MemcpError> {
+        let row = sqlx::query_scalar::<_, DateTime<Utc>>(
+            "SELECT window_end FROM curation_runs WHERE status = 'completed' \
+             ORDER BY completed_at DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| {
+            MemcpError::Storage(format!("Failed to get last curation time: {}", e))
+        })?;
+        Ok(row)
+    }
+
+    /// Fetch candidate memories for curation with their salience data.
+    /// Windowed: only memories created/modified since `since` (or all if None).
+    /// Excludes soft-deleted, pending-embedding, and recently-created curated memories.
+    pub async fn get_memories_for_curation(
+        &self,
+        since: Option<DateTime<Utc>>,
+        limit: usize,
+    ) -> Result<Vec<(crate::store::Memory, SalienceRow)>, MemcpError> {
+        let query = if since.is_some() {
+            "SELECT m.id, m.content, m.type_hint, m.source, m.tags, m.created_at, m.updated_at, \
+             m.last_accessed_at, m.access_count, m.embedding_status, \
+             m.extracted_entities, m.extracted_facts, m.extraction_status, \
+             m.is_consolidated_original, m.consolidated_into, \
+             m.actor, m.actor_type, m.audience, m.parent_id, m.chunk_index, m.total_chunks, \
+             COALESCE(s.stability, 1.0) as sal_stability, \
+             COALESCE(s.difficulty, 5.0) as sal_difficulty, \
+             COALESCE(s.reinforcement_count, 0) as sal_reinforcement_count, \
+             s.last_reinforced_at as sal_last_reinforced_at \
+             FROM memories m \
+             LEFT JOIN memory_salience s ON m.id = s.memory_id \
+             WHERE m.deleted_at IS NULL \
+             AND m.embedding_status = 'complete' \
+             AND NOT (m.type_hint = 'curated' AND m.created_at > NOW() - INTERVAL '1 hour') \
+             AND (m.updated_at > $1 OR m.created_at > $1) \
+             ORDER BY m.created_at ASC \
+             LIMIT $2"
+        } else {
+            "SELECT m.id, m.content, m.type_hint, m.source, m.tags, m.created_at, m.updated_at, \
+             m.last_accessed_at, m.access_count, m.embedding_status, \
+             m.extracted_entities, m.extracted_facts, m.extraction_status, \
+             m.is_consolidated_original, m.consolidated_into, \
+             m.actor, m.actor_type, m.audience, m.parent_id, m.chunk_index, m.total_chunks, \
+             COALESCE(s.stability, 1.0) as sal_stability, \
+             COALESCE(s.difficulty, 5.0) as sal_difficulty, \
+             COALESCE(s.reinforcement_count, 0) as sal_reinforcement_count, \
+             s.last_reinforced_at as sal_last_reinforced_at \
+             FROM memories m \
+             LEFT JOIN memory_salience s ON m.id = s.memory_id \
+             WHERE m.deleted_at IS NULL \
+             AND m.embedding_status = 'complete' \
+             AND NOT (m.type_hint = 'curated' AND m.created_at > NOW() - INTERVAL '1 hour') \
+             ORDER BY m.created_at ASC \
+             LIMIT $1"
+        };
+
+        let rows = if let Some(since_time) = since {
+            sqlx::query(query)
+                .bind(since_time)
+                .bind(limit as i64)
+                .fetch_all(&self.pool)
+                .await
+        } else {
+            sqlx::query(query)
+                .bind(limit as i64)
+                .fetch_all(&self.pool)
+                .await
+        }
+        .map_err(|e| {
+            MemcpError::Storage(format!("Failed to get memories for curation: {}", e))
+        })?;
+
+        let mut results = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let memory = row_to_memory(row)?;
+            let salience = SalienceRow {
+                stability: row
+                    .try_get::<f64, _>("sal_stability")
+                    .unwrap_or(1.0),
+                difficulty: row
+                    .try_get::<f64, _>("sal_difficulty")
+                    .unwrap_or(5.0),
+                reinforcement_count: row
+                    .try_get::<i32, _>("sal_reinforcement_count")
+                    .unwrap_or(0),
+                last_reinforced_at: row
+                    .try_get::<Option<DateTime<Utc>>, _>("sal_last_reinforced_at")
+                    .unwrap_or(None),
+            };
+            results.push((memory, salience));
+        }
+        Ok(results)
+    }
+
+    /// Create a new curation run record. Returns the run_id (UUID).
+    pub async fn create_curation_run(
+        &self,
+        mode: &str,
+        window_start: Option<DateTime<Utc>>,
+        window_end: DateTime<Utc>,
+    ) -> Result<String, MemcpError> {
+        let id: (uuid::Uuid,) = sqlx::query_as(
+            "INSERT INTO curation_runs (mode, window_start, window_end) \
+             VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(mode)
+        .bind(window_start)
+        .bind(window_end)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to create curation run: {}", e)))?;
+        Ok(id.0.to_string())
+    }
+
+    /// Mark a curation run as completed with final counts.
+    pub async fn complete_curation_run(
+        &self,
+        run_id: &str,
+        merged_count: i32,
+        flagged_stale_count: i32,
+        strengthened_count: i32,
+        skipped_count: i32,
+    ) -> Result<(), MemcpError> {
+        sqlx::query(
+            "UPDATE curation_runs SET status = 'completed', completed_at = NOW(), \
+             merged_count = $2, flagged_stale_count = $3, \
+             strengthened_count = $4, skipped_count = $5 \
+             WHERE id = $1::uuid",
+        )
+        .bind(run_id)
+        .bind(merged_count)
+        .bind(flagged_stale_count)
+        .bind(strengthened_count)
+        .bind(skipped_count)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            MemcpError::Storage(format!("Failed to complete curation run: {}", e))
+        })?;
+        Ok(())
+    }
+
+    /// Mark a curation run as failed.
+    pub async fn fail_curation_run(
+        &self,
+        run_id: &str,
+        error: &str,
+    ) -> Result<(), MemcpError> {
+        sqlx::query(
+            "UPDATE curation_runs SET status = 'failed', completed_at = NOW(), \
+             error_message = $2 WHERE id = $1::uuid",
+        )
+        .bind(run_id)
+        .bind(error)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            MemcpError::Storage(format!("Failed to mark curation run as failed: {}", e))
+        })?;
+        Ok(())
+    }
+
+    /// Record a single curation action for undo tracking.
+    pub async fn record_curation_action(
+        &self,
+        run_id: &str,
+        action_type: &str,
+        target_memory_ids: &[String],
+        merged_memory_id: Option<&str>,
+        original_salience: Option<f64>,
+        details: Option<serde_json::Value>,
+    ) -> Result<(), MemcpError> {
+        sqlx::query(
+            "INSERT INTO curation_actions \
+             (run_id, action_type, target_memory_ids, merged_memory_id, original_salience, details) \
+             VALUES ($1::uuid, $2, $3, $4, $5, $6)",
+        )
+        .bind(run_id)
+        .bind(action_type)
+        .bind(target_memory_ids)
+        .bind(merged_memory_id)
+        .bind(original_salience)
+        .bind(details)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            MemcpError::Storage(format!("Failed to record curation action: {}", e))
+        })?;
+        Ok(())
+    }
+
+    /// Get recent curation runs for the log command.
+    pub async fn get_curation_runs(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<CurationRunRow>, MemcpError> {
+        let rows = sqlx::query(
+            "SELECT id, started_at, completed_at, status, mode, \
+             window_start, window_end, \
+             merged_count, flagged_stale_count, strengthened_count, skipped_count, \
+             error_message \
+             FROM curation_runs ORDER BY started_at DESC LIMIT $1",
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            MemcpError::Storage(format!("Failed to get curation runs: {}", e))
+        })?;
+
+        rows.iter()
+            .map(|row| {
+                Ok(CurationRunRow {
+                    id: row.try_get::<uuid::Uuid, _>("id")
+                        .map(|u| u.to_string())
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    started_at: row.try_get("started_at")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    completed_at: row.try_get("completed_at")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    status: row.try_get("status")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    mode: row.try_get("mode")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    window_start: row.try_get("window_start")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    window_end: row.try_get("window_end")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    merged_count: row.try_get("merged_count")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    flagged_stale_count: row.try_get("flagged_stale_count")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    strengthened_count: row.try_get("strengthened_count")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    skipped_count: row.try_get("skipped_count")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    error_message: row.try_get("error_message")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                })
+            })
+            .collect()
+    }
+
+    /// Get all actions for a specific curation run (for undo or detailed log).
+    pub async fn get_curation_actions(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<CurationActionRow>, MemcpError> {
+        let rows = sqlx::query(
+            "SELECT id, run_id, action_type, target_memory_ids, \
+             merged_memory_id, original_salience, details, created_at \
+             FROM curation_actions WHERE run_id = $1::uuid ORDER BY created_at ASC",
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| {
+            MemcpError::Storage(format!("Failed to get curation actions: {}", e))
+        })?;
+
+        rows.iter()
+            .map(|row| {
+                Ok(CurationActionRow {
+                    id: row.try_get::<uuid::Uuid, _>("id")
+                        .map(|u| u.to_string())
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    run_id: row.try_get::<uuid::Uuid, _>("run_id")
+                        .map(|u| u.to_string())
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    action_type: row.try_get("action_type")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    target_memory_ids: row.try_get("target_memory_ids")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    merged_memory_id: row.try_get("merged_memory_id")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    original_salience: row.try_get("original_salience")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    details: row.try_get("details")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                    created_at: row.try_get("created_at")
+                        .map_err(|e| MemcpError::Storage(e.to_string()))?,
+                })
+            })
+            .collect()
+    }
+
+    /// Undo all actions from a curation run.
+    /// Restores soft-deleted originals, hard-deletes merged memories,
+    /// restores original salience values, marks run as 'undone'.
+    pub async fn undo_curation_run(
+        &self,
+        run_id: &str,
+    ) -> Result<usize, MemcpError> {
+        let actions = self.get_curation_actions(run_id).await?;
+        if actions.is_empty() {
+            return Err(MemcpError::Storage(format!(
+                "No actions found for curation run {}",
+                run_id
+            )));
+        }
+
+        let mut reversed = 0usize;
+
+        for action in &actions {
+            match action.action_type.as_str() {
+                "merge" => {
+                    // Restore soft-deleted originals
+                    if !action.target_memory_ids.is_empty() {
+                        sqlx::query(
+                            "UPDATE memories SET deleted_at = NULL \
+                             WHERE id = ANY($1) AND deleted_at IS NOT NULL",
+                        )
+                        .bind(&action.target_memory_ids)
+                        .execute(&self.pool)
+                        .await
+                        .map_err(|e| {
+                            MemcpError::Storage(format!("Failed to restore originals: {}", e))
+                        })?;
+                    }
+                    // Hard-delete the merged memory
+                    if let Some(merged_id) = &action.merged_memory_id {
+                        sqlx::query("DELETE FROM memories WHERE id = $1")
+                            .bind(merged_id)
+                            .execute(&self.pool)
+                            .await
+                            .map_err(|e| {
+                                MemcpError::Storage(format!(
+                                    "Failed to delete merged memory: {}",
+                                    e
+                                ))
+                            })?;
+                    }
+                    reversed += 1;
+                }
+                "flag_stale" => {
+                    // Restore original salience
+                    if let Some(original) = action.original_salience {
+                        for target_id in &action.target_memory_ids {
+                            self.update_memory_stability(target_id, original).await?;
+                        }
+                    }
+                    // Remove 'stale' tag from target memories
+                    for target_id in &action.target_memory_ids {
+                        sqlx::query(
+                            "UPDATE memories SET tags = \
+                             (SELECT COALESCE(jsonb_agg(elem), '[]'::jsonb) \
+                              FROM jsonb_array_elements(COALESCE(tags, '[]'::jsonb)) elem \
+                              WHERE elem::text != '\"stale\"') \
+                             WHERE id = $1",
+                        )
+                        .bind(target_id)
+                        .execute(&self.pool)
+                        .await
+                        .map_err(|e| {
+                            MemcpError::Storage(format!(
+                                "Failed to remove stale tag: {}",
+                                e
+                            ))
+                        })?;
+                    }
+                    reversed += 1;
+                }
+                "strengthen" => {
+                    // Restore original salience
+                    if let Some(original) = action.original_salience {
+                        for target_id in &action.target_memory_ids {
+                            self.update_memory_stability(target_id, original).await?;
+                        }
+                    }
+                    // Remove 'curated:strengthened' tag
+                    for target_id in &action.target_memory_ids {
+                        sqlx::query(
+                            "UPDATE memories SET tags = \
+                             (SELECT COALESCE(jsonb_agg(elem), '[]'::jsonb) \
+                              FROM jsonb_array_elements(COALESCE(tags, '[]'::jsonb)) elem \
+                              WHERE elem::text != '\"curated:strengthened\"') \
+                             WHERE id = $1",
+                        )
+                        .bind(target_id)
+                        .execute(&self.pool)
+                        .await
+                        .map_err(|e| {
+                            MemcpError::Storage(format!(
+                                "Failed to remove strengthen tag: {}",
+                                e
+                            ))
+                        })?;
+                    }
+                    reversed += 1;
+                }
+                _ => {} // skip actions need no undo
+            }
+        }
+
+        // Mark run as undone
+        sqlx::query(
+            "UPDATE curation_runs SET status = 'undone' WHERE id = $1::uuid",
+        )
+        .bind(run_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            MemcpError::Storage(format!("Failed to mark run as undone: {}", e))
+        })?;
+
+        Ok(reversed)
+    }
+
+    /// Directly set the stability value for a memory (used for stale demotion).
+    pub async fn update_memory_stability(
+        &self,
+        memory_id: &str,
+        stability: f64,
+    ) -> Result<(), MemcpError> {
+        sqlx::query(
+            "INSERT INTO memory_salience (memory_id, stability, difficulty, \
+             reinforcement_count, last_reinforced_at, created_at, updated_at) \
+             VALUES ($1, $2, 5.0, 0, NULL, NOW(), NOW()) \
+             ON CONFLICT (memory_id) DO UPDATE SET \
+             stability = EXCLUDED.stability, updated_at = NOW()",
+        )
+        .bind(memory_id)
+        .bind(stability)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            MemcpError::Storage(format!("Failed to update memory stability: {}", e))
+        })?;
+        Ok(())
+    }
+
+    /// Add a tag to a memory's tag array.
+    pub async fn add_memory_tag(
+        &self,
+        memory_id: &str,
+        tag: &str,
+    ) -> Result<(), MemcpError> {
+        sqlx::query(
+            "UPDATE memories SET tags = \
+             CASE WHEN tags IS NULL THEN jsonb_build_array($2::text) \
+             WHEN NOT tags @> to_jsonb($2::text) THEN tags || to_jsonb($2::text) \
+             ELSE tags END, \
+             updated_at = NOW() \
+             WHERE id = $1",
+        )
+        .bind(memory_id)
+        .bind(tag)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            MemcpError::Storage(format!("Failed to add tag to memory: {}", e))
+        })?;
+        Ok(())
     }
 
     /// Get all chunks for a parent memory, ordered by chunk_index.

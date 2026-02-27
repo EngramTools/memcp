@@ -1,5 +1,399 @@
 //! Curation worker — periodic scan, cluster, and act loop.
 //!
-//! Orchestrates the full curation pipeline: windowed scan → candidate fetch →
-//! embedding cluster → provider review → action execution → run tracking.
-//! Filled in by Plan 03.
+//! Orchestrates the full curation pipeline: windowed scan -> candidate fetch ->
+//! embedding cluster -> provider review -> action execution -> run tracking.
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use chrono::Utc;
+
+use super::algorithmic::AlgorithmicCurator;
+use super::{ClusterMember, CurationAction, CurationError, CurationProvider, CurationResult};
+use crate::config::CurationConfig;
+use crate::consolidation::similarity::find_similar_memories;
+use crate::store::postgres::PostgresMemoryStore;
+use crate::store::{CreateMemory, Memory, MemoryStore};
+use crate::store::postgres::SalienceRow;
+
+/// Run a single curation pass.
+///
+/// Windowed scan -> clustering -> review -> action execution -> run tracking.
+/// Called by the daemon on schedule and by CLI `memcp curation run`.
+pub async fn run_curation(
+    store: &Arc<PostgresMemoryStore>,
+    config: &CurationConfig,
+    llm_provider: Option<&dyn CurationProvider>,
+) -> Result<CurationResult, CurationError> {
+    // 1. Determine window
+    let window_start = store
+        .get_last_successful_curation_time()
+        .await
+        .map_err(|e| CurationError::Storage(e.to_string()))?;
+
+    let window_end = Utc::now();
+
+    // 2. Fetch candidates
+    let candidates = store
+        .get_memories_for_curation(window_start, config.max_candidates_per_run)
+        .await
+        .map_err(|e| CurationError::Storage(e.to_string()))?;
+
+    if candidates.is_empty() {
+        return Ok(CurationResult::skipped("No candidates in window"));
+    }
+
+    // 3. Create run record
+    let run_id = store
+        .create_curation_run("auto", window_start, window_end)
+        .await
+        .map_err(|e| CurationError::Storage(e.to_string()))?;
+
+    // Execute with error handling — on failure, mark run as failed
+    match execute_curation(store, config, llm_provider, &candidates, &run_id).await {
+        Ok(result) => Ok(result),
+        Err(e) => {
+            let _ = store.fail_curation_run(&run_id, &e.to_string()).await;
+            Err(e)
+        }
+    }
+}
+
+/// Inner execution logic — separated for error-handling wrapper.
+async fn execute_curation(
+    store: &Arc<PostgresMemoryStore>,
+    config: &CurationConfig,
+    llm_provider: Option<&dyn CurationProvider>,
+    candidates: &[(Memory, SalienceRow)],
+    run_id: &str,
+) -> Result<CurationResult, CurationError> {
+    // 4. Build clusters via embedding similarity
+    let clusters = build_clusters(store, candidates, config).await?;
+
+    // 5. Choose provider
+    let algorithmic = AlgorithmicCurator::new(config.clone());
+    let provider: &dyn CurationProvider = match llm_provider {
+        Some(p) => p,
+        None => &algorithmic,
+    };
+
+    // 6. Review clusters and execute actions
+    let mut merged_count = 0usize;
+    let mut flagged_count = 0usize;
+    let mut strengthened_count = 0usize;
+    let mut skipped_count = 0usize;
+
+    for cluster in &clusters {
+        let actions = provider
+            .review_cluster(cluster)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Cluster review failed — skipping cluster");
+                cluster
+                    .iter()
+                    .map(|m| CurationAction::Skip {
+                        memory_id: m.id.clone(),
+                        reason: format!("Review failed: {}", e),
+                    })
+                    .collect()
+            });
+
+        for action in actions {
+            match action {
+                CurationAction::Merge {
+                    source_ids,
+                    mut synthesized_content,
+                } => {
+                    if merged_count >= config.max_merges_per_run {
+                        tracing::debug!("Merge cap reached, skipping");
+                        continue;
+                    }
+
+                    // If content is empty (LLM review said merge but didn't synthesize),
+                    // ask provider to synthesize
+                    if synthesized_content.is_empty() {
+                        let sources: Vec<_> = cluster
+                            .iter()
+                            .filter(|m| source_ids.contains(&m.id))
+                            .cloned()
+                            .collect();
+                        if !sources.is_empty() {
+                            synthesized_content = provider
+                                .synthesize_merge(&sources)
+                                .await
+                                .unwrap_or_else(|e| {
+                                    tracing::warn!(error = %e, "Merge synthesis failed — using concatenation");
+                                    sources
+                                        .iter()
+                                        .map(|s| s.content.clone())
+                                        .collect::<Vec<_>>()
+                                        .join("\n\n---\n\n")
+                                });
+                        }
+                    }
+
+                    // Collect union of tags and highest stability
+                    let mut all_tags: Vec<String> = Vec::new();
+                    let mut max_stability = 0.0f64;
+                    for member in cluster.iter().filter(|m| source_ids.contains(&m.id)) {
+                        all_tags.extend(member.tags.clone());
+                        if member.stability > max_stability {
+                            max_stability = member.stability;
+                        }
+                    }
+                    all_tags.sort();
+                    all_tags.dedup();
+                    all_tags.push("merged".to_string());
+
+                    // Create merged memory
+                    let new_memory = CreateMemory {
+                        content: synthesized_content,
+                        type_hint: "curated".to_string(),
+                        source: "curation".to_string(),
+                        tags: Some(all_tags),
+                        created_at: None,
+                        actor: None,
+                        actor_type: "system".to_string(),
+                        audience: "global".to_string(),
+                        idempotency_key: None,
+                        parent_id: None,
+                        chunk_index: None,
+                        total_chunks: None,
+                    };
+
+                    match store.store(new_memory).await {
+                        Ok(stored) => {
+                            // Set stability to max of sources
+                            let _ = store
+                                .update_memory_stability(&stored.id, max_stability)
+                                .await;
+
+                            // Soft-delete originals
+                            let _ = store.soft_delete_memories(&source_ids).await;
+
+                            // Record action
+                            let details = serde_json::json!({
+                                "source_ids": source_ids,
+                                "curated_by": provider.model_name(),
+                            });
+                            let _ = store
+                                .record_curation_action(
+                                    run_id,
+                                    "merge",
+                                    &source_ids,
+                                    Some(&stored.id),
+                                    None,
+                                    Some(details),
+                                )
+                                .await;
+
+                            merged_count += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to create merged memory");
+                        }
+                    }
+                }
+
+                CurationAction::FlagStale { memory_id, reason } => {
+                    if flagged_count >= config.max_flags_per_run {
+                        tracing::debug!("Flag cap reached, skipping");
+                        continue;
+                    }
+
+                    // Get current stability for undo tracking
+                    let original_stability = cluster
+                        .iter()
+                        .find(|m| m.id == memory_id)
+                        .map(|m| m.stability);
+
+                    // Add 'stale' tag
+                    let _ = store.add_memory_tag(&memory_id, "stale").await;
+
+                    // Demote stability
+                    let _ = store
+                        .update_memory_stability(&memory_id, config.stale_stability_target)
+                        .await;
+
+                    // Record action
+                    let details = serde_json::json!({ "reason": reason });
+                    let _ = store
+                        .record_curation_action(
+                            run_id,
+                            "flag_stale",
+                            &[memory_id],
+                            None,
+                            original_stability,
+                            Some(details),
+                        )
+                        .await;
+
+                    flagged_count += 1;
+                }
+
+                CurationAction::Strengthen { memory_id, reason } => {
+                    if strengthened_count >= config.max_strengthens_per_run {
+                        tracing::debug!("Strengthen cap reached, skipping");
+                        continue;
+                    }
+
+                    // Get current stability for undo tracking
+                    let original_stability = cluster
+                        .iter()
+                        .find(|m| m.id == memory_id)
+                        .map(|m| m.stability);
+
+                    // Reinforce salience ("good" rating maps to 1.5x stability multiplier)
+                    let _ = store.reinforce_salience(&memory_id, "good").await;
+
+                    // Add tag
+                    let _ = store
+                        .add_memory_tag(&memory_id, "curated:strengthened")
+                        .await;
+
+                    // Record action
+                    let details = serde_json::json!({ "reason": reason });
+                    let _ = store
+                        .record_curation_action(
+                            run_id,
+                            "strengthen",
+                            &[memory_id],
+                            None,
+                            original_stability,
+                            Some(details),
+                        )
+                        .await;
+
+                    strengthened_count += 1;
+                }
+
+                CurationAction::Skip { .. } => {
+                    skipped_count += 1;
+                }
+            }
+        }
+    }
+
+    // 7. Complete run
+    store
+        .complete_curation_run(
+            run_id,
+            merged_count as i32,
+            flagged_count as i32,
+            strengthened_count as i32,
+            skipped_count as i32,
+        )
+        .await
+        .map_err(|e| CurationError::Storage(e.to_string()))?;
+
+    Ok(CurationResult {
+        run_id: run_id.to_string(),
+        merged_count,
+        flagged_stale_count: flagged_count,
+        strengthened_count,
+        skipped_count,
+        candidates_processed: candidates.len(),
+        clusters_found: clusters.len(),
+        skipped_reason: None,
+    })
+}
+
+/// Build clusters of semantically similar memories using embedding similarity.
+///
+/// Uses greedy clustering with find_similar_memories from the consolidation module.
+/// Caps cluster size at max_merge_group_size (default: 5).
+async fn build_clusters(
+    store: &Arc<PostgresMemoryStore>,
+    candidates: &[(Memory, SalienceRow)],
+    config: &CurationConfig,
+) -> Result<Vec<Vec<ClusterMember>>, CurationError> {
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut clusters: Vec<Vec<ClusterMember>> = Vec::new();
+
+    for (memory, salience) in candidates {
+        if visited.contains(&memory.id) {
+            continue;
+        }
+        visited.insert(memory.id.clone());
+
+        // Find similar memories via embedding similarity
+        // Need the embedding vector for this memory to query pgvector
+        let embedding = match store.get_memory_embedding(&memory.id).await {
+            Ok(Some(emb)) => emb,
+            _ => {
+                // No embedding — can't cluster, emit as singleton
+                clusters.push(vec![to_cluster_member(memory, salience)]);
+                continue;
+            }
+        };
+
+        let similar = find_similar_memories(
+            store.pool(),
+            &memory.id,
+            &embedding,
+            config.cluster_similarity_threshold,
+            10,
+        )
+        .await
+        .unwrap_or_default();
+
+        let mut cluster = vec![to_cluster_member(memory, salience)];
+
+        for sim in &similar {
+            if visited.contains(&sim.memory_id) {
+                continue;
+            }
+            // Find the matching candidate
+            if let Some((sim_mem, sim_sal)) = candidates.iter().find(|(m, _)| m.id == sim.memory_id) {
+                cluster.push(to_cluster_member(sim_mem, sim_sal));
+                visited.insert(sim.memory_id.clone());
+            }
+        }
+
+        // Cap cluster size — split large clusters into groups
+        if cluster.len() > config.max_merge_group_size {
+            for chunk in cluster.chunks(config.max_merge_group_size) {
+                if chunk.len() > 1 {
+                    clusters.push(chunk.to_vec());
+                } else {
+                    clusters.push(chunk.to_vec());
+                }
+            }
+        } else {
+            clusters.push(cluster);
+        }
+    }
+
+    Ok(clusters)
+}
+
+/// Convert a Memory + SalienceRow into a ClusterMember.
+fn to_cluster_member(memory: &Memory, salience: &SalienceRow) -> ClusterMember {
+    let tags = memory
+        .tags
+        .as_ref()
+        .and_then(|v| {
+            v.as_array().map(|arr| {
+                arr.iter()
+                    .filter_map(|t| t.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
+
+    ClusterMember {
+        id: memory.id.clone(),
+        content: memory.content.clone(),
+        type_hint: if memory.type_hint.is_empty() {
+            None
+        } else {
+            Some(memory.type_hint.clone())
+        },
+        tags,
+        created_at: memory.created_at,
+        updated_at: memory.updated_at,
+        stability: salience.stability,
+        reinforcement_count: salience.reinforcement_count,
+        last_reinforced_at: salience.last_reinforced_at,
+    }
+}
