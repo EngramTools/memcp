@@ -1044,6 +1044,128 @@ impl Default for StoreConfig {
     }
 }
 
+/// Configuration for the AI brain curation subsystem.
+///
+/// Periodic self-maintenance daemon worker that reviews memories —
+/// merges related entries, strengthens important ones, flags outdated ones.
+/// Disabled by default — opt in via `[curation] enabled = true`.
+/// Nested env var overrides use double underscores:
+///   MEMCP_CURATION__ENABLED=true
+///   MEMCP_CURATION__INTERVAL_SECS=86400
+///   MEMCP_CURATION__LLM_PROVIDER=ollama
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CurationConfig {
+    /// Whether curation is enabled (default: false — opt-in)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// How often to run curation in seconds (default: 86400 — daily)
+    #[serde(default = "default_curation_interval_secs")]
+    pub interval_secs: u64,
+
+    /// Cosine similarity threshold for clustering related memories (default: 0.85).
+    /// Lower than dedup (0.95) to catch paraphrases and topic-adjacent memories.
+    #[serde(default = "default_curation_cluster_threshold")]
+    pub cluster_similarity_threshold: f64,
+
+    /// Stability threshold below which memories are candidates for stale flagging (default: 0.3)
+    #[serde(default = "default_curation_stale_salience")]
+    pub stale_salience_threshold: f64,
+
+    /// Minimum age in days before a memory can be flagged stale (default: 30)
+    #[serde(default = "default_curation_stale_age_days")]
+    pub stale_age_days: u32,
+
+    /// Stability value to set when flagging a memory as stale (default: 0.1).
+    /// Very low but non-zero — effectively removes from search results.
+    #[serde(default = "default_curation_stale_stability")]
+    pub stale_stability_target: f64,
+
+    /// Maximum merge operations per curation run (default: 20)
+    #[serde(default = "default_curation_max_merges")]
+    pub max_merges_per_run: usize,
+
+    /// Maximum stale-flag operations per curation run (default: 50)
+    #[serde(default = "default_curation_max_flags")]
+    pub max_flags_per_run: usize,
+
+    /// Maximum strengthen operations per curation run (default: 50)
+    #[serde(default = "default_curation_max_strengthens")]
+    pub max_strengthens_per_run: usize,
+
+    /// Maximum candidate memories to process per run (default: 500).
+    /// Prevents first-run full-corpus scan from overwhelming the system.
+    #[serde(default = "default_curation_max_candidates")]
+    pub max_candidates_per_run: usize,
+
+    /// Maximum memories per merge group (default: 5, per CONTEXT.md locked decision)
+    #[serde(default = "default_curation_max_merge_group")]
+    pub max_merge_group_size: usize,
+
+    /// LLM provider for curation: "ollama" or "openai".
+    /// None = algorithmic-only mode (default — works without Ollama).
+    #[serde(default)]
+    pub llm_provider: Option<String>,
+
+    /// Ollama server base URL
+    #[serde(default = "default_ollama_base_url")]
+    pub ollama_base_url: String,
+
+    /// Ollama model for curation
+    #[serde(default = "default_curation_ollama_model")]
+    pub ollama_model: String,
+
+    /// OpenAI-compatible base URL
+    #[serde(default = "default_curation_openai_base_url")]
+    pub openai_base_url: String,
+
+    /// OpenAI-compatible API key — required when llm_provider = "openai"
+    #[serde(default)]
+    pub openai_api_key: Option<String>,
+
+    /// OpenAI-compatible model for curation
+    #[serde(default = "default_curation_openai_model")]
+    pub openai_model: String,
+}
+
+fn default_curation_interval_secs() -> u64 { 86400 }
+fn default_curation_cluster_threshold() -> f64 { 0.85 }
+fn default_curation_stale_salience() -> f64 { 0.3 }
+fn default_curation_stale_age_days() -> u32 { 30 }
+fn default_curation_stale_stability() -> f64 { 0.1 }
+fn default_curation_max_merges() -> usize { 20 }
+fn default_curation_max_flags() -> usize { 50 }
+fn default_curation_max_strengthens() -> usize { 50 }
+fn default_curation_max_candidates() -> usize { 500 }
+fn default_curation_max_merge_group() -> usize { 5 }
+fn default_curation_ollama_model() -> String { "llama3.2:3b".to_string() }
+fn default_curation_openai_base_url() -> String { "https://api.openai.com/v1".to_string() }
+fn default_curation_openai_model() -> String { "gpt-4o-mini".to_string() }
+
+impl Default for CurationConfig {
+    fn default() -> Self {
+        CurationConfig {
+            enabled: false,
+            interval_secs: default_curation_interval_secs(),
+            cluster_similarity_threshold: default_curation_cluster_threshold(),
+            stale_salience_threshold: default_curation_stale_salience(),
+            stale_age_days: default_curation_stale_age_days(),
+            stale_stability_target: default_curation_stale_stability(),
+            max_merges_per_run: default_curation_max_merges(),
+            max_flags_per_run: default_curation_max_flags(),
+            max_strengthens_per_run: default_curation_max_strengthens(),
+            max_candidates_per_run: default_curation_max_candidates(),
+            max_merge_group_size: default_curation_max_merge_group(),
+            llm_provider: None,
+            ollama_base_url: default_ollama_base_url(),
+            ollama_model: default_curation_ollama_model(),
+            openai_base_url: default_curation_openai_base_url(),
+            openai_api_key: None,
+            openai_model: default_curation_openai_model(),
+        }
+    }
+}
+
 /// Configuration for resource limits and capacity thresholds.
 ///
 /// Controls when to warn about approaching capacity and whether to auto-trigger GC.
@@ -1190,6 +1312,11 @@ pub struct Config {
     /// Resource limits and capacity threshold configuration.
     #[serde(default)]
     pub resource_limits: ResourceLimitsConfig,
+
+    /// AI brain curation configuration (periodic memory self-maintenance).
+    /// When enabled, daemon periodically reviews memories — merging, strengthening, flagging stale.
+    #[serde(default)]
+    pub curation: CurationConfig,
 }
 
 fn default_log_level() -> String {
@@ -1225,6 +1352,7 @@ impl Default for Config {
             chunking: ChunkingConfig::default(),
             store: StoreConfig::default(),
             resource_limits: ResourceLimitsConfig::default(),
+            curation: CurationConfig::default(),
         }
     }
 }

@@ -40,6 +40,7 @@ pub use pipeline::summarization;
 pub use pipeline::auto_store;
 pub use pipeline::content_filter;
 pub use pipeline::chunking;
+pub use pipeline::curation;
 pub use transport::server;
 pub use transport::health;
 pub use transport::ipc;
