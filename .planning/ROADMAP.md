@@ -361,12 +361,12 @@ Plans:
 - **Status**: Planned
 - **Depends on**: Phase 08.7
 - **Origin**: memcp scope additions from OpenClaw plugin design (engram/.planning/memcp-openclaw-plugin-design.md)
-- **Plans:** 2/5 plans executed
+- **Plans:** 3/5 plans executed
 
 Plans:
-- [ ] 08.8-01-PLAN.md — Migration 018 (event_time, workspace columns) + Config structs + Memory/CreateMemory field additions [Wave 1]
-- [ ] 08.8-02-PLAN.md — Annotate command (CLI + MCP, tag append/replace, salience absolute/multiplier, diff output) [Wave 2, depends on 01]
-- [ ] 08.8-03-PLAN.md — Workspace scoping + temporal event-time regex extraction + CLI/MCP output field updates [Wave 2, depends on 01]
+- [x] 08.8-01-PLAN.md — Migration 018 (event_time, workspace columns) + Config structs + Memory/CreateMemory field additions [Wave 1]
+- [x] 08.8-02-PLAN.md — Annotate command (CLI + MCP, tag append/replace, salience absolute/multiplier, diff output) [Wave 2, depends on 01]
+- [x] 08.8-03-PLAN.md — Workspace scoping + temporal event-time regex extraction + CLI/MCP output field updates [Wave 2, depends on 01]
 - [ ] 08.8-04-PLAN.md — Auto-store ID emission (.ids.jsonl companion file) + temporal LLM background worker + daemon wiring [Wave 3, depends on 01+03]
 - [ ] 08.8-05-PLAN.md — Recall output improvements (--first preamble, truncation, related context hints) [Wave 3, depends on 01+02+03]
 

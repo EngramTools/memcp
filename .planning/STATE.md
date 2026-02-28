@@ -3,30 +3,33 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-02-28T08:39:00.000Z"
+last_updated: "2026-02-28T20:10:00.000Z"
 progress:
   total_phases: 36
   completed_phases: 13
   total_plans: 78
-  completed_plans: 46
+  completed_plans: 47
 ---
 
 # Project State
 
 ## Current Phase
-Phase 08.8-plugin-support-primitives — Plan 02 complete (2/5 plans committed)
+Phase 08.8-plugin-support-primitives — Plan 03 complete (3/5 plans committed)
 
 ## Active Context
-- Last completed: Phase 08.8-02 annotate command and MCP tool (2026-02-28)
-- Migration 018: event_time (TIMESTAMPTZ), event_time_precision (TEXT CHECK), workspace (TEXT) columns added to memories table
-- UserConfig (birth_year), WorkspaceConfig (default_workspace), TemporalConfig (llm_enabled + provider fields) added to config.rs
-- RecallConfig extended with truncation_chars (200), preamble_override (Option<String>), related_context_enabled (true)
-- Memory and CreateMemory structs gain event_time, event_time_precision, workspace fields
-- All 8 SELECT queries + INSERT in postgres.rs updated; all 10 CreateMemory literals updated
-- 68 unit tests passing
+- Last completed: Phase 08.8-03 workspace scoping + temporal extraction (2026-02-28)
+- Temporal extraction module: pipeline/temporal/mod.rs with 6 OnceLock regex patterns, extract_event_time(), EventTimePrecision enum, 15 unit tests
+- Workspace filter: hybrid_search/recall_candidates/list all accept workspace param; post-filter OR workspace IS NULL
+- resolve_workspace: CLI flag > MEMCP_WORKSPACE env > config.workspace.default_workspace
+- cmd_store calls extract_event_time and sets event_time/event_time_precision on CreateMemory
+- format_memory_json includes event_time, event_time_precision, workspace (non-null only in compact, always in verbose)
+- MCP SearchMemoryParams.workspace field passes to hybrid_search
+- CLI Store/Search/List/Recall commands all have --workspace flag
+- RecallEngine.recall() gains workspace param
+- 42 unit tests passing (lib)
 - Last session: 2026-02-28
-- Stopped at: Completed 08.8-02-PLAN.md
-- Next: Phase 08.8 Plan 03 — event_time parsing
+- Stopped at: Completed 08.8-03-PLAN.md
+- Next: Phase 08.8 Plan 04 — LLM temporal extraction
 
 ## Accumulated Context
 
@@ -39,6 +42,12 @@ Phase 08.8-plugin-support-primitives — Plan 02 complete (2/5 plans committed)
 - Phase 08.8-02: annotate_logic() extracted as shared pub async fn in cli.rs — CLI and MCP both call it, no duplication
 - Phase 08.8-02: Memory.tags is Option<serde_json::Value> (JSONB) not Vec<String> — parsed via as_array().filter_map(as_str) chain
 - Phase 08.8-02: UpdateMemory struct has only 4 fields (content, type_hint, source, tags) — no actor/actor_type/audience; plan interfaces section was aspirational
+- Phase 08.8-03: Temporal regex priority order: month-year > year > decade > relative-age > relative-month > relative-day (most-specific-first, first match wins)
+- Phase 08.8-03: Decade regex captures 2-digit prefix ("90" from "90s"), year = 1900+prefix or 2000+prefix; picks most-recent-past decade ≤ now.year
+- Phase 08.8-03: Workspace filter is application-level post-filter on hybrid_search (OR workspace IS NULL) — consistent with existing source/audience post-filter pattern, avoids SQL complexity
+- Phase 08.8-03: recall_candidates workspace filter uses dynamic SQL format!() to append $5 clause — avoids duplicating static SQL for extraction-on and extraction-off tiers
+- Phase 08.8-03: RecallEngine.recall() gains workspace param at call-site (not stored on struct) — stateless control, simpler API
+- Phase 08.8-03: format_memory_json compact branch conditionally inserts non-null fields (event_time/event_time_precision/workspace) to save tokens; verbose always includes all fields
 - Phase 08.8-02: annotate_memory added to tool_router_with_meta() allowed_callers (direct + code_execution_20260120) — non-destructive enrichment mutation
 
 ### Phase 08.7 Decisions
