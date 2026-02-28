@@ -3,21 +3,21 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-02-28T08:37:17.458Z"
+last_updated: "2026-02-28T08:39:00.000Z"
 progress:
   total_phases: 36
   completed_phases: 13
   total_plans: 78
-  completed_plans: 45
+  completed_plans: 46
 ---
 
 # Project State
 
 ## Current Phase
-Phase 08.8-plugin-support-primitives — Plan 01 complete (1/5 plans committed)
+Phase 08.8-plugin-support-primitives — Plan 02 complete (2/5 plans committed)
 
 ## Active Context
-- Last completed: Phase 08.8-01 schema and config foundations (2026-02-28)
+- Last completed: Phase 08.8-02 annotate command and MCP tool (2026-02-28)
 - Migration 018: event_time (TIMESTAMPTZ), event_time_precision (TEXT CHECK), workspace (TEXT) columns added to memories table
 - UserConfig (birth_year), WorkspaceConfig (default_workspace), TemporalConfig (llm_enabled + provider fields) added to config.rs
 - RecallConfig extended with truncation_chars (200), preamble_override (Option<String>), related_context_enabled (true)
@@ -25,8 +25,8 @@ Phase 08.8-plugin-support-primitives — Plan 01 complete (1/5 plans committed)
 - All 8 SELECT queries + INSERT in postgres.rs updated; all 10 CreateMemory literals updated
 - 68 unit tests passing
 - Last session: 2026-02-28
-- Stopped at: Completed 08.8-01-PLAN.md
-- Next: Phase 08.8 Plan 02 — annotate command
+- Stopped at: Completed 08.8-02-PLAN.md
+- Next: Phase 08.8 Plan 03 — event_time parsing
 
 ## Accumulated Context
 
@@ -36,6 +36,10 @@ Phase 08.8-plugin-support-primitives — Plan 01 complete (1/5 plans committed)
 - Phase 08.8-01: TemporalConfig.openai_base_url is Option<String> — None means use provider default, distinguishes absent-from-config vs explicit override
 - Phase 08.8-01: All 10 CreateMemory struct literals updated with new fields=None — event_time/workspace population reserved for Plans 03/04
 - Phase 08.8-01: RecallConfig extended with truncation_chars (200), preamble_override (None), related_context_enabled (true) — config-only for now, wire-up in Plan 05
+- Phase 08.8-02: annotate_logic() extracted as shared pub async fn in cli.rs — CLI and MCP both call it, no duplication
+- Phase 08.8-02: Memory.tags is Option<serde_json::Value> (JSONB) not Vec<String> — parsed via as_array().filter_map(as_str) chain
+- Phase 08.8-02: UpdateMemory struct has only 4 fields (content, type_hint, source, tags) — no actor/actor_type/audience; plan interfaces section was aspirational
+- Phase 08.8-02: annotate_memory added to tool_router_with_meta() allowed_callers (direct + code_execution_20260120) — non-destructive enrichment mutation
 
 ### Phase 08.7 Decisions
 - Phase 08.7: Plan 02 — Tasks 1-3 pre-implemented in 08.7-01; Task 4 wires EmbeddingRouter into auto-store with Option<Arc<EmbeddingRouter>> — None in serve mode, Some(router) in daemon mode; chunks inherit parent tier
