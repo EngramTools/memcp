@@ -348,7 +348,7 @@ Plans:
 - **Status**: DONE
 - **Depends on**: Phase 08.3
 - **Origin**: Deferred from Phase 04 (Embeddings)
-- **Plans:** 3/4 plans executed
+- **Plans:** 4/4 plans complete
 
 Plans:
 - [x] 08.7-01-PLAN.md — Config structs (EmbeddingTierConfig, RoutingConfig, PromotionConfig) + migration 017 (tier column) + EmbeddingRouter + store methods [Wave 1]
@@ -357,10 +357,18 @@ Plans:
 - [x] 08.7-04-PLAN.md — Dual-query search: per-tier query embedding, multi-pass hybrid search, RRF merge, lazy quality optimization [Wave 3, depends on 01+02+03]
 
 ## Phase 08.8: Plugin Support Primitives
-- **Goal**: Capabilities required by the OpenClaw memcp plugin. `memcp annotate` command to tag and boost salience on existing memories by ID. Auto-store emits memory IDs so callers can annotate what was just stored. Temporal event time extraction on ingest (parses references like "when I was 6", "in 2019" into structured metadata). Workspace tag scoping (`workspace:<name>`) for multi-workspace isolation.
-- **Status**: Not planned
+- **Goal**: Capabilities required by the OpenClaw memcp plugin. `memcp annotate` command to tag and boost salience on existing memories by ID. Auto-store emits memory IDs so callers can annotate what was just stored. Temporal event time extraction on ingest (parses references like "when I was 6", "in 2019" into structured metadata). Workspace scoping (`workspace` column) for multi-workspace isolation. Recall output improvements (--first preamble, truncation, related context hints).
+- **Status**: Planned
 - **Depends on**: Phase 08.7
 - **Origin**: memcp scope additions from OpenClaw plugin design (engram/.planning/memcp-openclaw-plugin-design.md)
+- **Plans:** 5 plans
+
+Plans:
+- [ ] 08.8-01-PLAN.md — Migration 018 (event_time, workspace columns) + Config structs + Memory/CreateMemory field additions [Wave 1]
+- [ ] 08.8-02-PLAN.md — Annotate command (CLI + MCP, tag append/replace, salience absolute/multiplier, diff output) [Wave 2, depends on 01]
+- [ ] 08.8-03-PLAN.md — Workspace scoping + temporal event-time regex extraction + CLI/MCP output field updates [Wave 2, depends on 01]
+- [ ] 08.8-04-PLAN.md — Auto-store ID emission (.ids.jsonl companion file) + temporal LLM background worker + daemon wiring [Wave 3, depends on 01+03]
+- [ ] 08.8-05-PLAN.md — Recall output improvements (--first preamble, truncation, related context hints) [Wave 3, depends on 01+02+03]
 
 ## Phase 09: Documentation & QA Playbook
 - **Goal**: README overhaul, config reference, architecture guide. Must cover both standalone and engram-bundled usage. Includes a scripted QA playbook (CLI + MCP flows against real Postgres) designed to be run by both humans and an AI QA agent.
