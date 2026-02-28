@@ -334,7 +334,7 @@ fn test_tool_discovery() {
     assert!(response["result"]["tools"].is_array());
 
     let tools = response["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 11, "Should have exactly 11 tools");
+    assert_eq!(tools.len(), 12, "Should have exactly 12 tools");
 
     // Check all expected tools are present
     let tool_names: Vec<String> = tools.iter()
@@ -352,6 +352,7 @@ fn test_tool_discovery() {
     assert!(tool_names.contains(&"health_check".to_string()));
     assert!(tool_names.contains(&"feedback_memory".to_string()));
     assert!(tool_names.contains(&"recall_memory".to_string()));
+    assert!(tool_names.contains(&"annotate_memory".to_string()));
 
     // Verify each tool has required fields
     for tool in tools {

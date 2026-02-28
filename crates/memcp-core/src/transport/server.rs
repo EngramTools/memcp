@@ -158,7 +158,7 @@ impl MemoryService {
             );
             Meta(obj)
         };
-        for name in &["search_memory", "store_memory", "recall_memory"] {
+        for name in &["search_memory", "store_memory", "recall_memory", "annotate_memory"] {
             if let Some(route) = router.map.get_mut(*name) {
                 route.attr.meta = Some(sandbox_meta.clone());
             }
@@ -283,6 +283,23 @@ pub struct FeedbackMemoryParams {
     pub id: String,
     /// Feedback signal: "useful" or "irrelevant"
     pub signal: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct AnnotateMemoryParams {
+    /// Memory ID to annotate
+    pub id: String,
+    /// Tags to append to existing tags (merged, deduplicated)
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    /// Tags to replace ALL existing tags (overrides `tags` field if both given)
+    #[serde(default)]
+    pub replace_tags: Option<Vec<String>>,
+    /// Salience value — absolute number (e.g., "0.9") or multiplier with "x" suffix (e.g., "1.5x").
+    /// Absolute: sets stability directly. Multiplier: multiplies current stability.
+    /// Examples: "0.9" (set to 0.9), "1.5x" (multiply by 1.5), "2.0x" (double)
+    #[serde(default)]
+    pub salience: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1643,6 +1660,68 @@ Callable from code_execution_20260120 sandboxes.")]
                 "memories": r.memories,
             }))),
             Err(e) => Ok(store_error_to_result(e)),
+        }
+    }
+
+    #[tool(description = "Annotate an existing memory — add/replace tags and adjust salience. \
+Tags: `tags` appends to existing (merged, deduplicated), `replace_tags` replaces all. \
+Salience: \"0.9\" sets absolute stability, \"1.5x\" multiplies current. \
+Returns diff showing changes. \
+Example: {\"id\": \"abc\", \"tags\": [\"decision\"], \"salience\": \"1.5x\"}")]
+    async fn annotate_memory(
+        &self,
+        Parameters(params): Parameters<AnnotateMemoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tracing::info!(
+            tool = "annotate_memory",
+            id = %params.id,
+            "Tool called"
+        );
+
+        if params.id.trim().is_empty() {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": "Field 'id' is required and cannot be empty",
+                "field": "id"
+            })));
+        }
+
+        let pg_store = match &self.pg_store {
+            Some(s) => s,
+            None => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": "annotate_memory requires PostgreSQL backend"
+                })));
+            }
+        };
+
+        match crate::cli::annotate_logic(
+            pg_store,
+            &params.id,
+            params.tags,
+            params.replace_tags,
+            params.salience,
+        )
+        .await
+        {
+            Ok(result) => {
+                let mut changes = serde_json::Map::new();
+                changes.insert("tags_added".to_string(), json!(result.tags_added));
+                changes.insert("tags_removed".to_string(), json!(result.tags_removed));
+                if let (Some(before), Some(after)) = (result.salience_before, result.salience_after) {
+                    changes.insert("salience_before".to_string(), json!(before));
+                    changes.insert("salience_after".to_string(), json!(after));
+                }
+                Ok(CallToolResult::structured(json!({
+                    "id": result.id,
+                    "changes": changes,
+                })))
+            }
+            Err(e) => Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": e.to_string()
+            }))),
         }
     }
 
