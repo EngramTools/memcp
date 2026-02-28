@@ -292,6 +292,10 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         if config.auto_store.watch_paths.is_empty() {
             tracing::warn!("Auto-store enabled but watch_paths is empty — nothing will be ingested");
         }
+        // Resolve workspace: MEMCP_WORKSPACE env var overrides config default
+        let resolved_workspace = std::env::var("MEMCP_WORKSPACE").ok()
+            .or_else(|| config.workspace.default_workspace.clone());
+
         let _auto_store_handle = crate::auto_store::AutoStoreWorker::spawn(
             config.auto_store.clone(),
             config.chunking.clone(),
@@ -302,6 +306,8 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             content_filter.clone(),
             summarization_provider,
             Some(router.clone()),
+            resolved_workspace,
+            config.user.birth_year,
         );
         tracing::info!("Auto-store sidecar spawned");
     }

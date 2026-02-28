@@ -27,6 +27,7 @@ use crate::embedding::pipeline::EmbeddingPipeline;
 use crate::embedding::router::EmbeddingRouter;
 use crate::extraction::ExtractionJob;
 use crate::extraction::pipeline::ExtractionPipeline;
+use crate::pipeline::temporal::extract_event_time;
 use crate::store::{CreateMemory, MemoryStore};
 use crate::store::postgres::PostgresMemoryStore;
 use crate::summarization::SummarizationProvider;
@@ -59,6 +60,8 @@ impl AutoStoreWorker {
         content_filter: Option<Arc<dyn ContentFilter>>,
         summarization_provider: Option<Arc<dyn SummarizationProvider>>,
         embedding_router: Option<Arc<EmbeddingRouter>>,
+        workspace: Option<String>,
+        birth_year: Option<u32>,
     ) -> JoinHandle<()> {
         let parser = create_parser(&config.format);
         let filter = create_filter(
@@ -114,6 +117,8 @@ impl AutoStoreWorker {
                 summarization_provider,
                 chunking_config,
                 embedding_router,
+                workspace,
+                birth_year,
             )
             .await;
         })
@@ -143,6 +148,8 @@ async fn run_worker(
     summarization_provider: Option<Arc<dyn SummarizationProvider>>,
     chunking_config: ChunkingConfig,
     embedding_router: Option<Arc<EmbeddingRouter>>,
+    workspace: Option<String>,
+    birth_year: Option<u32>,
 ) {
     // Channel for watch events
     let (tx, mut rx) = tokio::sync::mpsc::channel::<WatchEvent>(1000);
@@ -264,7 +271,21 @@ async fn run_worker(
             tags.push(format!("category:{}", cr.category));
         }
 
+        // Derive companion file path for ID emission: conversation.jsonl -> conversation.ids.jsonl
+        let companion_path = {
+            let stem = event.path.file_stem().unwrap_or_default();
+            event.path.with_file_name(format!("{}.ids.jsonl", stem.to_string_lossy()))
+        };
+
+        // Extract event time inline (regex-based, fast + deterministic)
+        let now_utc = chrono::Utc::now();
+        let (event_time, event_time_precision) = match extract_event_time(&store_content, birth_year, now_utc) {
+            Some((et, precision)) => (Some(et), Some(precision.as_str().to_string())),
+            None => (None, None),
+        };
+
         // Store the memory
+        let role = entry.metadata.get("role").cloned().unwrap_or_default();
         let create = CreateMemory {
             content: store_content,
             type_hint: if is_summarized { "summary".to_string() } else { "auto".to_string() },
@@ -278,13 +299,25 @@ async fn run_worker(
             parent_id: None,
             chunk_index: None,
             total_chunks: None,
-            event_time: None,
-            event_time_precision: None,
-            workspace: None,
+            event_time,
+            event_time_precision,
+            workspace: workspace.clone(),
         };
 
         match store.store(create).await {
             Ok(memory) => {
+                // Emit ID to companion .ids.jsonl file (fail-open)
+                let emission = serde_json::json!({
+                    "memory_id": memory.id,
+                    "role": role,
+                    "tags": tags,
+                    "type_hint": memory.type_hint,
+                    "content_preview": memory.content.chars().take(100).collect::<String>(),
+                    "created_at": memory.created_at.to_rfc3339(),
+                    "source_line": event.line,
+                });
+                append_id_emission(&companion_path, &emission).await;
+
                 // Seed salience: auto-store gets stability=2.5 (weaker than explicit store's 3.0)
                 // "store-low" categories get stability=1.5 (even weaker — ephemeral-ish content)
                 let stability = match &category_result {
@@ -379,9 +412,9 @@ async fn run_worker(
                             parent_id: Some(memory.id.clone()),
                             chunk_index: Some(chunk_output.index as i32),
                             total_chunks: Some(chunk_output.total as i32),
-                            event_time: None,
-                            event_time_precision: None,
-                            workspace: None,
+                            event_time: memory.event_time,
+                            event_time_precision: memory.event_time_precision.clone(),
+                            workspace: workspace.clone(),
                         };
 
                         match store.store(chunk_create).await {
@@ -443,5 +476,34 @@ async fn run_worker(
     }
 
     tracing::warn!("Auto-store worker: watch event channel closed, shutting down");
+}
+
+/// Append a single JSONL line to the companion .ids.jsonl file.
+///
+/// Fail-open: any write failure logs a warning but does not stop processing.
+async fn append_id_emission(path: &std::path::Path, payload: &serde_json::Value) {
+    let line = match serde_json::to_string(payload) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to serialize ID emission");
+            return;
+        }
+    };
+    match tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await
+    {
+        Ok(mut file) => {
+            use tokio::io::AsyncWriteExt;
+            if let Err(e) = file.write_all(format!("{}\n", line).as_bytes()).await {
+                tracing::warn!(error = %e, path = %path.display(), "Failed to write ID emission to companion file");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(), "Failed to open companion file for ID emission");
+        }
+    }
 }
 
