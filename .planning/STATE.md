@@ -14,20 +14,18 @@ progress:
 # Project State
 
 ## Current Phase
-Phase 08.7-multi-model-embeddings — Plan 03 complete (3/4 plans committed)
+Phase 08.7-multi-model-embeddings — Plan 04 complete (4/4 plans committed)
 
 ## Active Context
-- Last completed: Phase 08.7-03 promotion sweep worker (2026-02-28)
-- Promotion sweep: run_promotion_sweep, PromotionResult, daemon section 8.7 spawn block
-- Sweep gated on router.is_multi_model() && quality tier has PromotionConfig
-- Fail-open per-item: embedding failure logs warning, never panics, sweep continues
-- Deactivate old tier embedding before inserting new (not kept alongside)
-- All 08.7-03 tasks pre-committed in 08.7-01 (0f6d57b); plan 03 is verification + documentation
-- Previous: 08.7-01 embedding foundation, 08.6 curation, 08.5 sync store + category + composite
+- Last completed: Phase 08.7-04 dual-query search wiring (2026-02-28)
+- Dual-query: embed_multi IPC type, start_embed_listener accepts multi_tier, CLI branches on is_multi_model()
+- CLI uses hybrid_search_multi_tier when config.embedding.is_multi_model(), falls back to single-model path
+- recall_candidates_multi_tier: per-tier search, merge by best relevance, dedup, truncate
+- MCP serve unchanged (single-model); CLI gains full multi-tier search path
 - 68 unit tests passing
 - Last session: 2026-02-28
-- Stopped at: Completed 08.7-03-PLAN.md
-- Next: Check roadmap for next phase
+- Stopped at: Completed 08.7-04-PLAN.md
+- Next: Phase 08.7 complete — check roadmap for next phase
 
 ## Accumulated Context
 
@@ -51,6 +49,10 @@ Phase 08.7-multi-model-embeddings — Plan 03 complete (3/4 plans committed)
 - Phase 08.7: hybrid_search_multi_tier: BM25 + symbolic once (text-based), vector search per tier via search_vector_for_tier, RRF merge with best-rank dedup
 - Phase 08.7: build_embedding_router in daemon.rs: legacy mode wraps create_embedding_provider in single-tier router; multi-tier creates per-tier providers via create_tier_provider
 - Phase 08.7: CLI and MCP serve use single-tier search (backward compat); multi-tier search available via hybrid_search_multi_tier
+- Phase 08.7: Plan 04 — embed_multi IPC type returns HashMap<tier, Vec<f32>> over existing socket; start_embed_listener accepts Option<(Arc<EmbeddingRouter>, Arc<PostgresMemoryStore>)>
+- Phase 08.7: CLI detects multi-model via config.embedding.is_multi_model() — no runtime discovery needed
+- Phase 08.7: recall_candidates_multi_tier merges by best relevance score; single tier delegates to recall_candidates directly
+- Phase 08.7: Single-model daemon returns error for embed_multi — CLI degrades to text-only (fail-open)
 
 ### Phase 08.6 Decisions
 - Phase 08.6: Algorithmic-first curation — no LLM required by default, CurationConfig.llm_provider=None uses AlgorithmicCurator
