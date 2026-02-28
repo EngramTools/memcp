@@ -8,6 +8,7 @@
 pub mod local;
 pub mod openai;
 pub mod pipeline;
+pub mod router;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -74,6 +75,8 @@ pub struct EmbeddingCompletion {
     pub status: String,
     /// Vector dimension (present on success)
     pub dimension: Option<i32>,
+    /// Which embedding tier was used
+    pub tier: String,
 }
 
 /// A pending embedding job for a memory.
@@ -87,6 +90,8 @@ pub struct EmbeddingJob {
     /// Optional oneshot sender for sync store — signals embedding completion back to caller.
     /// When Some, the caller is blocking on the receiver waiting for the result.
     pub completion_tx: Option<tokio::sync::oneshot::Sender<EmbeddingCompletion>>,
+    /// Target embedding tier (e.g., "fast", "quality"). Default: "fast".
+    pub tier: String,
 }
 
 /// Concatenate memory content and tags into a single string for embedding.
