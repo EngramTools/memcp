@@ -2772,6 +2772,66 @@ impl PostgresMemoryStore {
         }
     }
 
+    /// Multi-tier recall candidates: embed the query with all tiers, search each tier,
+    /// merge results by best relevance, and deduplicate by session.
+    ///
+    /// Follows the same pattern as `recall_candidates` but uses per-tier embeddings
+    /// so memories embedded by any tier can be recalled. Results are merged and
+    /// deduplicated: if a memory appears in multiple tier results, the highest
+    /// relevance score is kept.
+    ///
+    /// Falls back to `recall_candidates` with the best available embedding if
+    /// `tier_embeddings` has a single entry.
+    pub async fn recall_candidates_multi_tier(
+        &self,
+        tier_embeddings: &HashMap<String, Vec<f32>>,
+        session_id: &str,
+        min_relevance: f64,
+        max_memories: usize,
+        extraction_enabled: bool,
+    ) -> Result<Vec<(String, String, f32)>, MemcpError> {
+        if tier_embeddings.is_empty() {
+            // No embeddings available — return empty (caller should fall back or warn)
+            return Ok(vec![]);
+        }
+
+        if tier_embeddings.len() == 1 {
+            // Single tier — delegate directly to recall_candidates
+            let embedding = tier_embeddings.values().next().unwrap();
+            return self.recall_candidates(embedding, session_id, min_relevance, max_memories, extraction_enabled).await;
+        }
+
+        // Multi-tier: query each tier separately and merge by best relevance
+        let mut merged: HashMap<String, (String, f32)> = HashMap::new();
+
+        for embedding in tier_embeddings.values() {
+            let tier_results = self.recall_candidates(
+                embedding, session_id, min_relevance, max_memories, extraction_enabled
+            ).await?;
+
+            for (memory_id, content, relevance) in tier_results {
+                merged
+                    .entry(memory_id)
+                    .and_modify(|(_, best_rel)| {
+                        if relevance > *best_rel {
+                            *best_rel = relevance;
+                        }
+                    })
+                    .or_insert((content, relevance));
+            }
+        }
+
+        // Sort by relevance descending and cap at max_memories
+        let mut results: Vec<(String, String, f32)> = merged
+            .into_iter()
+            .map(|(id, (content, rel))| (id, content, rel))
+            .collect();
+        results.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(max_memories);
+
+        Ok(results)
+    }
+
     /// Update GC metrics in daemon_status after a GC run.
     pub async fn update_gc_metrics(&self, pruned: i64) -> Result<(), MemcpError> {
         sqlx::query(

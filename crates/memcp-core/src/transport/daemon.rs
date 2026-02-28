@@ -148,8 +148,8 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     };
 
     // 3.7. Spawn IPC listener so CLI can obtain embeddings and LLM re-ranking from the daemon.
-    // The listener serves both embed and rerank requests from short-lived CLI processes over
-    // a Unix domain socket, enabling full pipeline parity with MCP serve (SCF-01 gap closure).
+    // The listener serves embed, embed_multi (multi-tier), and rerank requests from short-lived
+    // CLI processes over a Unix domain socket, enabling full pipeline parity with MCP serve.
     {
         let embed_provider = provider_for_filter.clone();
         let socket_path = embed_socket_path();
@@ -172,8 +172,17 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
                 None
             };
 
+        // Pass router+store for multi-tier embed_multi IPC when multi-model is active.
+        // Single-model daemons pass None — CLI falls back to single embed.
+        let multi_tier = if router.is_multi_model() {
+            tracing::info!("Multi-tier embed_multi IPC enabled (CLI dual-query search)");
+            Some((router.clone(), store.clone()))
+        } else {
+            None
+        };
+
         tokio::spawn(async move {
-            start_embed_listener(socket_path, embed_provider, qi_provider).await;
+            start_embed_listener(socket_path, embed_provider, qi_provider, multi_tier).await;
         });
     }
 

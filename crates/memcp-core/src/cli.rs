@@ -24,7 +24,7 @@ use sqlx::Row;
 
 use crate::config::Config;
 use crate::gc;
-use crate::ipc::{embed_via_daemon, rerank_via_daemon};
+use crate::ipc::{embed_via_daemon, embed_multi_via_daemon, rerank_via_daemon};
 use crate::search::salience::{SalienceInput, dedup_parent_chunks};
 use crate::search::{SalienceScorer, ScoredHit};
 use crate::store::postgres::PostgresMemoryStore;
@@ -358,43 +358,87 @@ pub async fn cmd_search(
     };
 
     // Attempt to obtain embedding from daemon for vector leg (SCF-01).
-    let query_embedding_opt = embed_via_daemon(&query).await;
-    let (query_embedding_vec, vector_k) = match &query_embedding_opt {
-        Some(embedding) => {
-            // Full hybrid pipeline: daemon provided embedding.
-            let vec = pgvector::Vector::from(embedding.clone());
-            (Some(vec), Some(60.0_f64))
-        }
-        None => {
-            // Daemon offline — degrade gracefully to text-only search.
-            eprintln!("warning: daemon offline — falling back to text-only search (results may be degraded). Start with: memcp daemon");
-            (None, None)
-        }
-    };
-
-    // Build tags filter. type_hint is applied post-search as a result filter
-    // (hybrid_search doesn't expose a type_hint column filter; post-filter is simple and correct).
+    // When multi-model is configured, request per-tier embeddings for dual-query search.
     let tags_for_search = tags.clone().filter(|t| !t.is_empty());
-
-    // Fetch a larger candidate pool when using cursor pagination (need candidates beyond cursor pos).
     let fetch_limit = if cursor_position.is_some() { limit * 5 } else { limit };
 
-    let raw_hits = store
-        .hybrid_search(
-            &query,
-            query_embedding_vec.as_ref(),
-            fetch_limit,
-            ca,
-            cb,
-            tags_for_search.as_deref(),
-            Some(60.0),  // bm25_k default
-            vector_k,    // Some(60.0) when daemon alive, None when offline
-            Some(40.0),  // symbolic_k default
-            source.as_deref(),  // multi-source OR filter
-            audience.as_deref(),
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let raw_hits = if config.embedding.is_multi_model() {
+        // Multi-model path: request all-tier embeddings and use hybrid_search_multi_tier.
+        match embed_multi_via_daemon(&query).await {
+            Some(tier_vecs) => {
+                // Convert Vec<f32> -> pgvector::Vector for each tier
+                let tier_embeddings: std::collections::HashMap<String, pgvector::Vector> =
+                    tier_vecs.into_iter()
+                        .map(|(tier, vec)| (tier, pgvector::Vector::from(vec)))
+                        .collect();
+                store
+                    .hybrid_search_multi_tier(
+                        &query,
+                        &tier_embeddings,
+                        fetch_limit,
+                        ca,
+                        cb,
+                        tags_for_search.as_deref(),
+                        Some(60.0), // bm25_k
+                        Some(60.0), // vector_k
+                        Some(40.0), // symbolic_k
+                        source.as_deref(),
+                        audience.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}", e))?
+            }
+            None => {
+                // Daemon offline — degrade to text-only search.
+                eprintln!("warning: daemon offline — falling back to text-only search (results may be degraded). Start with: memcp daemon");
+                store
+                    .hybrid_search_multi_tier(
+                        &query,
+                        &std::collections::HashMap::new(),
+                        fetch_limit,
+                        ca,
+                        cb,
+                        tags_for_search.as_deref(),
+                        Some(60.0),
+                        None, // no vector leg
+                        Some(40.0),
+                        source.as_deref(),
+                        audience.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}", e))?
+            }
+        }
+    } else {
+        // Single-model path (backward compat): single embed IPC + hybrid_search.
+        let query_embedding_opt = embed_via_daemon(&query).await;
+        let (query_embedding_vec, vector_k) = match &query_embedding_opt {
+            Some(embedding) => {
+                let vec = pgvector::Vector::from(embedding.clone());
+                (Some(vec), Some(60.0_f64))
+            }
+            None => {
+                eprintln!("warning: daemon offline — falling back to text-only search (results may be degraded). Start with: memcp daemon");
+                (None, None)
+            }
+        };
+        store
+            .hybrid_search(
+                &query,
+                query_embedding_vec.as_ref(),
+                fetch_limit,
+                ca,
+                cb,
+                tags_for_search.as_deref(),
+                Some(60.0), // bm25_k default
+                vector_k,   // Some(60.0) when daemon alive, None when offline
+                Some(40.0), // symbolic_k default
+                source.as_deref(),
+                audience.as_deref(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?
+    };
 
     // Apply type_hint filter post-search (symbolic leg doesn't filter by type_hint column).
     let raw_hits: Vec<_> = if let Some(ref th) = type_hint {

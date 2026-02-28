@@ -6,11 +6,16 @@
 //!   - `embed_socket_path()` — well-known Unix domain socket path
 //!   - `start_embed_listener()` — daemon-side: binds socket, serves embed + rerank requests
 //!   - `embed_via_daemon()` — CLI-side: connects, sends text, receives embedding vector
+//!   - `embed_multi_via_daemon()` — CLI-side: connects, sends text, receives all-tier embeddings
 //!   - `rerank_via_daemon()` — CLI-side: connects, sends candidates, receives ranked results
 //!
 //! Protocol: newline-delimited JSON over a Unix domain socket.
-//!   Embed request:   {"text": "query text"}
-//!   Embed response:  {"embedding": [0.1, 0.2, ...]}  or  {"error": "message"}
+//!   Embed request:        {"text": "query text"}
+//!   Embed response:       {"embedding": [0.1, 0.2, ...]}  or  {"error": "message"}
+//!
+//!   Embed-multi request:  {"type":"embed_multi","text":"query text"}
+//!   Embed-multi response: {"embeddings": {"fast": [0.1,...], "quality": [0.2,...]}}
+//!                      or {"error": "message"}
 //!
 //!   Rerank request:  {"type":"rerank","query":"...","candidates":[{"id":"uuid","content":"text","current_rank":1},...]}
 //!   Rerank response: {"ranked":[{"id":"uuid","llm_rank":1},...]}
@@ -21,6 +26,7 @@
 //! refused, socket absent, parse error) and fall back gracefully.
 //! This matches the fail-open pattern used throughout memcp.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,7 +35,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::embedding::EmbeddingProvider;
+use crate::embedding::router::EmbeddingRouter;
 use crate::query_intelligence::{QueryIntelligenceProvider, RankedCandidate};
+use crate::store::postgres::PostgresMemoryStore;
 
 // ---------------------------------------------------------------------------
 // Socket path
@@ -59,11 +67,15 @@ pub fn embed_socket_path() -> PathBuf {
 
 /// Spawn the IPC listener as a background task.
 ///
-/// Handles both embedding requests ({"text":"..."}) and reranking requests
-/// ({"type":"rerank",...}) over the same Unix domain socket.
+/// Handles embedding requests ({"text":"..."}), multi-tier embed requests
+/// ({"type":"embed_multi","text":"..."}), and reranking requests ({"type":"rerank",...})
+/// over the same Unix domain socket.
 ///
 /// Called by `run_daemon()` alongside existing worker spawns. The listener
 /// accepts incoming connections, each handled in an independent tokio task.
+///
+/// When `multi_tier` is `Some((router, store))`, the listener also handles
+/// `embed_multi` requests that return per-tier embeddings for dual-query search.
 ///
 /// **Stale socket handling (Pitfall 5):** Before binding, we attempt a connect.
 /// If connection is refused, the socket is stale — remove it and re-bind.
@@ -72,6 +84,7 @@ pub async fn start_embed_listener(
     socket_path: PathBuf,
     provider: Arc<dyn EmbeddingProvider + Send + Sync>,
     qi_provider: Option<Arc<dyn QueryIntelligenceProvider + Send + Sync>>,
+    multi_tier: Option<(Arc<EmbeddingRouter>, Arc<PostgresMemoryStore>)>,
 ) {
     // Remove stale socket if it exists but is not listening.
     if socket_path.exists() {
@@ -111,8 +124,9 @@ pub async fn start_embed_listener(
 
         let provider = provider.clone();
         let qi_provider = qi_provider.clone();
+        let multi_tier = multi_tier.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_ipc_connection(stream, provider, qi_provider).await {
+            if let Err(e) = handle_ipc_connection(stream, provider, qi_provider, multi_tier).await {
                 tracing::debug!(error = %e, "IPC connection error");
             }
         });
@@ -122,12 +136,14 @@ pub async fn start_embed_listener(
 /// Handle a single IPC connection.
 ///
 /// Dispatches on the `"type"` field:
-/// - No `"type"` field or `"type":"embed"` → embedding request (backward compatible)
+/// - No `"type"` field or `"type":"embed"` → single embedding request (backward compatible)
+/// - `"type":"embed_multi"` → multi-tier embedding request (returns all-tier embeddings)
 /// - `"type":"rerank"` → LLM re-ranking request
 async fn handle_ipc_connection(
     mut stream: UnixStream,
     provider: Arc<dyn EmbeddingProvider + Send + Sync>,
     qi_provider: Option<Arc<dyn QueryIntelligenceProvider + Send + Sync>>,
+    multi_tier: Option<(Arc<EmbeddingRouter>, Arc<PostgresMemoryStore>)>,
 ) -> anyhow::Result<()> {
     let (read_half, mut write_half) = stream.split();
     let mut reader = BufReader::new(read_half);
@@ -145,6 +161,9 @@ async fn handle_ipc_connection(
     let response = match request.get("type").and_then(|t| t.as_str()) {
         Some("rerank") => {
             handle_rerank_request(&request, qi_provider.as_deref()).await
+        }
+        Some("embed_multi") => {
+            handle_embed_multi_request(&request, multi_tier.as_ref()).await
         }
         // No "type" field (legacy embed request) or "type":"embed"
         _ => {
@@ -177,6 +196,52 @@ async fn handle_embed_request(
         Err(e) => {
             tracing::warn!(error = %e, "Embedding failed in IPC handler");
             serde_json::json!({ "error": e.to_string() })
+        }
+    }
+}
+
+/// Handle a multi-tier embed request ({"type":"embed_multi","text":"..."}).
+///
+/// Returns `{"embeddings": {"fast": [...], "quality": [...]}}` with one entry per
+/// active tier. Tiers with zero embeddings in the corpus are skipped (lazy optimization).
+///
+/// Falls back to `{"embeddings": {"fast": [...]}}` (single-tier) when the router
+/// is not available (single-model daemon) or when non-default tiers have no data.
+async fn handle_embed_multi_request(
+    request: &serde_json::Value,
+    multi_tier: Option<&(Arc<EmbeddingRouter>, Arc<PostgresMemoryStore>)>,
+) -> serde_json::Value {
+    let text = match request["text"].as_str() {
+        Some(t) => t,
+        None => {
+            return serde_json::json!({ "error": "Missing 'text' field in embed_multi request" });
+        }
+    };
+
+    match multi_tier {
+        Some((router, store)) => {
+            match router.embed_query_all_tiers(text, store).await {
+                Ok(tier_embeddings) => {
+                    // Convert HashMap<String, pgvector::Vector> to JSON
+                    let embeddings_json: serde_json::Map<String, serde_json::Value> =
+                        tier_embeddings
+                            .into_iter()
+                            .map(|(tier, vec)| {
+                                let floats: Vec<f32> = vec.to_vec();
+                                (tier, serde_json::json!(floats))
+                            })
+                            .collect();
+                    serde_json::json!({ "embeddings": embeddings_json })
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Multi-tier embedding failed in IPC handler");
+                    serde_json::json!({ "error": e.to_string() })
+                }
+            }
+        }
+        None => {
+            // Single-model daemon: no router available — return error so CLI degrades gracefully
+            serde_json::json!({ "error": "Multi-tier embedding not available (single-model daemon)" })
         }
     }
 }
@@ -305,6 +370,80 @@ async fn send_embed_request(mut stream: UnixStream, text: &str) -> Option<Vec<f3
         None
     } else {
         Some(floats)
+    }
+}
+
+/// Attempt to obtain per-tier embedding vectors from the running daemon via IPC.
+///
+/// Returns `None` on any failure (daemon offline, timeout, parse error, single-model daemon).
+/// The caller should fall back to `embed_via_daemon()` for single-embedding search.
+///
+/// Timeout: 500ms per request (same as single embed).
+pub async fn embed_multi_via_daemon(text: &str) -> Option<HashMap<String, Vec<f32>>> {
+    let socket_path = embed_socket_path();
+
+    let stream = tokio::time::timeout(
+        Duration::from_millis(500),
+        UnixStream::connect(&socket_path),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    send_embed_multi_request(stream, text).await
+}
+
+/// Send an embed_multi request and parse the response.
+async fn send_embed_multi_request(mut stream: UnixStream, text: &str) -> Option<HashMap<String, Vec<f32>>> {
+    let request = serde_json::json!({ "type": "embed_multi", "text": text });
+    let mut request_line = serde_json::to_string(&request).ok()?;
+    request_line.push('\n');
+
+    tokio::time::timeout(
+        Duration::from_millis(500),
+        stream.write_all(request_line.as_bytes()),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    stream.flush().await.ok()?;
+
+    let (read_half, _) = stream.split();
+    let mut reader = BufReader::new(read_half);
+    let mut response_line = String::new();
+
+    tokio::time::timeout(
+        Duration::from_millis(500),
+        reader.read_line(&mut response_line),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    let response: serde_json::Value = serde_json::from_str(response_line.trim()).ok()?;
+
+    if response.get("error").is_some() {
+        return None;
+    }
+
+    let embeddings_map = response["embeddings"].as_object()?;
+    let mut result: HashMap<String, Vec<f32>> = HashMap::new();
+    for (tier, vec_json) in embeddings_map {
+        let floats: Vec<f32> = vec_json
+            .as_array()?
+            .iter()
+            .filter_map(|v| v.as_f64().map(|f| f as f32))
+            .collect();
+        if !floats.is_empty() {
+            result.insert(tier.clone(), floats);
+        }
+    }
+
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
     }
 }
 
