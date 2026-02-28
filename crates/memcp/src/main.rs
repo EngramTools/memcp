@@ -712,6 +712,7 @@ async fn main() -> Result<()> {
                     &config.extraction,
                     content_filter.clone(),
                     None, // Summarization only in daemon mode
+                    None, // No router in serve mode (single-tier)
                 );
                 tracing::info!("Auto-store sidecar spawned");
             }

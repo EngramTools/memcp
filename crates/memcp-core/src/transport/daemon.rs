@@ -292,6 +292,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             &config.extraction,
             content_filter.clone(),
             summarization_provider,
+            Some(router.clone()),
         );
         tracing::info!("Auto-store sidecar spawned");
     }

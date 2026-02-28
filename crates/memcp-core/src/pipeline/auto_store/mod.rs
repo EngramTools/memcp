@@ -24,6 +24,7 @@ use crate::chunking::chunk_content;
 use crate::content_filter::{ContentFilter, FilterVerdict};
 use crate::embedding::{EmbeddingJob, build_embedding_text};
 use crate::embedding::pipeline::EmbeddingPipeline;
+use crate::embedding::router::EmbeddingRouter;
 use crate::extraction::ExtractionJob;
 use crate::extraction::pipeline::ExtractionPipeline;
 use crate::store::{CreateMemory, MemoryStore};
@@ -57,6 +58,7 @@ impl AutoStoreWorker {
         extraction_config: &crate::config::ExtractionConfig,
         content_filter: Option<Arc<dyn ContentFilter>>,
         summarization_provider: Option<Arc<dyn SummarizationProvider>>,
+        embedding_router: Option<Arc<EmbeddingRouter>>,
     ) -> JoinHandle<()> {
         let parser = create_parser(&config.format);
         let filter = create_filter(
@@ -111,6 +113,7 @@ impl AutoStoreWorker {
                 content_filter,
                 summarization_provider,
                 chunking_config,
+                embedding_router,
             )
             .await;
         })
@@ -139,6 +142,7 @@ async fn run_worker(
     content_filter: Option<Arc<dyn ContentFilter>>,
     summarization_provider: Option<Arc<dyn SummarizationProvider>>,
     chunking_config: ChunkingConfig,
+    embedding_router: Option<Arc<EmbeddingRouter>>,
 ) {
     // Channel for watch events
     let (tx, mut rx) = tokio::sync::mpsc::channel::<WatchEvent>(1000);
@@ -315,6 +319,16 @@ async fn run_worker(
                     "Auto-stored memory"
                 );
 
+                // Determine embedding tier using router (if configured)
+                // New memories have no stability yet, so router typically returns "fast".
+                // The tier is recorded on the job so the pipeline uses the correct provider.
+                let type_hint_str = if is_summarized { "summary" } else { "auto" };
+                let tier = if let Some(ref router) = embedding_router {
+                    router.route(Some(type_hint_str), None, memory.content.len()).to_string()
+                } else {
+                    "fast".to_string()
+                };
+
                 // Enqueue to embedding pipeline
                 if let Some(ref sender) = embedding_sender {
                     let text = build_embedding_text(&memory.content, &memory.tags);
@@ -323,7 +337,7 @@ async fn run_worker(
                         text,
                         attempt: 0,
                         completion_tx: None,
-                        tier: "fast".to_string(),
+                        tier: tier.clone(),
                     });
                 }
 
@@ -371,7 +385,7 @@ async fn run_worker(
                                     tracing::warn!(error = %e, chunk_id = %chunk_mem.id, "Failed to seed chunk salience");
                                 }
 
-                                // Enqueue chunk to embedding pipeline
+                                // Enqueue chunk to embedding pipeline (same tier as parent)
                                 if let Some(ref sender) = embedding_sender {
                                     let text = build_embedding_text(&chunk_mem.content, &chunk_mem.tags);
                                     let _ = sender.try_send(EmbeddingJob {
@@ -379,7 +393,7 @@ async fn run_worker(
                                         text,
                                         attempt: 0,
                                         completion_tx: None,
-                                        tier: "fast".to_string(),
+                                        tier: tier.clone(),
                                     });
                                 }
 
