@@ -32,6 +32,7 @@ Phase 08.7-multi-model-embeddings — Plan 03 complete (3/4 plans committed)
 ## Accumulated Context
 
 ### Phase 08.7 Decisions
+- Phase 08.7: Plan 02 — Tasks 1-3 pre-implemented in 08.7-01; Task 4 wires EmbeddingRouter into auto-store with Option<Arc<EmbeddingRouter>> — None in serve mode, Some(router) in daemon mode; chunks inherit parent tier
 - Phase 08.7: Plan 03 — promotion sweep pre-implemented in 08.7-01 (0f6d57b) as forward-work; plan 03 is verification + documentation only
 - Phase 08.7: Sweep skips with skipped_reason="No promotion candidates found" when candidates list is empty (not an error)
 - Phase 08.7: Old fast-tier embedding deactivated (is_current=false) before new quality-tier embedding inserted — prevents duplicate current embeddings
