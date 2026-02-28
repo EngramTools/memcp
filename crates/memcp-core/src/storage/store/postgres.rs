@@ -45,6 +45,18 @@ impl Default for SalienceRow {
     }
 }
 
+/// Context about memories related to a given memory by shared tags.
+///
+/// Returned by `get_related_context` — used by `cmd_recall` to build
+/// per-memory hints pointing agents toward related content.
+#[derive(Debug, Clone)]
+pub struct RelatedContext {
+    /// Number of other live memories sharing at least one non-trivial tag.
+    pub related_count: i64,
+    /// The shared tags (filtered — trivial tags excluded).
+    pub shared_tags: Vec<String>,
+}
+
 /// A curation run record from the curation_runs table.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CurationRunRow {
@@ -3572,5 +3584,110 @@ impl PostgresMemoryStore {
         .map_err(|e| MemcpError::Storage(format!("Failed to get chunks for parent {}: {}", parent_id, e)))?;
 
         rows.iter().map(row_to_memory).collect()
+    }
+
+    // -----------------------------------------------------------------------
+    // Related context
+    // -----------------------------------------------------------------------
+
+    /// For each memory ID, count how many other live memories share at least one
+    /// non-trivial tag, and return the shared tags for use as a search hint.
+    ///
+    /// Trivial tags (e.g. "auto-stored", "summarized") are excluded from the hint.
+    /// Uses a batch query to avoid N individual round-trips.
+    pub async fn get_related_context(
+        &self,
+        memory_ids: &[String],
+    ) -> Result<HashMap<String, RelatedContext>, MemcpError> {
+        if memory_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // Tags to skip when building the hint — too common to be useful for navigation.
+        const SKIP_TAGS: &[&str] = &["auto-stored", "summarized", "merged", "stale", "curated:strengthened"];
+
+        // Step A: Fetch tags for all requested memory IDs in one query.
+        let rows = sqlx::query(
+            "SELECT id, tags FROM memories WHERE id = ANY($1) AND deleted_at IS NULL"
+        )
+        .bind(memory_ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("get_related_context tag fetch failed: {}", e)))?;
+
+        let mut result: HashMap<String, RelatedContext> = HashMap::new();
+
+        for row in &rows {
+            let memory_id: String = row.get("id");
+            let tags_val: Option<serde_json::Value> = row.get("tags");
+
+            // Extract non-trivial tags from this memory.
+            let interesting_tags: Vec<String> = tags_val
+                .as_ref()
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|t| t.as_str())
+                        .filter(|t| !SKIP_TAGS.contains(t) && !t.starts_with("category:"))
+                        .map(|t| t.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if interesting_tags.is_empty() {
+                result.insert(memory_id, RelatedContext { related_count: 0, shared_tags: vec![] });
+                continue;
+            }
+
+            // Step B: Count other memories sharing at least one of these tags.
+            let count_row = sqlx::query(
+                "SELECT COUNT(DISTINCT m2.id) AS related_count \
+                 FROM memories m2 \
+                 WHERE m2.id != $1 \
+                   AND m2.deleted_at IS NULL \
+                   AND m2.tags IS NOT NULL \
+                   AND m2.tags ?| $2::text[]"
+            )
+            .bind(&memory_id)
+            .bind(&interesting_tags)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("get_related_context count failed for {}: {}", memory_id, e)))?;
+
+            let related_count: i64 = count_row.get("related_count");
+
+            result.insert(memory_id, RelatedContext {
+                related_count,
+                shared_tags: interesting_tags,
+            });
+        }
+
+        Ok(result)
+    }
+
+    // -----------------------------------------------------------------------
+    // Temporal update
+    // -----------------------------------------------------------------------
+
+    /// Update event_time and event_time_precision for a memory.
+    ///
+    /// Used by the temporal LLM background worker to backfill memories
+    /// that had no regex-detectable temporal reference at store time.
+    pub async fn update_event_time(
+        &self,
+        id: &str,
+        event_time: chrono::DateTime<chrono::Utc>,
+        precision: &str,
+    ) -> Result<(), crate::errors::MemcpError> {
+        sqlx::query(
+            "UPDATE memories SET event_time = $2, event_time_precision = $3, updated_at = NOW() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(event_time)
+        .bind(precision)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| crate::errors::MemcpError::Storage(format!("Failed to update event_time for {}: {}", id, e)))?;
+        Ok(())
     }
 }
