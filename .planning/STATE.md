@@ -14,26 +14,35 @@ progress:
 # Project State
 
 ## Current Phase
-Phase 08.8-plugin-support-primitives — Plan 03 complete (3/5 plans committed)
+Phase 08.8-plugin-support-primitives — Plan 05 complete (5/5 plans DONE)
 
 ## Active Context
-- Last completed: Phase 08.8-03 workspace scoping + temporal extraction (2026-02-28)
-- Temporal extraction module: pipeline/temporal/mod.rs with 6 OnceLock regex patterns, extract_event_time(), EventTimePrecision enum, 15 unit tests
-- Workspace filter: hybrid_search/recall_candidates/list all accept workspace param; post-filter OR workspace IS NULL
-- resolve_workspace: CLI flag > MEMCP_WORKSPACE env > config.workspace.default_workspace
-- cmd_store calls extract_event_time and sets event_time/event_time_precision on CreateMemory
-- format_memory_json includes event_time, event_time_precision, workspace (non-null only in compact, always in verbose)
-- MCP SearchMemoryParams.workspace field passes to hybrid_search
-- CLI Store/Search/List/Recall commands all have --workspace flag
-- RecallEngine.recall() gains workspace param
-- 42 unit tests passing (lib)
+- Last completed: Phase 08.8-05 recall output improvements (2026-02-28)
+- cmd_recall gains --first flag: injects current_datetime, preamble text, and recalled memories
+- Regular recall (first=false) returns {session_id, count, memories} — no preamble overhead
+- truncate_content helper trims to config.recall.truncation_chars (default 200) with ... indicator
+- build_related_hint builds "memcp search --tags ..." ready-made command from shared tags
+- RelatedContext struct in postgres.rs; get_related_context batch method counts tag-sharing memories
+- Trivial tags (auto-stored, summarized, merged, stale, category:*) filtered from hints
+- DEFAULT_PREAMBLE const; overridable via config.recall.preamble_override
+- related_count/hint only included when related_count > 0 (no empty noise)
+- 68 tests passing total (42 lib + 26 integration)
 - Last session: 2026-02-28
-- Stopped at: Completed 08.8-03-PLAN.md
-- Next: Phase 08.8 Plan 04 — LLM temporal extraction
+- Stopped at: Completed 08.8-04-PLAN.md
+- Next: Phase 08.8 Plan 05 — related context + recall enhancements
 
 ## Accumulated Context
 
 ### Phase 08.8 Decisions
+- Phase 08.8-05: RelatedContext struct placed in postgres.rs — store layer owns the query, CLI layer owns formatting
+- Phase 08.8-05: Two-phase related context: batch tag fetch for all IDs, then per-memory count query — avoids N+1 on the outer loop
+- Phase 08.8-05: SKIP_TAGS filters auto-stored/summarized/merged/stale/category:* — prevents useless hints pointing agents to system tags
+- Phase 08.8-05: related_count/hint omitted when related_count == 0 — no empty noise in output
+- Phase 08.8-05: current_datetime + preamble injected at output stage (not RecallResult) — first=true is CLI-only concern, RecallEngine stays clean
+- Phase 08.8-04: source_line in ids.jsonl emission uses 0 as placeholder — WatchEvent carries line content not byte offset; plugin consumers correlate via memory_id + content_preview
+- Phase 08.8-04: Chunks inherit parent event_time/event_time_precision instead of re-extracting from chunk content — chunks are fragments, parent has the full temporal reference
+- Phase 08.8-04: run_temporal_worker _shutdown_tx held in local daemon scope — broadcast channel keeps worker alive for daemon lifetime; worker exits on next tick when sender drops (natural cleanup)
+- Phase 08.8-04: Temporal LLM worker queries extraction_status='complete' rows only — avoids racing with ongoing extraction pipeline processing
 - Phase 08.8-01: event_time_precision uses TEXT CHECK constraint (not Postgres ENUM) — easier to extend without ALTER TYPE per CONTEXT.md pitfall guidance
 - Phase 08.8-01: workspace partial index WHERE workspace IS NOT NULL — excludes global (NULL) memories from index for efficiency
 - Phase 08.8-01: TemporalConfig.openai_base_url is Option<String> — None means use provider default, distinguishes absent-from-config vs explicit override

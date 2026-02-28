@@ -361,7 +361,7 @@ Plans:
 - **Status**: Planned
 - **Depends on**: Phase 08.7
 - **Origin**: memcp scope additions from OpenClaw plugin design (engram/.planning/memcp-openclaw-plugin-design.md)
-- **Plans:** 3/5 plans executed
+- **Plans:** 5/5 plans complete
 
 Plans:
 - [x] 08.8-01-PLAN.md — Migration 018 (event_time, workspace columns) + Config structs + Memory/CreateMemory field additions [Wave 1]
