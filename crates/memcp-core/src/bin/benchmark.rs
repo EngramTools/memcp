@@ -146,7 +146,7 @@ async fn run() -> Result<(), anyhow::Error> {
         Arc::new(LocalEmbeddingProvider::new(".fastembed_cache", "AllMiniLML6V2").await?);
 
     // No consolidation or dedup sender for benchmark (these are live-trigger only)
-    let pipeline = EmbeddingPipeline::new(embedding_provider.clone(), store.clone(), 1000, None, None);
+    let pipeline = EmbeddingPipeline::new_single(embedding_provider.clone(), store.clone(), 1000, None, None);
 
     // 9. Determine configs to run
     let all_configs = default_configs();

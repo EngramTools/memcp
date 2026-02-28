@@ -554,6 +554,7 @@ Callable from code_execution_20260120 sandboxes.")]
                         text,
                         attempt: 0,
                         completion_tx,
+                        tier: "fast".to_string(),
                     });
                 }
                 // Enqueue background extraction job (non-blocking, never sync)
@@ -772,6 +773,7 @@ Callable from code_execution_20260120 sandboxes.")]
                             text,
                             attempt: 0,
                             completion_tx: None,
+                            tier: "fast".to_string(),
                         });
                     }
                 }

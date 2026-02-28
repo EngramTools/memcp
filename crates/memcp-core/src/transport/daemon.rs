@@ -11,10 +11,11 @@ use anyhow::Result;
 use chrono::Utc;
 use tokio::signal;
 
-use crate::config::Config;
+use crate::config::{Config, EmbeddingTierConfig};
 use crate::consolidation::ConsolidationWorker;
 use crate::content_filter::CompositeFilter;
 use crate::embedding::EmbeddingProvider;
+use crate::embedding::router::EmbeddingRouter;
 #[cfg(feature = "local-embed")]
 use crate::embedding::local::LocalEmbeddingProvider;
 use crate::embedding::openai::OpenAIEmbeddingProvider;
@@ -69,17 +70,26 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         }
     };
 
-    // 2. Create embedding provider (loads fastembed model into memory)
-    let provider = create_embedding_provider(config).await?;
-    let provider_for_filter = provider.clone();
+    // 2. Build embedding router (single-tier or multi-tier based on config)
+    let router = build_embedding_router(config).await?;
+    let router = Arc::new(router);
+    let provider_for_filter: Arc<dyn EmbeddingProvider + Send + Sync> = router.default_provider().clone();
 
-    // 2.5. Ensure HNSW index exists with the correct dimension for the active provider.
-    // Migration 010 dropped the old vector(384)-typed HNSW index; we recreate it here
-    // with a dimension-aware cast so the index works for any configured model.
-    let dim = provider.dimension();
-    store.ensure_hnsw_index(dim).await
-        .map_err(|e| anyhow::anyhow!("Failed to ensure HNSW index: {}", e))?;
-    tracing::info!(dimension = dim, "HNSW index ready");
+    // 2.5. Ensure HNSW indexes exist for all configured tiers.
+    // In single-tier mode, creates one index. In multi-tier mode, creates a
+    // partial index per tier with the correct dimension cast.
+    if router.is_multi_model() {
+        for (tier, dim) in router.tier_dimensions() {
+            store.ensure_hnsw_index_for_tier(tier, dim).await
+                .map_err(|e| anyhow::anyhow!("Failed to ensure HNSW index for tier {}: {}", tier, e))?;
+            tracing::info!(tier, dimension = dim, "HNSW index ready for tier");
+        }
+    } else {
+        let dim = router.dimension();
+        store.ensure_hnsw_index(dim).await
+            .map_err(|e| anyhow::anyhow!("Failed to ensure HNSW index: {}", e))?;
+        tracing::info!(dimension = dim, "HNSW index ready");
+    }
 
     // Mark as ready for health probes (DB connected + migrations applied + HNSW ready)
     ready.store(true, std::sync::atomic::Ordering::Release);
@@ -167,8 +177,8 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         });
     }
 
-    // 4. Create embedding pipeline
-    let pipeline = EmbeddingPipeline::new(provider, store.clone(), 1000, consolidation_sender, dedup_sender);
+    // 4. Create embedding pipeline (uses router for multi-tier support)
+    let pipeline = EmbeddingPipeline::new(router.clone(), store.clone(), 1000, consolidation_sender, dedup_sender);
 
     // 5. Run startup embedding backfill
     let queued = backfill(&store, &pipeline.sender()).await;
@@ -378,13 +388,61 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         tracing::info!("Curation disabled via config");
     }
 
+    // 8.7. Spawn promotion sweep worker if multi-model is configured
+    if router.is_multi_model() {
+        if let Some(quality_tier_config) = config.embedding.tiers.get("quality") {
+            if let Some(ref promotion_config) = quality_tier_config.promotion {
+                let sweep_store = store.clone();
+                let quality_provider = router.provider("quality")
+                    .expect("quality tier configured but provider missing")
+                    .clone();
+                let promo_config = promotion_config.clone();
+
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(
+                        Duration::from_secs(promo_config.sweep_interval_minutes * 60)
+                    );
+                    loop {
+                        interval.tick().await;
+                        match crate::promotion::worker::run_promotion_sweep(
+                            &sweep_store, &quality_provider, &promo_config, "fast", "quality"
+                        ).await {
+                            Ok(result) => {
+                                if let Some(reason) = &result.skipped_reason {
+                                    tracing::debug!(reason = %reason, "Promotion sweep skipped");
+                                } else if result.promoted_count > 0 {
+                                    tracing::info!(
+                                        promoted = result.promoted_count,
+                                        failed = result.failed_count,
+                                        candidates = result.candidates_evaluated,
+                                        "Promotion sweep complete"
+                                    );
+                                }
+                            }
+                            Err(e) => tracing::warn!(error = %e, "Promotion sweep failed"),
+                        }
+                    }
+                });
+                tracing::info!(
+                    interval_minutes = promotion_config.sweep_interval_minutes,
+                    batch_cap = promotion_config.batch_cap,
+                    "Promotion sweep worker started"
+                );
+            } else {
+                tracing::info!("Quality tier configured without promotion rules — sweep disabled");
+            }
+        } else {
+            tracing::debug!("No quality tier configured — promotion sweep disabled");
+        }
+    }
+
     // 9. Write initial heartbeat
     write_heartbeat(&store).await;
 
     // Write embedding model info and watched file count (one-time on startup)
     {
-        let model_name = &config.embedding.local_model;
-        let model_dim = crate::embedding::model_dimension(model_name).unwrap_or(0) as i32;
+        let model_name = router.model_name();
+        let model_dim = router.dimension() as i32;
 
         // Count watched JSONL files using existing watcher utilities
         let watched_count: i32 = if config.auto_store.enabled {
@@ -461,6 +519,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
                                     text,
                                     attempt: 0,
                                     completion_tx: None,
+                                    tier: "fast".to_string(),
                                 });
                             }
                             tracing::debug!(count = count, "Polled and queued pending embeddings");
@@ -784,5 +843,94 @@ pub fn create_qi_reranking_provider(
             config.query_intelligence.ollama_base_url.clone(),
             config.query_intelligence.reranking_ollama_model.clone(),
         ))),
+    }
+}
+
+/// Build an EmbeddingRouter from the config.
+///
+/// If `embedding.tiers` is empty (legacy mode), wraps the single legacy provider
+/// in a single-tier router for backward compatibility. If tiers are configured,
+/// creates a provider for each tier and assembles the router.
+async fn build_embedding_router(config: &Config) -> Result<EmbeddingRouter> {
+    use std::collections::HashMap;
+
+    if config.embedding.tiers.is_empty() {
+        // Legacy single-model mode: wrap existing provider in a single-tier router
+        let provider = create_embedding_provider(config).await?;
+        let mut tiers = HashMap::new();
+        tiers.insert("fast".to_string(), (provider, None));
+        Ok(EmbeddingRouter::new(tiers, "fast".to_string()))
+    } else {
+        // Multi-model mode: create a provider for each configured tier
+        let mut tiers = HashMap::new();
+        for (name, tier_config) in &config.embedding.tiers {
+            let provider = create_tier_provider(config, tier_config).await?;
+            tiers.insert(name.clone(), (provider, tier_config.routing.clone()));
+        }
+        // Default tier is "fast" if it exists, else first alphabetical
+        let default = if tiers.contains_key("fast") {
+            "fast".to_string()
+        } else {
+            tiers.keys().next().unwrap().clone()
+        };
+        tracing::info!(
+            tiers = ?tiers.keys().collect::<Vec<_>>(),
+            default_tier = %default,
+            "Multi-model embedding router configured"
+        );
+        Ok(EmbeddingRouter::new(tiers, default))
+    }
+}
+
+/// Create an embedding provider for a specific tier configuration.
+///
+/// Falls back to top-level config values for API keys and model names
+/// when the tier doesn't specify its own.
+async fn create_tier_provider(
+    config: &Config,
+    tier: &EmbeddingTierConfig,
+) -> Result<Arc<dyn EmbeddingProvider + Send + Sync>> {
+    match tier.provider.as_str() {
+        "openai" => {
+            let api_key = tier.openai_api_key.clone()
+                .or_else(|| config.embedding.openai_api_key.clone())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "OpenAI API key required for openai embedding tier. \
+                         Set openai_api_key on the tier or top-level embedding config."
+                    )
+                })?;
+            let model = tier.model.clone()
+                .unwrap_or_else(|| config.embedding.openai_model.clone());
+            let provider = OpenAIEmbeddingProvider::new(
+                api_key,
+                Some(model),
+                tier.dimension,
+            )?;
+            Ok(Arc::new(provider))
+        }
+        #[cfg(feature = "local-embed")]
+        "local" | _ => {
+            let model = tier.model.clone()
+                .unwrap_or_else(|| config.embedding.local_model.clone());
+            Ok(Arc::new(
+                LocalEmbeddingProvider::new(&config.embedding.cache_dir, &model).await?,
+            ))
+        }
+        #[cfg(not(feature = "local-embed"))]
+        "local" => {
+            anyhow::bail!(
+                "Local embedding provider requires the 'local-embed' feature. \
+                 Build with: cargo build --features local-embed"
+            );
+        }
+        #[cfg(not(feature = "local-embed"))]
+        _ => {
+            anyhow::bail!(
+                "Unknown embedding tier provider '{}'. When built without 'local-embed', \
+                 only 'openai' is supported.",
+                tier.provider
+            );
+        }
     }
 }

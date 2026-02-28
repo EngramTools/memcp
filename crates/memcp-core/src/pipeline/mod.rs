@@ -13,3 +13,4 @@ pub mod auto_store;
 pub mod content_filter;
 pub mod chunking;
 pub mod curation;
+pub mod promotion;

@@ -77,6 +77,7 @@ pub async fn ingest_question(
                 text,
                 attempt: 0,
                 completion_tx: None,
+                tier: "fast".to_string(),
             });
 
             turn_count += 1;

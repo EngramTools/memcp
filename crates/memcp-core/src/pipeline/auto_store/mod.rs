@@ -323,6 +323,7 @@ async fn run_worker(
                         text,
                         attempt: 0,
                         completion_tx: None,
+                        tier: "fast".to_string(),
                     });
                 }
 
@@ -378,6 +379,7 @@ async fn run_worker(
                                         text,
                                         attempt: 0,
                                         completion_tx: None,
+                                        tier: "fast".to_string(),
                                     });
                                 }
 

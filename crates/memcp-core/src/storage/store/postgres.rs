@@ -275,6 +275,108 @@ impl PostgresMemoryStore {
             .map_err(|e| MemcpError::Storage(format!("Failed to drop HNSW index: {}", e)))?;
         Ok(())
     }
+
+    /// Ensure the HNSW index exists for a specific embedding tier.
+    ///
+    /// Creates a partial index filtered by `tier` so that each tier's embeddings
+    /// use a dimension-appropriate HNSW index. The partial index allows pgvector
+    /// to use the correct vector cast for each tier's dimension.
+    pub async fn ensure_hnsw_index_for_tier(&self, tier: &str, dimension: usize) -> Result<(), MemcpError> {
+        let index_name = format!("idx_memory_embeddings_hnsw_{}", tier);
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE indexname = $1)",
+        )
+        .bind(&index_name)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to check HNSW index for tier {}: {}", tier, e)))?;
+
+        if !exists {
+            let sql = format!(
+                "CREATE INDEX {} ON memory_embeddings \
+                 USING hnsw ((embedding::vector({})) vector_cosine_ops) \
+                 WHERE tier = '{}' \
+                 WITH (m = 16, ef_construction = 64)",
+                index_name, dimension, tier
+            );
+            sqlx::query(&sql)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| MemcpError::Storage(format!("Failed to create HNSW index for tier {}: {}", tier, e)))?;
+            tracing::info!(tier, dimension, "Created HNSW index for embedding tier");
+        } else {
+            tracing::debug!(tier, dimension, "HNSW index for tier already exists, skipping");
+        }
+
+        Ok(())
+    }
+
+    /// Count the number of current embeddings in a specific tier.
+    ///
+    /// Used for lazy quality query embedding: skip API call when no memories
+    /// use the quality tier yet.
+    pub async fn count_tier_embeddings(&self, tier: &str) -> Result<i64, MemcpError> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM memory_embeddings WHERE tier = $1 AND is_current = true",
+        )
+        .bind(tier)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to count tier embeddings: {}", e)))?;
+
+        Ok(count)
+    }
+
+    /// Find memories eligible for promotion from one tier to another.
+    ///
+    /// Returns memory IDs that currently have embeddings in `current_tier` and
+    /// meet the promotion thresholds (stability and reinforcement count from memory_salience).
+    pub async fn get_promotion_candidates(
+        &self,
+        min_stability: f64,
+        min_reinforcements: i32,
+        current_tier: &str,
+        limit: i64,
+    ) -> Result<Vec<String>, MemcpError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT me.memory_id \
+             FROM memory_embeddings me \
+             JOIN memory_salience ms ON ms.memory_id = me.memory_id \
+             JOIN memories m ON m.id = me.memory_id \
+             WHERE me.tier = $1 \
+               AND me.is_current = true \
+               AND m.deleted_at IS NULL \
+               AND (ms.stability >= $2 OR ms.reinforcement_count >= $3) \
+             ORDER BY ms.stability DESC \
+             LIMIT $4"
+        )
+        .bind(current_tier)
+        .bind(min_stability)
+        .bind(min_reinforcements)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to get promotion candidates: {}", e)))?;
+
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// Deactivate the current embedding for a memory in a specific tier.
+    ///
+    /// Sets `is_current = false` so that a new embedding in the target tier
+    /// can take over. Used during promotion from fast to quality tier.
+    pub async fn deactivate_tier_embedding(&self, memory_id: &str, tier: &str) -> Result<(), MemcpError> {
+        sqlx::query(
+            "UPDATE memory_embeddings SET is_current = false, updated_at = NOW() \
+             WHERE memory_id = $1 AND tier = $2 AND is_current = true"
+        )
+        .bind(memory_id)
+        .bind(tier)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to deactivate tier embedding: {}", e)))?;
+        Ok(())
+    }
 }
 
 /// Encode a pagination cursor from created_at and id.
@@ -924,6 +1026,9 @@ impl MemoryStore for PostgresMemoryStore {
 
 impl PostgresMemoryStore {
     /// Insert a new embedding record for a memory.
+    ///
+    /// The `tier` parameter identifies which embedding tier this belongs to
+    /// (e.g., "fast" for local model, "quality" for API model).
     pub async fn insert_embedding(
         &self,
         id: &str,
@@ -933,12 +1038,13 @@ impl PostgresMemoryStore {
         dimension: i32,
         embedding: &pgvector::Vector,
         is_current: bool,
+        tier: &str,
     ) -> Result<(), MemcpError> {
         let now = Utc::now();
         sqlx::query(
             "INSERT INTO memory_embeddings \
-             (id, memory_id, model_name, model_version, dimension, embedding, is_current, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             (id, memory_id, model_name, model_version, dimension, embedding, is_current, created_at, updated_at, tier) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(id)
         .bind(memory_id)
@@ -949,6 +1055,7 @@ impl PostgresMemoryStore {
         .bind(is_current)
         .bind(&now)
         .bind(&now)
+        .bind(tier)
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to insert embedding: {}", e)))?;
@@ -1671,6 +1778,194 @@ impl PostgresMemoryStore {
         }
 
         // Post-filter fused results by audience if specified
+        if let Some(aud) = audience {
+            hits.retain(|hit| hit.memory.audience == aud);
+        }
+
+        Ok(hits)
+    }
+
+    /// Vector search within a specific embedding tier.
+    ///
+    /// Returns `(memory_id, rank)` pairs sorted by cosine similarity.
+    /// Uses the tier-specific partial HNSW index for efficient lookup.
+    #[allow(clippy::too_many_arguments)]
+    async fn search_vector_for_tier(
+        &self,
+        query_embedding: &pgvector::Vector,
+        tier: &str,
+        limit: i64,
+        created_after: Option<chrono::DateTime<Utc>>,
+        created_before: Option<chrono::DateTime<Utc>>,
+        tags: Option<&[String]>,
+        audience: Option<&str>,
+    ) -> Result<Vec<(String, i64)>, MemcpError> {
+        // Build WHERE conditions
+        let mut conditions: Vec<String> = vec![
+            "me.is_current = true".to_string(),
+            "me.tier = $2".to_string(),
+            "m.embedding_status = 'complete'".to_string(),
+            "m.deleted_at IS NULL".to_string(),
+            "m.is_consolidated_original = FALSE".to_string(),
+        ];
+
+        let mut param_idx: u32 = 3; // $1=query_embedding, $2=tier
+
+        if created_after.is_some() {
+            conditions.push(format!("m.created_at > ${}", param_idx));
+            param_idx += 1;
+        }
+        if created_before.is_some() {
+            conditions.push(format!("m.created_at < ${}", param_idx));
+            param_idx += 1;
+        }
+        if tags.is_some() {
+            conditions.push(format!("m.tags @> ${}::jsonb", param_idx));
+            param_idx += 1;
+        }
+        if audience.is_some() {
+            conditions.push(format!("m.audience = ${}", param_idx));
+            param_idx += 1;
+        }
+
+        let where_clause = format!("WHERE {}", conditions.join(" AND "));
+
+        let sql = format!(
+            "SELECT m.id \
+             FROM memories m \
+             JOIN memory_embeddings me ON me.memory_id = m.id \
+             {} \
+             ORDER BY me.embedding <=> $1 ASC \
+             LIMIT ${}",
+            where_clause, param_idx
+        );
+
+        let mut q = sqlx::query_scalar::<_, String>(&sql)
+            .bind(query_embedding)
+            .bind(tier);
+
+        if let Some(ca) = created_after {
+            q = q.bind(ca);
+        }
+        if let Some(cb) = created_before {
+            q = q.bind(cb);
+        }
+        if let Some(t) = tags {
+            q = q.bind(serde_json::json!(t));
+        }
+        if let Some(aud) = audience {
+            q = q.bind(aud);
+        }
+        q = q.bind(limit);
+
+        let ids = q
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Tier vector search failed: {}", e)))?;
+
+        // Convert to (id, rank) pairs (1-indexed)
+        Ok(ids.into_iter().enumerate().map(|(i, id)| (id, (i + 1) as i64)).collect())
+    }
+
+    /// Multi-tier hybrid search: runs BM25 + symbolic once, vector search per tier, then RRF-merges.
+    ///
+    /// BM25 and symbolic legs are text-based (model-agnostic) so they only run once.
+    /// Vector legs run per-tier using tier-specific query embeddings.
+    ///
+    /// When `tier_embeddings` has only one entry, this degrades to the same behavior as
+    /// `hybrid_search`. When empty (no embeddings at all), BM25 + symbolic only search.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn hybrid_search_multi_tier(
+        &self,
+        query_text: &str,
+        tier_embeddings: &HashMap<String, pgvector::Vector>,
+        limit: i64,
+        created_after: Option<chrono::DateTime<Utc>>,
+        created_before: Option<chrono::DateTime<Utc>>,
+        tags: Option<&[String]>,
+        bm25_k: Option<f64>,
+        vector_k: Option<f64>,
+        symbolic_k: Option<f64>,
+        source: Option<&[String]>,
+        audience: Option<&str>,
+    ) -> Result<Vec<crate::search::HybridRawHit>, MemcpError> {
+        let candidate_limit = 40i64;
+
+        // BM25 leg — runs once (text-based, model-agnostic)
+        let bm25_results: Vec<(String, i64)> = if bm25_k.is_some() {
+            self.search_bm25(query_text, candidate_limit).await?
+        } else {
+            vec![]
+        };
+
+        // Vector legs — one per tier. Each tier's results are collected separately
+        // then merged. A memory found by multiple tiers gets the best rank from either.
+        let mut all_vector_results: Vec<(String, i64)> = Vec::new();
+        if vector_k.is_some() {
+            for (tier_name, embedding) in tier_embeddings {
+                let tier_results = self.search_vector_for_tier(
+                    embedding, tier_name, candidate_limit, created_after, created_before,
+                    tags, audience,
+                ).await?;
+
+                // Merge into all_vector_results: keep best rank per memory_id
+                for (id, rank) in tier_results {
+                    if let Some(existing) = all_vector_results.iter_mut().find(|(eid, _)| eid == &id) {
+                        if rank < existing.1 {
+                            existing.1 = rank;
+                        }
+                    } else {
+                        all_vector_results.push((id, rank));
+                    }
+                }
+            }
+        }
+
+        // Symbolic leg — runs once (text-based, model-agnostic)
+        let symbolic_results: Vec<(String, i64)> = if symbolic_k.is_some() {
+            self.search_symbolic(query_text, candidate_limit).await?
+        } else {
+            vec![]
+        };
+
+        // Three-way RRF fusion
+        let fused = crate::search::rrf_fuse(
+            &bm25_results,
+            &all_vector_results,
+            &symbolic_results,
+            bm25_k.unwrap_or(60.0),
+            vector_k.unwrap_or(60.0),
+            symbolic_k.unwrap_or(40.0),
+        );
+
+        // Fetch full Memory objects for the top fused IDs
+        let top_ids: Vec<String> = fused
+            .iter()
+            .take(limit as usize)
+            .map(|(id, _, _)| id.clone())
+            .collect();
+        let memories = self.get_memories_by_ids(&top_ids).await?;
+
+        // Build HybridRawHit results, preserving RRF rank order
+        let mut hits = Vec::new();
+        for (id, rrf_score, match_source) in fused.iter().take(limit as usize) {
+            if let Some(memory) = memories.get(id) {
+                hits.push(crate::search::HybridRawHit {
+                    memory: memory.clone(),
+                    rrf_score: *rrf_score,
+                    match_source: match_source.clone(),
+                });
+            }
+        }
+
+        // Post-filter by source prefix
+        if let Some(sources) = source {
+            if !sources.is_empty() {
+                hits.retain(|hit| sources.iter().any(|src| hit.memory.source.starts_with(src.as_str())));
+            }
+        }
+
+        // Post-filter by audience
         if let Some(aud) = audience {
             hits.retain(|hit| hit.memory.audience == aud);
         }
