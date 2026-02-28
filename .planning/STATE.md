@@ -2,32 +2,40 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in-progress
-last_updated: "2026-02-28"
+status: unknown
+last_updated: "2026-02-28T08:37:17.458Z"
 progress:
-  total_phases: 35
-  completed_phases: 25
-  total_plans: 75
-  completed_plans: 65
+  total_phases: 36
+  completed_phases: 13
+  total_plans: 78
+  completed_plans: 45
 ---
 
 # Project State
 
 ## Current Phase
-Phase 08.7-multi-model-embeddings — Plan 04 complete (4/4 plans committed)
+Phase 08.8-plugin-support-primitives — Plan 01 complete (1/5 plans committed)
 
 ## Active Context
-- Last completed: Phase 08.7-04 dual-query search wiring (2026-02-28)
-- Dual-query: embed_multi IPC type, start_embed_listener accepts multi_tier, CLI branches on is_multi_model()
-- CLI uses hybrid_search_multi_tier when config.embedding.is_multi_model(), falls back to single-model path
-- recall_candidates_multi_tier: per-tier search, merge by best relevance, dedup, truncate
-- MCP serve unchanged (single-model); CLI gains full multi-tier search path
+- Last completed: Phase 08.8-01 schema and config foundations (2026-02-28)
+- Migration 018: event_time (TIMESTAMPTZ), event_time_precision (TEXT CHECK), workspace (TEXT) columns added to memories table
+- UserConfig (birth_year), WorkspaceConfig (default_workspace), TemporalConfig (llm_enabled + provider fields) added to config.rs
+- RecallConfig extended with truncation_chars (200), preamble_override (Option<String>), related_context_enabled (true)
+- Memory and CreateMemory structs gain event_time, event_time_precision, workspace fields
+- All 8 SELECT queries + INSERT in postgres.rs updated; all 10 CreateMemory literals updated
 - 68 unit tests passing
 - Last session: 2026-02-28
-- Stopped at: Completed 08.7-04-PLAN.md
-- Next: Phase 08.7 complete — check roadmap for next phase
+- Stopped at: Completed 08.8-01-PLAN.md
+- Next: Phase 08.8 Plan 02 — annotate command
 
 ## Accumulated Context
+
+### Phase 08.8 Decisions
+- Phase 08.8-01: event_time_precision uses TEXT CHECK constraint (not Postgres ENUM) — easier to extend without ALTER TYPE per CONTEXT.md pitfall guidance
+- Phase 08.8-01: workspace partial index WHERE workspace IS NOT NULL — excludes global (NULL) memories from index for efficiency
+- Phase 08.8-01: TemporalConfig.openai_base_url is Option<String> — None means use provider default, distinguishes absent-from-config vs explicit override
+- Phase 08.8-01: All 10 CreateMemory struct literals updated with new fields=None — event_time/workspace population reserved for Plans 03/04
+- Phase 08.8-01: RecallConfig extended with truncation_chars (200), preamble_override (None), related_context_enabled (true) — config-only for now, wire-up in Plan 05
 
 ### Phase 08.7 Decisions
 - Phase 08.7: Plan 02 — Tasks 1-3 pre-implemented in 08.7-01; Task 4 wires EmbeddingRouter into auto-store with Option<Arc<EmbeddingRouter>> — None in serve mode, Some(router) in daemon mode; chunks inherit parent tier
