@@ -351,7 +351,7 @@ async fn test_search_cursor_pagination(pool: PgPool) {
             None,  // no embedding — BM25 only (daemon offline scenario)
             2,     // limit
             None,  // cursor — first page
-            None, None, None, Some(60.0), None, Some(40.0), None, None,
+            None, None, None, Some(60.0), None, Some(40.0), None, None, None,
         )
         .await
         .unwrap();
@@ -366,7 +366,7 @@ async fn test_search_cursor_pagination(pool: PgPool) {
             None,
             2,
             page1.next_cursor.clone(), // cursor from page 1
-            None, None, None, Some(60.0), None, Some(40.0), None, None,
+            None, None, None, Some(60.0), None, Some(40.0), None, None, None,
         )
         .await
         .unwrap();
@@ -410,7 +410,7 @@ async fn test_search_result_has_id(pool: PgPool) {
             Some(60.0), // bm25_k
             None,       // vector_k
             Some(40.0), // symbolic_k
-            None, None,
+            None, None, None,
         )
         .await
         .unwrap();
@@ -451,7 +451,7 @@ async fn test_offset_deprecation_warning(pool: PgPool) {
             Some(60.0),
             None,
             Some(40.0),
-            None, None,
+            None, None, None,
         )
         .await;
 
