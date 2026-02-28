@@ -233,6 +233,21 @@ enum Commands {
         #[command(subcommand)]
         action: CurationAction,
     },
+    /// Annotate an existing memory — add/replace tags and adjust salience
+    Annotate {
+        /// Memory ID to annotate
+        #[arg(long)]
+        id: String,
+        /// Tags to append (comma-separated). Combined with existing tags.
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        /// Replace all tags with these (comma-separated). Overrides --tags if both given.
+        #[arg(long, value_delimiter = ',')]
+        replace_tags: Option<Vec<String>>,
+        /// Salience value. Absolute (e.g., "0.9") or multiplier (e.g., "1.5x").
+        #[arg(long)]
+        salience: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -588,6 +603,11 @@ async fn main() -> Result<()> {
                     cli::cmd_curation_undo(&store, &run_id).await?;
                 }
             }
+        }
+
+        Commands::Annotate { id, tags, replace_tags, salience } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_annotate(&store, &id, tags, replace_tags, salience).await?;
         }
 
         Commands::Serve => {

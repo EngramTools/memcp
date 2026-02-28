@@ -15,6 +15,7 @@
 /// - Short-lived: connect, execute, exit (no long-running state)
 /// - Search uses BM25+symbolic only (no embedding model loaded in CLI process)
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -30,7 +31,7 @@ use crate::search::{SalienceScorer, ScoredHit};
 use crate::store::postgres::PostgresMemoryStore;
 use crate::store::{
     decode_search_keyset_cursor, encode_search_keyset_cursor,
-    CreateMemory, ListFilter, Memory, MemoryStore,
+    CreateMemory, ListFilter, Memory, MemoryStore, UpdateMemory,
 };
 
 // ---------------------------------------------------------------------------
@@ -1347,6 +1348,165 @@ pub async fn cmd_curation_undo(
     });
     println!("{}", serde_json::to_string(&output)?);
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Annotate
+// ---------------------------------------------------------------------------
+
+/// Result of an annotate operation — used by both CLI and MCP code paths.
+pub struct AnnotateResult {
+    pub id: String,
+    pub tags_added: Vec<String>,
+    pub tags_removed: Vec<String>,
+    pub salience_before: Option<f64>,
+    pub salience_after: Option<f64>,
+}
+
+/// Core annotate logic shared by cmd_annotate (CLI) and annotate_memory (MCP).
+///
+/// 1. Verifies the memory exists.
+/// 2. Applies tag append or replace.
+/// 3. Applies salience absolute or multiplier.
+/// 4. Returns a diff describing what changed.
+pub async fn annotate_logic(
+    store: &Arc<PostgresMemoryStore>,
+    id: &str,
+    tags_to_append: Option<Vec<String>>,
+    tags_to_replace: Option<Vec<String>>,
+    salience_input: Option<String>,
+) -> Result<AnnotateResult> {
+    // 1. Verify memory exists and capture current state.
+    let memory = store.get(id).await.map_err(|e| anyhow::anyhow!("Memory not found: {}", e))?;
+
+    // 2. Compute tag changes.
+    // Memory.tags is Option<serde_json::Value> (JSONB array) — extract to Vec<String>.
+    let tags_before: Vec<String> = memory
+        .tags
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect::<Vec<String>>())
+        .unwrap_or_default();
+    let new_tags: Vec<String> = if let Some(replace) = tags_to_replace {
+        // replace_tags wins over tags
+        replace
+    } else if let Some(append) = tags_to_append {
+        // merge + deduplicate + sort
+        let mut set: HashSet<String> = tags_before.iter().cloned().collect();
+        for t in append {
+            set.insert(t);
+        }
+        let mut v: Vec<String> = set.into_iter().collect();
+        v.sort();
+        v
+    } else {
+        tags_before.clone()
+    };
+
+    let tags_changed = new_tags != tags_before;
+    if tags_changed {
+        store
+            .update(
+                id,
+                UpdateMemory {
+                    content: None,
+                    type_hint: None,
+                    tags: Some(new_tags.clone()),
+                    source: None,
+                },
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to update tags: {}", e))?;
+    }
+
+    // 3. Compute salience changes.
+    let (salience_before, salience_after) = if let Some(ref input) = salience_input {
+        let salience_map = store
+            .get_salience_data(&[id.to_string()])
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read salience: {}", e))?;
+        let current = salience_map
+            .get(id)
+            .cloned()
+            .unwrap_or_default();
+
+        let new_stability = if input.ends_with('x') {
+            // Multiplier mode
+            let prefix = &input[..input.len() - 1];
+            let multiplier: f64 = prefix
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid salience multiplier: '{}'", input))?;
+            (current.stability * multiplier).min(100.0)
+        } else {
+            // Absolute mode
+            input
+                .parse::<f64>()
+                .map_err(|_| anyhow::anyhow!("Invalid salience value: '{}'", input))?
+        };
+
+        store
+            .upsert_salience(
+                id,
+                new_stability,
+                current.difficulty,
+                current.reinforcement_count,
+                current.last_reinforced_at,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to upsert salience: {}", e))?;
+
+        (Some(current.stability), Some(new_stability))
+    } else {
+        (None, None)
+    };
+
+    // 4. Compute tag diff.
+    let before_set: HashSet<&String> = tags_before.iter().collect();
+    let after_set: HashSet<&String> = new_tags.iter().collect();
+    let mut tags_added: Vec<String> = after_set
+        .difference(&before_set)
+        .map(|s| (*s).clone())
+        .collect();
+    tags_added.sort();
+    let mut tags_removed: Vec<String> = before_set
+        .difference(&after_set)
+        .map(|s| (*s).clone())
+        .collect();
+    tags_removed.sort();
+
+    Ok(AnnotateResult {
+        id: id.to_string(),
+        tags_added,
+        tags_removed,
+        salience_before,
+        salience_after,
+    })
+}
+
+/// CLI handler for `memcp annotate`.
+pub async fn cmd_annotate(
+    store: &Arc<PostgresMemoryStore>,
+    id: &str,
+    tags_to_append: Option<Vec<String>>,
+    tags_to_replace: Option<Vec<String>>,
+    salience_input: Option<String>,
+) -> Result<()> {
+    let result = annotate_logic(store, id, tags_to_append, tags_to_replace, salience_input).await?;
+
+    let mut changes = serde_json::Map::new();
+    changes.insert("tags_added".to_string(), json!(result.tags_added));
+    changes.insert("tags_removed".to_string(), json!(result.tags_removed));
+    if let (Some(before), Some(after)) = (result.salience_before, result.salience_after) {
+        changes.insert("salience_before".to_string(), json!(before));
+        changes.insert("salience_after".to_string(), json!(after));
+    }
+
+    let output = json!({
+        "id": result.id,
+        "changes": changes,
+    });
+    println!("{}", serde_json::to_string(&output)?);
     Ok(())
 }
 
