@@ -7,7 +7,7 @@
 //! search query rewriting (e.g., "last week"). This module handles storage-time
 //! extraction from content being stored.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Datelike, TimeZone, Utc, Weekday};
 use regex::Regex;
@@ -267,6 +267,277 @@ pub fn extract_event_time(
     }
 
     None
+}
+
+// ---------------------------------------------------------------------------
+// LLM temporal extraction (async)
+// ---------------------------------------------------------------------------
+
+/// LLM-based temporal extraction for subtle references regex cannot catch.
+///
+/// Sends content to an LLM with a structured prompt requesting temporal references.
+/// Returns `(event_time, precision)` or `None` if no temporal reference is found or
+/// the call times out / fails (fail-open).
+///
+/// # Arguments
+/// - `content`    — memory content text to analyze
+/// - `birth_year` — user birth year for age-relative resolution
+/// - `provider`   — "ollama" or "openai"
+/// - `model`      — model name (e.g. "llama3.2:3b" or "gpt-4o-mini")
+/// - `api_key`    — OpenAI API key (ignored for Ollama)
+/// - `base_url`   — base URL override (e.g. "<http://localhost:11434>")
+/// - `now`        — reference time for relative expressions
+pub async fn extract_event_time_llm(
+    content: &str,
+    birth_year: Option<u32>,
+    provider: &str,
+    model: &str,
+    api_key: Option<&str>,
+    base_url: Option<&str>,
+    now: DateTime<Utc>,
+) -> Option<(DateTime<Utc>, EventTimePrecision)> {
+    let birth_context = birth_year
+        .map(|y| format!("The person was born in {}. ", y))
+        .unwrap_or_default();
+
+    let prompt = format!(
+        "{}Analyze this text and extract any temporal reference to when the described event happened. \
+         Return ONLY a JSON object like {{\"year\": 2019, \"month\": 3, \"day\": null}} \
+         where month and day are null if unknown, OR the string \"none\" if there is no temporal reference. \
+         Do not explain — only the JSON or \"none\".\nText: {}",
+        birth_context, content
+    );
+
+    let raw_response = match provider {
+        "openai" => {
+            let key = api_key.unwrap_or("");
+            let base = base_url.unwrap_or("https://api.openai.com/v1");
+            call_openai_temporal(base, key, model, &prompt).await
+        }
+        _ => {
+            // Default to Ollama
+            let base = base_url.unwrap_or("http://localhost:11434");
+            call_ollama_temporal(base, model, &prompt).await
+        }
+    };
+
+    let raw = match raw_response {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::debug!(error = %e, "LLM temporal extraction failed (fail-open)");
+            return None;
+        }
+    };
+
+    let trimmed = raw.trim();
+    if trimmed == "none" || trimmed.is_empty() {
+        return None;
+    }
+
+    // Parse JSON response: {"year": YYYY, "month": MM_or_null, "day": DD_or_null}
+    let v: serde_json::Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(_) => {
+            tracing::debug!(raw = %trimmed, "LLM temporal response not valid JSON");
+            return None;
+        }
+    };
+
+    let year = v.get("year").and_then(|y| y.as_i64())? as i32;
+    if !(1900..=2100).contains(&year) {
+        return None;
+    }
+
+    let month = v.get("month").and_then(|m| m.as_i64()).unwrap_or(1).max(1) as u32;
+    let day = v.get("day").and_then(|d| d.as_i64()).unwrap_or(1).max(1) as u32;
+
+    let precision = if v.get("month").and_then(|m| m.as_i64()).is_some() {
+        if v.get("day").and_then(|d| d.as_i64()).is_some() {
+            EventTimePrecision::Day
+        } else {
+            EventTimePrecision::Month
+        }
+    } else {
+        EventTimePrecision::Year
+    };
+
+    let _ = now; // now is available for future relative-reference handling
+    Utc.with_ymd_and_hms(year, month, day, 0, 0, 0)
+        .single()
+        .map(|dt| (dt, precision))
+}
+
+/// Call Ollama /api/chat endpoint for temporal extraction.
+async fn call_ollama_temporal(base_url: &str, model: &str, prompt: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": false,
+        "options": {"temperature": 0.0}
+    });
+    let url = format!("{}/api/chat", base_url);
+
+    let resp = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        client.post(&url).json(&body).send(),
+    )
+    .await
+    .map_err(|_| "timeout".to_string())?
+    .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Ollama returned {}", resp.status()));
+    }
+
+    let parsed: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    parsed
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "no content in Ollama response".to_string())
+}
+
+/// Call OpenAI /chat/completions endpoint for temporal extraction.
+async fn call_openai_temporal(base_url: &str, api_key: &str, model: &str, prompt: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 64,
+        "temperature": 0.0
+    });
+    let url = format!("{}/chat/completions", base_url);
+
+    let resp = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&body)
+            .send(),
+    )
+    .await
+    .map_err(|_| "timeout".to_string())?
+    .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        return Err(format!("OpenAI returned {}", resp.status()));
+    }
+
+    let parsed: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    parsed
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "no content in OpenAI response".to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Temporal LLM background worker
+// ---------------------------------------------------------------------------
+
+/// Background worker that applies LLM temporal extraction to memories missing event_time.
+///
+/// Polls for memories with no event_time (already fully extracted otherwise),
+/// calls `extract_event_time_llm` for each, and updates `event_time` + `event_time_precision`.
+/// Gated on `config.temporal.llm_enabled` — returns immediately when disabled.
+///
+/// Poll interval: 60 seconds (low-priority background work).
+pub async fn run_temporal_worker(
+    store: Arc<crate::store::postgres::PostgresMemoryStore>,
+    config: &crate::config::TemporalConfig,
+    birth_year: Option<u32>,
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
+) {
+    if !config.llm_enabled {
+        tracing::debug!("Temporal LLM worker disabled via config");
+        return;
+    }
+
+    tracing::info!(
+        provider = %config.provider,
+        "Temporal LLM background worker started"
+    );
+
+    let provider = config.provider.clone();
+    let model = match provider.as_str() {
+        "openai" => config.openai_model.clone(),
+        _ => config.ollama_model.clone(),
+    };
+    let api_key = config.openai_api_key.clone();
+    let base_url = config.openai_base_url.clone();
+
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+
+    loop {
+        tokio::select! {
+            _ = shutdown.recv() => {
+                tracing::debug!("Temporal LLM worker received shutdown signal");
+                return;
+            }
+            _ = interval.tick() => {
+                // Fetch memories missing event_time (up to 10 per pass)
+                let candidates = match sqlx::query_as::<_, (String, String)>(
+                    "SELECT id, content FROM memories \
+                     WHERE event_time IS NULL AND deleted_at IS NULL \
+                     AND extraction_status = 'complete' \
+                     ORDER BY created_at DESC LIMIT 10"
+                )
+                .fetch_all(store.pool())
+                .await
+                {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Temporal LLM worker: failed to fetch candidates");
+                        continue;
+                    }
+                };
+
+                if candidates.is_empty() {
+                    continue;
+                }
+
+                tracing::debug!(count = candidates.len(), "Temporal LLM worker: processing candidates");
+
+                let now = Utc::now();
+                for (memory_id, content) in &candidates {
+                    let result = extract_event_time_llm(
+                        content,
+                        birth_year,
+                        &provider,
+                        &model,
+                        api_key.as_deref(),
+                        base_url.as_deref(),
+                        now,
+                    )
+                    .await;
+
+                    if let Some((event_time, precision)) = result {
+                        if let Err(e) = store.update_event_time(memory_id, event_time, precision.as_str()).await {
+                            tracing::warn!(
+                                error = %e,
+                                memory_id = %memory_id,
+                                "Temporal LLM worker: failed to update event_time"
+                            );
+                        } else {
+                            tracing::debug!(
+                                memory_id = %memory_id,
+                                event_time = %event_time,
+                                precision = %precision.as_str(),
+                                "Temporal LLM worker: updated event_time"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

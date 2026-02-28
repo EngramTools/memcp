@@ -452,6 +452,30 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         }
     }
 
+    // 8.8. Spawn temporal LLM background worker if enabled
+    if config.temporal.llm_enabled {
+        let temporal_store = store.clone();
+        let temporal_config = config.temporal.clone();
+        let temporal_birth_year = config.user.birth_year;
+        // Create a broadcast channel for shutdown signal (1-slot buffer sufficient)
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+        tokio::spawn(async move {
+            crate::pipeline::temporal::run_temporal_worker(
+                temporal_store,
+                &temporal_config,
+                temporal_birth_year,
+                shutdown_rx,
+            )
+            .await;
+        });
+        tracing::info!(
+            provider = %config.temporal.provider,
+            "Temporal LLM background worker started"
+        );
+    } else {
+        tracing::debug!("Temporal LLM worker disabled (set temporal.llm_enabled = true to enable)");
+    }
+
     // 9. Write initial heartbeat
     write_heartbeat(&store).await;
 
