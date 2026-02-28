@@ -152,6 +152,29 @@ fn format_memory_json(memory: &Memory, verbose: bool) -> serde_json::Value {
     }
 }
 
+/// Truncate content to at most `max_chars` Unicode scalar values.
+///
+/// Returns `(truncated_content, was_truncated)`.
+/// When truncated, appends "..." so the agent knows to `memcp get <id>` for full content.
+fn truncate_content(content: &str, max_chars: usize) -> (String, bool) {
+    if content.chars().count() <= max_chars {
+        (content.to_string(), false)
+    } else {
+        let truncated: String = content.chars().take(max_chars).collect();
+        (format!("{}...", truncated), true)
+    }
+}
+
+/// Build a ready-made `memcp search --tags ...` command from a slice of shared tags.
+///
+/// Returns an empty string when no tags are provided (caller skips the hint field).
+fn build_related_hint(shared_tags: &[String]) -> String {
+    if shared_tags.is_empty() {
+        return String::new();
+    }
+    format!("memcp search --tags {}", shared_tags.join(","))
+}
+
 /// Parse an ISO 8601 date string into a DateTime<Utc>.
 fn parse_datetime(s: &str) -> Result<DateTime<Utc>> {
     // Try full RFC3339 first, then date-only (assume start of day UTC)
@@ -1219,7 +1242,16 @@ pub async fn cmd_gc(
 /// Recall relevant memories for automatic context injection.
 ///
 /// Requires the daemon to be running (for query embedding via IPC).
-/// Outputs JSON: { "session_id": "...", "count": N, "memories": [...] }
+///
+/// Output format:
+/// - `first=false`: `{ "session_id": "...", "count": N, "memories": [...] }`
+/// - `first=true`:  `{ "current_datetime": "...", "preamble": "...", "session_id": "...", "count": N, "memories": [...] }`
+///
+/// Each memory in the array includes truncated content (configurable via `recall.truncation_chars`),
+/// a `truncated` flag when content was cut, and `related_count`/`hint` when related memories exist.
+///
+/// The `--first` flag is designed for session start — injects preamble and datetime so agents
+/// understand the memory system without repeating this overhead on every recall.
 pub async fn cmd_recall(
     store: &Arc<PostgresMemoryStore>,
     config: &Config,
@@ -1227,7 +1259,15 @@ pub async fn cmd_recall(
     session_id: Option<String>,
     reset: bool,
     workspace: Option<String>,
+    first: bool,
 ) -> Result<()> {
+    // Default preamble text. Tells agents how to use the memory system.
+    const DEFAULT_PREAMBLE: &str = "You have access to persistent memory via memcp. \
+        Key commands: `memcp store \"content\" --tags tag1,tag2` to save, \
+        `memcp search \"query\"` to find, `memcp get <id>` for full content, \
+        `memcp annotate --id <id> --tags tag1 --salience 1.5x` to enrich. \
+        Memories persist across sessions. Store important decisions, preferences, and context.";
+
     // Recall requires vector similarity — embed via daemon.
     let query_embedding = match embed_via_daemon(query).await {
         Some(emb) => emb,
@@ -1249,12 +1289,74 @@ pub async fn cmd_recall(
     let result = engine.recall(&query_embedding, session_id, reset, workspace.as_deref()).await
         .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?;
 
-    // Output compact JSON projection (per CONTEXT.md: only memory_id, content, relevance).
-    let output = serde_json::json!({
+    // Collect memory IDs for related context lookup.
+    let memory_ids: Vec<String> = result.memories.iter().map(|m| m.memory_id.clone()).collect();
+
+    // Fetch related context (batch) if enabled and there are memories.
+    let related_map = if config.recall.related_context_enabled && !memory_ids.is_empty() {
+        match store.get_related_context(&memory_ids).await {
+            Ok(map) => map,
+            Err(e) => {
+                tracing::warn!(error = %e, "get_related_context failed — skipping related hints");
+                std::collections::HashMap::new()
+            }
+        }
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    let truncation_chars = config.recall.truncation_chars;
+
+    // Build the memories array with truncation and related context.
+    let memories: Vec<serde_json::Value> = result.memories.iter().map(|mem| {
+        let (truncated_content, was_truncated) = truncate_content(&mem.content, truncation_chars);
+
+        let mut obj = json!({
+            "id": mem.memory_id,
+            "content": truncated_content,
+            "relevance": mem.relevance,
+        });
+
+        if was_truncated {
+            if let serde_json::Value::Object(ref mut map) = obj {
+                map.insert("truncated".to_string(), json!(true));
+            }
+        }
+
+        // Add related context if present and count > 0.
+        if let Some(related) = related_map.get(&mem.memory_id) {
+            if related.related_count > 0 {
+                let hint = build_related_hint(&related.shared_tags);
+                if let serde_json::Value::Object(ref mut map) = obj {
+                    map.insert("related_count".to_string(), json!(related.related_count));
+                    if !hint.is_empty() {
+                        map.insert("hint".to_string(), json!(hint));
+                    }
+                }
+            }
+        }
+
+        obj
+    }).collect();
+
+    // Assemble final output.
+    let mut output = json!({
         "session_id": result.session_id,
         "count": result.count,
-        "memories": result.memories,
+        "memories": memories,
     });
+
+    if first {
+        let preamble = config.recall.preamble_override
+            .as_deref()
+            .unwrap_or(DEFAULT_PREAMBLE);
+
+        if let serde_json::Value::Object(ref mut map) = output {
+            map.insert("current_datetime".to_string(), json!(Utc::now().to_rfc3339()));
+            map.insert("preamble".to_string(), json!(preamble));
+        }
+    }
+
     println!("{}", serde_json::to_string_pretty(&output)?);
 
     Ok(())
