@@ -459,6 +459,9 @@ fn row_to_memory(row: &PgRow) -> Result<Memory, MemcpError> {
         parent_id: row.try_get("parent_id").unwrap_or(None),
         chunk_index: row.try_get("chunk_index").unwrap_or(None),
         total_chunks: row.try_get("total_chunks").unwrap_or(None),
+        event_time: row.try_get("event_time").unwrap_or(None),
+        event_time_precision: row.try_get("event_time_precision").unwrap_or(None),
+        workspace: row.try_get("workspace").unwrap_or(None),
     })
 }
 
@@ -482,7 +485,8 @@ impl MemoryStore for PostgresMemoryStore {
                  m.last_accessed_at, m.access_count, m.embedding_status, \
                  m.extracted_entities, m.extracted_facts, m.extraction_status, \
                  m.is_consolidated_original, m.consolidated_into, m.actor, m.actor_type, m.audience, \
-                 m.parent_id, m.chunk_index, m.total_chunks \
+                 m.parent_id, m.chunk_index, m.total_chunks, \
+                 m.event_time, m.event_time_precision, m.workspace \
                  FROM idempotency_keys ik \
                  JOIN memories m ON m.id = ik.memory_id \
                  WHERE ik.key = $1 AND ik.expires_at > NOW() AND m.deleted_at IS NULL",
@@ -507,7 +511,8 @@ impl MemoryStore for PostgresMemoryStore {
                  last_accessed_at, access_count, embedding_status, \
                  extracted_entities, extracted_facts, extraction_status, \
                  is_consolidated_original, consolidated_into, actor, actor_type, audience, \
-                 parent_id, chunk_index, total_chunks \
+                 parent_id, chunk_index, total_chunks, \
+                 event_time, event_time_precision, workspace \
                  FROM memories \
                  WHERE content_hash = $1 AND deleted_at IS NULL \
                    AND created_at > NOW() - ($2 || ' seconds')::interval \
@@ -538,8 +543,8 @@ impl MemoryStore for PostgresMemoryStore {
             .map(|t| serde_json::json!(t));
 
         sqlx::query(
-            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14)",
+            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks, event_time, event_time_precision, workspace) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
         )
         .bind(&id)
         .bind(&input.content)
@@ -555,6 +560,9 @@ impl MemoryStore for PostgresMemoryStore {
         .bind(&input.parent_id)
         .bind(&input.chunk_index)
         .bind(&input.total_chunks)
+        .bind(&input.event_time)
+        .bind(&input.event_time_precision)
+        .bind(&input.workspace)
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to insert memory: {}", e)))?;
@@ -604,6 +612,9 @@ impl MemoryStore for PostgresMemoryStore {
             parent_id: input.parent_id,
             chunk_index: input.chunk_index,
             total_chunks: input.total_chunks,
+            event_time: input.event_time,
+            event_time_precision: input.event_time_precision,
+            workspace: input.workspace,
         })
     }
 
@@ -611,7 +622,8 @@ impl MemoryStore for PostgresMemoryStore {
         let row = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience, parent_id, chunk_index, total_chunks \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
+             event_time, event_time_precision, workspace \
              FROM memories WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(id)
@@ -698,7 +710,8 @@ impl MemoryStore for PostgresMemoryStore {
         let updated_row = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience, parent_id, chunk_index, total_chunks \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
+             event_time, event_time_precision, workspace \
              FROM memories WHERE id = $1",
         )
         .bind(id)
@@ -787,7 +800,8 @@ impl MemoryStore for PostgresMemoryStore {
         let sql = format!(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience, parent_id, chunk_index, total_chunks \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
+             event_time, event_time_precision, workspace \
              FROM memories {} ORDER BY created_at DESC, id ASC LIMIT ${}",
             where_clause, param_idx
         );
@@ -1084,7 +1098,8 @@ impl PostgresMemoryStore {
         let rows = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience, parent_id, chunk_index, total_chunks \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
+             event_time, event_time_precision, workspace \
              FROM memories WHERE embedding_status IN ('pending', 'failed') AND deleted_at IS NULL \
              ORDER BY created_at ASC LIMIT $1",
         )
@@ -1527,6 +1542,7 @@ impl PostgresMemoryStore {
                     m.is_consolidated_original, m.consolidated_into, \
                     m.actor, m.actor_type, m.audience, \
                     m.parent_id, m.chunk_index, m.total_chunks, \
+                    m.event_time, m.event_time_precision, m.workspace, \
                     (1 - (me.embedding <=> $1)) AS similarity \
              FROM memories m \
              JOIN memory_embeddings me ON me.memory_id = m.id \
@@ -1649,7 +1665,8 @@ impl PostgresMemoryStore {
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, \
              last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience, parent_id, chunk_index, total_chunks \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
+             event_time, event_time_precision, workspace \
              FROM memories WHERE id = ANY($1) AND deleted_at IS NULL",
         )
         .bind(ids)
@@ -3062,6 +3079,7 @@ impl PostgresMemoryStore {
              m.extracted_entities, m.extracted_facts, m.extraction_status, \
              m.is_consolidated_original, m.consolidated_into, \
              m.actor, m.actor_type, m.audience, m.parent_id, m.chunk_index, m.total_chunks, \
+             m.event_time, m.event_time_precision, m.workspace, \
              COALESCE(s.stability, 1.0) as sal_stability, \
              COALESCE(s.difficulty, 5.0) as sal_difficulty, \
              COALESCE(s.reinforcement_count, 0) as sal_reinforcement_count, \
@@ -3080,6 +3098,7 @@ impl PostgresMemoryStore {
              m.extracted_entities, m.extracted_facts, m.extraction_status, \
              m.is_consolidated_original, m.consolidated_into, \
              m.actor, m.actor_type, m.audience, m.parent_id, m.chunk_index, m.total_chunks, \
+             m.event_time, m.event_time_precision, m.workspace, \
              COALESCE(s.stability, 1.0) as sal_stability, \
              COALESCE(s.difficulty, 5.0) as sal_difficulty, \
              COALESCE(s.reinforcement_count, 0) as sal_reinforcement_count, \
@@ -3499,7 +3518,8 @@ impl PostgresMemoryStore {
              last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, \
              is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience, parent_id, chunk_index, total_chunks \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
+             event_time, event_time_precision, workspace \
              FROM memories WHERE parent_id = $1 AND deleted_at IS NULL \
              ORDER BY chunk_index ASC",
         )

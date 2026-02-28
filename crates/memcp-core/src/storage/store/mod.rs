@@ -59,6 +59,14 @@ pub struct Memory {
     pub chunk_index: Option<i32>,
     /// Total number of chunks the parent was split into
     pub total_chunks: Option<i32>,
+    /// When the memory content refers to a specific point in time (e.g., "in 2019", "when I was 6").
+    /// Separate from created_at — this is the event time embedded in the content, not the store time.
+    pub event_time: Option<DateTime<Utc>>,
+    /// Precision of event_time: "decade", "year", "month", "day"
+    pub event_time_precision: Option<String>,
+    /// Workspace scope. None means global (visible in all workspaces).
+    /// Workspace-scoped searches return both workspace-scoped AND global (None) memories.
+    pub workspace: Option<String>,
 }
 
 /// Input type for creating a new memory.
@@ -102,6 +110,16 @@ pub struct CreateMemory {
     /// Total chunks in the parent family
     #[serde(default)]
     pub total_chunks: Option<i32>,
+    /// Optional event time extracted from content during store (e.g., "in 2019" → 2019-01-01T00:00:00Z).
+    /// Populated by temporal extraction pipeline; None if no temporal reference found.
+    #[serde(default)]
+    pub event_time: Option<DateTime<Utc>>,
+    /// Precision of event_time: "decade", "year", "month", "day"
+    #[serde(default)]
+    pub event_time_precision: Option<String>,
+    /// Workspace scope for this memory. None means global (no workspace isolation).
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 fn default_type_hint() -> String {

@@ -159,6 +159,9 @@ async fn execute_curation(
                         parent_id: None,
                         chunk_index: None,
                         total_chunks: None,
+                        event_time: None,
+                        event_time_precision: None,
+                        workspace: None,
                     };
 
                     match store.store(new_memory).await {

@@ -343,6 +343,9 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
         parent_id: None,
         chunk_index: None,
         total_chunks: None,
+        event_time: None,
+        event_time_precision: None,
+        workspace: None,
     }).await.unwrap();
 
     // b. Store again with same idempotency_key — should return same ID
@@ -359,6 +362,9 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
         parent_id: None,
         chunk_index: None,
         total_chunks: None,
+        event_time: None,
+        event_time_precision: None,
+        workspace: None,
     }).await.unwrap();
 
     assert_eq!(
@@ -380,6 +386,9 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
         parent_id: None,
         chunk_index: None,
         total_chunks: None,
+        event_time: None,
+        event_time_precision: None,
+        workspace: None,
     }).await.unwrap();
 
     let fourth = store.store(CreateMemory {
@@ -395,6 +404,9 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
         parent_id: None,
         chunk_index: None,
         total_chunks: None,
+        event_time: None,
+        event_time_precision: None,
+        workspace: None,
     }).await.unwrap();
 
     assert_eq!(
@@ -424,6 +436,9 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
         parent_id: None,
         chunk_index: None,
         total_chunks: None,
+        event_time: None,
+        event_time_precision: None,
+        workspace: None,
     }).await.unwrap();
 
     assert_ne!(
@@ -456,6 +471,9 @@ async fn test_store_list_get_delete_journey(pool: PgPool) {
             parent_id: None,
             chunk_index: None,
             total_chunks: None,
+            event_time: None,
+            event_time_precision: None,
+            workspace: None,
         }).await.unwrap();
     }
 

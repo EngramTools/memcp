@@ -524,6 +524,9 @@ Callable from code_execution_20260120 sandboxes.")]
             parent_id: None,
             chunk_index: None,
             total_chunks: None,
+            event_time: None,
+            event_time_precision: None,
+            workspace: None,
         };
 
         // Determine if sync store is requested

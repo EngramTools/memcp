@@ -278,6 +278,9 @@ async fn run_worker(
             parent_id: None,
             chunk_index: None,
             total_chunks: None,
+            event_time: None,
+            event_time_precision: None,
+            workspace: None,
         };
 
         match store.store(create).await {
@@ -376,6 +379,9 @@ async fn run_worker(
                             parent_id: Some(memory.id.clone()),
                             chunk_index: Some(chunk_output.index as i32),
                             total_chunks: Some(chunk_output.total as i32),
+                            event_time: None,
+                            event_time_precision: None,
+                            workspace: None,
                         };
 
                         match store.store(chunk_create).await {
