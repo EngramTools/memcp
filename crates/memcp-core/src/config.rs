@@ -758,6 +758,8 @@ impl Default for ChunkingConfig {
 ///   MEMCP_RECALL__MAX_MEMORIES=5
 ///   MEMCP_RECALL__MIN_RELEVANCE=0.6
 ///   MEMCP_RECALL__BUMP_MULTIPLIER=0.20
+///   MEMCP_RECALL__TRUNCATION_CHARS=200
+///   MEMCP_RECALL__RELATED_CONTEXT_ENABLED=false
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecallConfig {
     /// Maximum number of memories to return per recall (default: 3)
@@ -779,6 +781,21 @@ pub struct RecallConfig {
     /// Prevents unbounded growth for frequently-recalled memories.
     #[serde(default = "default_recall_stability_ceiling")]
     pub stability_ceiling: f64,
+    /// Maximum characters to return per memory content in recall output (default: 200).
+    /// Content longer than this is truncated with "..." indicator.
+    /// Agent can use `memcp get <id>` for full content. Saves tokens on large memories.
+    #[serde(default = "default_recall_truncation_chars")]
+    pub truncation_chars: usize,
+    /// Custom preamble text for `memcp recall --first` output.
+    /// When None, a hardcoded sensible default is used.
+    /// Allows operators to customize the session-start context injected into agent prompts.
+    #[serde(default)]
+    pub preamble_override: Option<String>,
+    /// Whether to compute related_count and hint per recalled memory (default: true).
+    /// When enabled, each recalled memory includes a count of memories sharing at least
+    /// one non-trivial tag and a ready-made search command for the agent to explore.
+    #[serde(default = "default_recall_related_context_enabled")]
+    pub related_context_enabled: bool,
 }
 
 fn default_recall_max_memories() -> usize { 3 }
@@ -786,6 +803,8 @@ fn default_recall_min_relevance() -> f64 { 0.7 }
 fn default_recall_session_idle_secs() -> u64 { 86400 }
 fn default_recall_bump_multiplier() -> f64 { 0.15 }
 fn default_recall_stability_ceiling() -> f64 { 100.0 }
+fn default_recall_truncation_chars() -> usize { 200 }
+fn default_recall_related_context_enabled() -> bool { true }
 
 impl Default for RecallConfig {
     fn default() -> Self {
@@ -795,6 +814,9 @@ impl Default for RecallConfig {
             session_idle_secs: default_recall_session_idle_secs(),
             bump_multiplier: default_recall_bump_multiplier(),
             stability_ceiling: default_recall_stability_ceiling(),
+            truncation_chars: default_recall_truncation_chars(),
+            preamble_override: None,
+            related_context_enabled: default_recall_related_context_enabled(),
         }
     }
 }
@@ -834,6 +856,105 @@ impl Default for IdempotencyConfig {
             dedup_window_secs: default_dedup_window_secs(),
             key_ttl_secs: default_key_ttl_secs(),
             max_key_length: default_max_key_length(),
+        }
+    }
+}
+
+/// Configuration for user-specific context that improves memory resolution.
+///
+/// Provides personal context for temporal extraction and other personalization features.
+/// Nested env var overrides use double underscores:
+///   MEMCP_USER__BIRTH_YEAR=1990
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserConfig {
+    /// User's birth year, used to resolve relative-age references in memories.
+    /// Example: "when I was 6" + birth_year=1990 resolves to event_time=1996.
+    /// When None, relative-age references are stored without temporal resolution.
+    #[serde(default)]
+    pub birth_year: Option<u32>,
+}
+
+impl Default for UserConfig {
+    fn default() -> Self {
+        UserConfig {
+            birth_year: None,
+        }
+    }
+}
+
+/// Configuration for workspace scoping.
+///
+/// Workspaces isolate memories by project or context. NULL workspace = global (always visible).
+/// Activation precedence: CLI flag (--workspace) > env var (MEMCP_WORKSPACE) > this config default.
+/// Nested env var overrides use double underscores:
+///   MEMCP_WORKSPACE__DEFAULT_WORKSPACE=myproject
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceConfig {
+    /// Default workspace applied when no CLI flag or env var is set.
+    /// NULL (None) means global — all memories are stored without workspace scoping.
+    #[serde(default)]
+    pub default_workspace: Option<String>,
+}
+
+impl Default for WorkspaceConfig {
+    fn default() -> Self {
+        WorkspaceConfig {
+            default_workspace: None,
+        }
+    }
+}
+
+/// Configuration for temporal event time extraction.
+///
+/// Controls whether a background LLM worker extracts event_time from memory content
+/// for subtler references ("back in college", "during COVID") that regex misses.
+/// Regex-based extraction (fast, deterministic) always runs inline during store.
+/// Nested env var overrides use double underscores:
+///   MEMCP_TEMPORAL__LLM_ENABLED=true
+///   MEMCP_TEMPORAL__PROVIDER=ollama
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemporalConfig {
+    /// Whether the LLM background worker for subtle temporal extraction is enabled (default: false).
+    /// When false, only regex-based extraction runs (catches "in 2019", "when I was 6", etc.).
+    /// When true, a daemon worker does a second pass for subtler references.
+    #[serde(default)]
+    pub llm_enabled: bool,
+
+    /// Provider for LLM temporal extraction: "ollama" (default) or "openai"
+    #[serde(default = "default_temporal_provider")]
+    pub provider: String,
+
+    /// Ollama model for temporal extraction
+    #[serde(default = "default_temporal_ollama_model")]
+    pub ollama_model: String,
+
+    /// OpenAI model for temporal extraction
+    #[serde(default = "default_temporal_openai_model")]
+    pub openai_model: String,
+
+    /// OpenAI-compatible API key — only required when provider = "openai"
+    #[serde(default)]
+    pub openai_api_key: Option<String>,
+
+    /// OpenAI-compatible base URL (supports custom endpoints)
+    #[serde(default = "default_temporal_openai_base_url")]
+    pub openai_base_url: Option<String>,
+}
+
+fn default_temporal_provider() -> String { "ollama".to_string() }
+fn default_temporal_ollama_model() -> String { "llama3.2:3b".to_string() }
+fn default_temporal_openai_model() -> String { "gpt-4o-mini".to_string() }
+fn default_temporal_openai_base_url() -> Option<String> { None }
+
+impl Default for TemporalConfig {
+    fn default() -> Self {
+        TemporalConfig {
+            llm_enabled: false,
+            provider: default_temporal_provider(),
+            ollama_model: default_temporal_ollama_model(),
+            openai_model: default_temporal_openai_model(),
+            openai_api_key: None,
+            openai_base_url: default_temporal_openai_base_url(),
         }
     }
 }
@@ -1434,6 +1555,21 @@ pub struct Config {
     /// When enabled, daemon periodically reviews memories — merging, strengthening, flagging stale.
     #[serde(default)]
     pub curation: CurationConfig,
+
+    /// User-specific context for memory resolution (e.g., birth year for age-relative temporal refs).
+    /// Existing configs without [user] section still work (serde default applied).
+    #[serde(default)]
+    pub user: UserConfig,
+
+    /// Workspace scoping configuration.
+    /// Existing configs without [workspace] section still work (serde default applied).
+    #[serde(default)]
+    pub workspace: WorkspaceConfig,
+
+    /// Temporal event time extraction configuration.
+    /// Existing configs without [temporal] section still work (serde default applied).
+    #[serde(default)]
+    pub temporal: TemporalConfig,
 }
 
 fn default_log_level() -> String {
@@ -1470,6 +1606,9 @@ impl Default for Config {
             store: StoreConfig::default(),
             resource_limits: ResourceLimitsConfig::default(),
             curation: CurationConfig::default(),
+            user: UserConfig::default(),
+            workspace: WorkspaceConfig::default(),
+            temporal: TemporalConfig::default(),
         }
     }
 }
