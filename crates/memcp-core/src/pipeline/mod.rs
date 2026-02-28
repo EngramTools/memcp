@@ -14,3 +14,4 @@ pub mod content_filter;
 pub mod chunking;
 pub mod curation;
 pub mod promotion;
+pub mod temporal;
