@@ -11,6 +11,7 @@
 /// 3. Environment variables: DATABASE_URL (standard PostgreSQL convention)
 /// 4. Environment variables: prefixed MEMCP_ (e.g., MEMCP_LOG_LEVEL=debug)
 
+use std::collections::HashMap;
 use figment::{
     Figment,
     providers::{Env, Format, Toml, Serialized},
@@ -327,6 +328,94 @@ impl Default for QueryIntelligenceConfig {
     }
 }
 
+/// Routing rules that determine when an embedding tier is selected at store time.
+///
+/// All specified conditions must be met (AND logic). Omitted conditions are not checked.
+/// Example: `{ min_stability = 0.8, type_hints = ["decision"] }` matches memories
+/// with stability >= 0.8 AND type_hint = "decision".
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RoutingConfig {
+    /// Minimum stability score for this tier (None = no minimum)
+    #[serde(default)]
+    pub min_stability: Option<f64>,
+    /// Memory type_hints that should use this tier
+    #[serde(default)]
+    pub type_hints: Vec<String>,
+    /// Minimum content length (chars) for this tier
+    #[serde(default)]
+    pub min_content_length: Option<usize>,
+}
+
+/// Configuration for the promotion sweep that upgrades memories from a lower tier
+/// to a higher-quality tier based on importance signals.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromotionConfig {
+    /// Minimum reinforcement count to promote
+    #[serde(default = "default_min_reinforcements")]
+    pub min_reinforcements: u32,
+    /// Minimum stability score to promote
+    #[serde(default = "default_min_stability_promotion")]
+    pub min_stability: f64,
+    /// Sweep interval in minutes
+    #[serde(default = "default_sweep_interval_minutes")]
+    pub sweep_interval_minutes: u64,
+    /// Max promotions per sweep cycle
+    #[serde(default = "default_batch_cap")]
+    pub batch_cap: usize,
+}
+
+fn default_min_reinforcements() -> u32 { 3 }
+fn default_min_stability_promotion() -> f64 { 0.8 }
+fn default_sweep_interval_minutes() -> u64 { 60 }
+fn default_batch_cap() -> usize { 15 }
+
+impl Default for PromotionConfig {
+    fn default() -> Self {
+        PromotionConfig {
+            min_reinforcements: default_min_reinforcements(),
+            min_stability: default_min_stability_promotion(),
+            sweep_interval_minutes: default_sweep_interval_minutes(),
+            batch_cap: default_batch_cap(),
+        }
+    }
+}
+
+/// Configuration for a single embedding tier in a multi-model setup.
+///
+/// Each tier represents a different embedding model (e.g., fast local model vs quality API model).
+/// Example TOML:
+/// ```toml
+/// [embedding.tiers.fast]
+/// provider = "local"
+/// model = "AllMiniLML6V2"
+///
+/// [embedding.tiers.quality]
+/// provider = "openai"
+/// model = "text-embedding-3-small"
+/// routing = { type_hints = ["decision"], min_stability = 0.8 }
+/// promotion = { min_reinforcements = 3, min_stability = 0.8, sweep_interval_minutes = 60, batch_cap = 15 }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingTierConfig {
+    /// Provider type: "local" or "openai"
+    pub provider: String,
+    /// Model name (fastembed identifier or OpenAI model name)
+    #[serde(default)]
+    pub model: Option<String>,
+    /// OpenAI API key override (falls back to top-level if not set)
+    #[serde(default)]
+    pub openai_api_key: Option<String>,
+    /// Vector dimension override (auto-detected from model if omitted)
+    #[serde(default)]
+    pub dimension: Option<usize>,
+    /// Routing rules (when this tier is used at store time)
+    #[serde(default)]
+    pub routing: Option<RoutingConfig>,
+    /// Promotion rules (for sweep worker to promote from lower tier)
+    #[serde(default)]
+    pub promotion: Option<PromotionConfig>,
+}
+
 /// Configuration for the embedding provider subsystem.
 ///
 /// Provider selection is explicit — having an API key does NOT auto-switch from local.
@@ -370,6 +459,12 @@ pub struct EmbeddingConfig {
     /// skip re-embed to save compute (symbolic search still works for tags).
     #[serde(default)]
     pub reembed_on_tag_change: bool,
+
+    /// Named embedding tiers for multi-model support.
+    /// Empty = legacy single-model mode (uses provider/local_model/openai_model above).
+    /// Example: `[embedding.tiers.fast]`, `[embedding.tiers.quality]`
+    #[serde(default)]
+    pub tiers: HashMap<String, EmbeddingTierConfig>,
 }
 
 fn default_embedding_provider() -> String {
@@ -400,6 +495,28 @@ impl Default for EmbeddingConfig {
             openai_model: default_openai_model(),
             dimension: None,
             reembed_on_tag_change: false,
+            tiers: HashMap::new(),
+        }
+    }
+}
+
+impl EmbeddingConfig {
+    /// Returns true if multiple embedding tiers are configured (multi-model mode).
+    pub fn is_multi_model(&self) -> bool {
+        self.tiers.len() > 1
+    }
+
+    /// Returns the default tier name.
+    /// "fast" if tiers is non-empty, otherwise the top-level provider name.
+    pub fn default_tier_name(&self) -> &str {
+        if !self.tiers.is_empty() {
+            if self.tiers.contains_key("fast") {
+                "fast"
+            } else {
+                self.tiers.keys().next().map(|s| s.as_str()).unwrap_or("fast")
+            }
+        } else {
+            &self.provider
         }
     }
 }
