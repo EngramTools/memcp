@@ -8,31 +8,33 @@ progress:
   total_phases: 35
   completed_phases: 25
   total_plans: 75
-  completed_plans: 63
+  completed_plans: 65
 ---
 
 # Project State
 
 ## Current Phase
-Phase 08.7-multi-model-embeddings — Plan 01 complete (1/4 plans committed)
+Phase 08.7-multi-model-embeddings — Plan 03 complete (3/4 plans committed)
 
 ## Active Context
-- Last completed: Phase 08.7-01 multi-model embedding foundation (2026-02-28)
-- Multi-model embeddings: tiered config (fast local + quality API), EmbeddingRouter, promotion sweep
-- Config: EmbeddingTierConfig, RoutingConfig, PromotionConfig structs with HashMap<String, EmbeddingTierConfig> on EmbeddingConfig
-- Migration 017: tier column on memory_embeddings with DEFAULT 'fast', per-tier indexes
-- EmbeddingRouter: routes at store time based on type_hint, stability, content_length
-- EmbeddingPipeline: now takes Arc<EmbeddingRouter> (new_single for backward compat)
-- Promotion sweep worker: daemon periodic task, batch-capped, fail-open (pre-work for Plan 03)
-- Previous: curation (08.6), sync store + category + composite score (08.5)
-- 68 unit tests passing + 8 router unit tests
+- Last completed: Phase 08.7-03 promotion sweep worker (2026-02-28)
+- Promotion sweep: run_promotion_sweep, PromotionResult, daemon section 8.7 spawn block
+- Sweep gated on router.is_multi_model() && quality tier has PromotionConfig
+- Fail-open per-item: embedding failure logs warning, never panics, sweep continues
+- Deactivate old tier embedding before inserting new (not kept alongside)
+- All 08.7-03 tasks pre-committed in 08.7-01 (0f6d57b); plan 03 is verification + documentation
+- Previous: 08.7-01 embedding foundation, 08.6 curation, 08.5 sync store + category + composite
+- 68 unit tests passing
 - Last session: 2026-02-28
-- Stopped at: Completed 08.7-01-PLAN.md
+- Stopped at: Completed 08.7-03-PLAN.md
 - Next: Check roadmap for next phase
 
 ## Accumulated Context
 
 ### Phase 08.7 Decisions
+- Phase 08.7: Plan 03 — promotion sweep pre-implemented in 08.7-01 (0f6d57b) as forward-work; plan 03 is verification + documentation only
+- Phase 08.7: Sweep skips with skipped_reason="No promotion candidates found" when candidates list is empty (not an error)
+- Phase 08.7: Old fast-tier embedding deactivated (is_current=false) before new quality-tier embedding inserted — prevents duplicate current embeddings
 - Phase 08.7: Multi-model embeddings with tiered config — single-tier (empty tiers HashMap) = backward compatible legacy mode
 - Phase 08.7: EmbeddingTierConfig with provider, model, openai_api_key, dimension, routing (RoutingConfig), promotion (PromotionConfig)
 - Phase 08.7: RoutingConfig: AND logic — all specified conditions (min_stability, type_hints, min_content_length) must be met

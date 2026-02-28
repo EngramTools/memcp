@@ -348,7 +348,7 @@ Plans:
 - **Status**: DONE
 - **Depends on**: Phase 08.3
 - **Origin**: Deferred from Phase 04 (Embeddings)
-- **Plans:** 1/4 plans executed
+- **Plans:** 2/4 plans executed
 
 Plans:
 - [x] 08.7-01-PLAN.md — Config structs (EmbeddingTierConfig, RoutingConfig, PromotionConfig) + migration 017 (tier column) + EmbeddingRouter + store methods [Wave 1]
