@@ -239,6 +239,10 @@ enum Commands {
         /// Workspace scope — returns memories from this workspace plus global (null-workspace) memories.
         #[arg(long)]
         workspace: Option<String>,
+        /// Session start — injects current datetime, preamble, and recalled memories.
+        /// Without this flag, recall returns only memories (no preamble, saves tokens).
+        #[arg(long)]
+        first: bool,
     },
     /// AI brain curation — merge, flag stale, and strengthen memories
     Curation {
@@ -600,10 +604,10 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Recall { query, session_id, reset, workspace } => {
+        Commands::Recall { query, session_id, reset, workspace, first } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
             let workspace = cli::resolve_workspace(workspace, &config);
-            cli::cmd_recall(&store, &config, &query, session_id, reset, workspace).await?;
+            cli::cmd_recall(&store, &config, &query, session_id, reset, workspace, first).await?;
         }
 
         Commands::Curation { action } => {
@@ -749,6 +753,8 @@ async fn main() -> Result<()> {
                     content_filter.clone(),
                     None, // Summarization only in daemon mode
                     None, // No router in serve mode (single-tier)
+                    None, // workspace: None (global auto-store in serve mode)
+                    None, // birth_year: None (no birth year hint in serve mode)
                 );
                 tracing::info!("Auto-store sidecar spawned");
             }
