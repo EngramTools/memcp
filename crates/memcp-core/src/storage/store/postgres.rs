@@ -790,6 +790,11 @@ impl MemoryStore for PostgresMemoryStore {
             conditions.push(format!("audience = ${}", param_idx));
             param_idx += 1;
         }
+        if filter.workspace.is_some() {
+            // Workspace-scoped: return memories from this workspace OR global (NULL workspace).
+            conditions.push(format!("(workspace = ${} OR workspace IS NULL)", param_idx));
+            param_idx += 1;
+        }
 
         let where_clause = if conditions.is_empty() {
             String::new()
@@ -835,6 +840,9 @@ impl MemoryStore for PostgresMemoryStore {
         }
         if let Some(ref audience) = filter.audience {
             q = q.bind(audience);
+        }
+        if let Some(ref workspace) = filter.workspace {
+            q = q.bind(workspace);
         }
         // Fetch one extra to determine if there are more pages
         q = q.bind(limit + 1);
@@ -1707,6 +1715,7 @@ impl PostgresMemoryStore {
         symbolic_k: Option<f64>,
         source: Option<&[String]>,
         audience: Option<&str>,
+        workspace: Option<&str>,
     ) -> Result<Vec<crate::search::HybridRawHit>, MemcpError> {
         // 40 candidates per leg — research recommendation balancing recall vs cost
         let candidate_limit = 40i64;
@@ -1797,6 +1806,15 @@ impl PostgresMemoryStore {
         // Post-filter fused results by audience if specified
         if let Some(aud) = audience {
             hits.retain(|hit| hit.memory.audience == aud);
+        }
+
+        // Post-filter fused results by workspace: keep workspace-scoped AND global (NULL) memories.
+        // None workspace means no filter — return all.
+        if let Some(ws) = workspace {
+            hits.retain(|hit| {
+                hit.memory.workspace.as_deref() == Some(ws)
+                    || hit.memory.workspace.is_none()
+            });
         }
 
         Ok(hits)
@@ -1905,6 +1923,7 @@ impl PostgresMemoryStore {
         symbolic_k: Option<f64>,
         source: Option<&[String]>,
         audience: Option<&str>,
+        workspace: Option<&str>,
     ) -> Result<Vec<crate::search::HybridRawHit>, MemcpError> {
         let candidate_limit = 40i64;
 
@@ -1987,6 +2006,14 @@ impl PostgresMemoryStore {
             hits.retain(|hit| hit.memory.audience == aud);
         }
 
+        // Post-filter by workspace: keep workspace-scoped AND global (NULL workspace) memories.
+        if let Some(ws) = workspace {
+            hits.retain(|hit| {
+                hit.memory.workspace.as_deref() == Some(ws)
+                    || hit.memory.workspace.is_none()
+            });
+        }
+
         Ok(hits)
     }
 
@@ -2014,6 +2041,7 @@ impl PostgresMemoryStore {
         symbolic_k: Option<f64>,
         source: Option<&[String]>,
         audience: Option<&str>,
+        workspace: Option<&str>,
     ) -> Result<SearchResult, MemcpError> {
         // Decode cursor if provided — get (last_score, last_id) position
         let cursor_position: Option<(f64, String)> = if let Some(ref c) = cursor {
@@ -2043,6 +2071,7 @@ impl PostgresMemoryStore {
             symbolic_k,
             source,
             audience,
+            workspace,
         ).await?;
 
         // Sort by rrf_score DESC for stable ordering, then by id ASC for tie-breaking
@@ -2683,6 +2712,7 @@ impl PostgresMemoryStore {
         min_relevance: f64,
         max_memories: usize,
         extraction_enabled: bool,
+        workspace: Option<&str>,
     ) -> Result<Vec<(String, String, f32)>, MemcpError> {
         // Serialize embedding to pgvector literal format: '[0.1,0.2,...]'
         let emb_str = format!(
@@ -2695,11 +2725,15 @@ impl PostgresMemoryStore {
         );
         let limit = max_memories as i64;
 
+        // Build optional workspace filter clause. When workspace is Some, add
+        // AND (m.workspace = $5 OR m.workspace IS NULL) — returns both scoped and global memories.
+        let workspace_clause = if workspace.is_some() { " AND (m.workspace = $5 OR m.workspace IS NULL)" } else { "" };
+
         if extraction_enabled {
             // Extraction-on tier: query against extracted_facts.
             // DISTINCT ON (m.id) picks the highest-relevance fact per memory.
             // Outer query sorts and caps at max_memories.
-            let sql = "
+            let sql = format!("
                 SELECT memory_id, content, relevance FROM (
                     SELECT DISTINCT ON (m.id)
                         m.id AS memory_id,
@@ -2716,17 +2750,21 @@ impl PostgresMemoryStore {
                       AND sr.memory_id IS NULL
                       AND m.extracted_facts IS NOT NULL
                       AND jsonb_array_length(m.extracted_facts) > 0
-                      AND (1.0 - (me.embedding <=> $1::vector)) >= $3
+                      AND (1.0 - (me.embedding <=> $1::vector)) >= $3{workspace_clause}
                     ORDER BY m.id, (1.0 - (me.embedding <=> $1::vector)) DESC
                 ) sub
                 ORDER BY relevance DESC, stability DESC
                 LIMIT $4
-            ";
-            let rows = sqlx::query(sql)
+            ");
+            let mut q = sqlx::query(&sql)
                 .bind(&emb_str)
                 .bind(session_id)
                 .bind(min_relevance)
-                .bind(limit)
+                .bind(limit);
+            if let Some(ws) = workspace {
+                q = q.bind(ws);
+            }
+            let rows = q
                 .fetch_all(&self.pool)
                 .await
                 .map_err(|e| MemcpError::Storage(format!("recall_candidates (extraction) failed: {}", e)))?;
@@ -2746,7 +2784,7 @@ impl PostgresMemoryStore {
             Ok(results)
         } else {
             // Extraction-off tier: filter to fact/summary type_hint memories.
-            let sql = "
+            let sql = format!("
                 SELECT
                     m.id AS memory_id,
                     m.content,
@@ -2760,15 +2798,19 @@ impl PostgresMemoryStore {
                   AND m.embedding_status = 'complete'
                   AND sr.memory_id IS NULL
                   AND (m.type_hint IN ('fact', 'summary') OR m.source = 'assistant')
-                  AND (1.0 - (me.embedding <=> $1::vector)) >= $3
+                  AND (1.0 - (me.embedding <=> $1::vector)) >= $3{workspace_clause}
                 ORDER BY relevance DESC, stability DESC
                 LIMIT $4
-            ";
-            let rows = sqlx::query(sql)
+            ");
+            let mut q = sqlx::query(&sql)
                 .bind(&emb_str)
                 .bind(session_id)
                 .bind(min_relevance)
-                .bind(limit)
+                .bind(limit);
+            if let Some(ws) = workspace {
+                q = q.bind(ws);
+            }
+            let rows = q
                 .fetch_all(&self.pool)
                 .await
                 .map_err(|e| MemcpError::Storage(format!("recall_candidates (no-extraction) failed: {}", e)))?;
@@ -2806,6 +2848,7 @@ impl PostgresMemoryStore {
         min_relevance: f64,
         max_memories: usize,
         extraction_enabled: bool,
+        workspace: Option<&str>,
     ) -> Result<Vec<(String, String, f32)>, MemcpError> {
         if tier_embeddings.is_empty() {
             // No embeddings available — return empty (caller should fall back or warn)
@@ -2815,7 +2858,7 @@ impl PostgresMemoryStore {
         if tier_embeddings.len() == 1 {
             // Single tier — delegate directly to recall_candidates
             let embedding = tier_embeddings.values().next().unwrap();
-            return self.recall_candidates(embedding, session_id, min_relevance, max_memories, extraction_enabled).await;
+            return self.recall_candidates(embedding, session_id, min_relevance, max_memories, extraction_enabled, workspace).await;
         }
 
         // Multi-tier: query each tier separately and merge by best relevance
@@ -2823,7 +2866,7 @@ impl PostgresMemoryStore {
 
         for embedding in tier_embeddings.values() {
             let tier_results = self.recall_candidates(
-                embedding, session_id, min_relevance, max_memories, extraction_enabled
+                embedding, session_id, min_relevance, max_memories, extraction_enabled, workspace
             ).await?;
 
             for (memory_id, content, relevance) in tier_results {

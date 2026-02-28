@@ -26,6 +26,7 @@ use sqlx::Row;
 use crate::config::Config;
 use crate::gc;
 use crate::ipc::{embed_via_daemon, embed_multi_via_daemon, rerank_via_daemon};
+use crate::pipeline::temporal::extract_event_time;
 use crate::search::salience::{SalienceInput, dedup_parent_chunks};
 use crate::search::{SalienceScorer, ScoredHit};
 use crate::store::postgres::PostgresMemoryStore;
@@ -115,9 +116,12 @@ fn format_memory_json(memory: &Memory, verbose: bool) -> serde_json::Value {
             "actor": memory.actor,
             "actor_type": memory.actor_type,
             "audience": memory.audience,
+            "event_time": memory.event_time.map(|t| t.to_rfc3339()),
+            "event_time_precision": memory.event_time_precision,
+            "workspace": memory.workspace,
         })
     } else {
-        json!({
+        let mut obj = json!({
             "id": memory.id,
             "content": memory.content,
             "type_hint": memory.type_hint,
@@ -127,7 +131,24 @@ fn format_memory_json(memory: &Memory, verbose: bool) -> serde_json::Value {
             "actor": memory.actor,
             "actor_type": memory.actor_type,
             "audience": memory.audience,
-        })
+        });
+        // Include new fields only when non-null (saves tokens for agents)
+        if let Some(ref et) = memory.event_time {
+            if let serde_json::Value::Object(ref mut map) = obj {
+                map.insert("event_time".to_string(), json!(et.to_rfc3339()));
+            }
+        }
+        if let Some(ref etp) = memory.event_time_precision {
+            if let serde_json::Value::Object(ref mut map) = obj {
+                map.insert("event_time_precision".to_string(), json!(etp));
+            }
+        }
+        if let Some(ref ws) = memory.workspace {
+            if let serde_json::Value::Object(ref mut map) = obj {
+                map.insert("workspace".to_string(), json!(ws));
+            }
+        }
+        obj
     }
 }
 
@@ -150,6 +171,15 @@ fn parse_datetime(s: &str) -> Result<DateTime<Utc>> {
     ))
 }
 
+/// Resolve workspace with CLI flag > MEMCP_WORKSPACE env var > config default_workspace precedence.
+///
+/// Returns the first non-empty workspace from the chain, or None if all are absent/empty.
+pub fn resolve_workspace(cli_flag: Option<String>, config: &Config) -> Option<String> {
+    cli_flag
+        .or_else(|| std::env::var("MEMCP_WORKSPACE").ok().filter(|s| !s.is_empty()))
+        .or_else(|| config.workspace.default_workspace.clone())
+}
+
 // ---------------------------------------------------------------------------
 // Subcommand handlers
 // ---------------------------------------------------------------------------
@@ -169,6 +199,7 @@ pub async fn cmd_store(
     audience: String,
     idempotency_key: Option<String>,
     wait: bool,
+    workspace: Option<String>,
 ) -> Result<()> {
     // Resource cap: max_memories — hard reject at hard_cap_percent
     if let Some(max) = config.resource_caps.max_memories {
@@ -188,6 +219,13 @@ pub async fn cmd_store(
         }
     }
 
+    // Extract temporal event time from content using regex patterns.
+    let temporal_result = extract_event_time(&content, config.user.birth_year, Utc::now());
+    let (event_time, event_time_precision) = match temporal_result {
+        Some((dt, precision)) => (Some(dt), Some(precision.as_str().to_string())),
+        None => (None, None),
+    };
+
     let input = CreateMemory {
         content,
         type_hint,
@@ -201,9 +239,9 @@ pub async fn cmd_store(
         parent_id: None,
         chunk_index: None,
         total_chunks: None,
-        event_time: None,
-        event_time_precision: None,
-        workspace: None,
+        event_time,
+        event_time_precision,
+        workspace,
     };
 
     let memory = store
@@ -327,6 +365,7 @@ pub async fn cmd_search(
     cursor: Option<String>,
     fields: Option<String>,
     min_salience: Option<f64>,
+    workspace: Option<String>,
 ) -> Result<()> {
     let ca = created_after.as_deref().map(parse_datetime).transpose()?;
     let cb = created_before.as_deref().map(parse_datetime).transpose()?;
@@ -388,6 +427,7 @@ pub async fn cmd_search(
                         Some(40.0), // symbolic_k
                         source.as_deref(),
                         audience.as_deref(),
+                        workspace.as_deref(),
                     )
                     .await
                     .map_err(|e| anyhow::anyhow!("{}", e))?
@@ -408,6 +448,7 @@ pub async fn cmd_search(
                         Some(40.0),
                         source.as_deref(),
                         audience.as_deref(),
+                        workspace.as_deref(),
                     )
                     .await
                     .map_err(|e| anyhow::anyhow!("{}", e))?
@@ -439,6 +480,7 @@ pub async fn cmd_search(
                 Some(40.0), // symbolic_k default
                 source.as_deref(),
                 audience.as_deref(),
+                workspace.as_deref(),
             )
             .await
             .map_err(|e| anyhow::anyhow!("{}", e))?
@@ -731,6 +773,7 @@ pub async fn cmd_recent(
         cursor: None,
         actor,
         audience: None,
+        workspace: None,
     };
 
     let result = store
@@ -789,6 +832,7 @@ pub async fn cmd_list(
     actor: Option<String>,
     audience: Option<String>,
     verbose: bool,
+    workspace: Option<String>,
 ) -> Result<()> {
     let filter = ListFilter {
         type_hint,
@@ -801,6 +845,7 @@ pub async fn cmd_list(
         cursor,
         actor,
         audience,
+        workspace,
     };
 
     let result = store
@@ -1181,6 +1226,7 @@ pub async fn cmd_recall(
     query: &str,
     session_id: Option<String>,
     reset: bool,
+    workspace: Option<String>,
 ) -> Result<()> {
     // Recall requires vector similarity — embed via daemon.
     let query_embedding = match embed_via_daemon(query).await {
@@ -1200,7 +1246,7 @@ pub async fn cmd_recall(
     );
 
     // Execute recall.
-    let result = engine.recall(&query_embedding, session_id, reset).await
+    let result = engine.recall(&query_embedding, session_id, reset, workspace.as_deref()).await
         .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?;
 
     // Output compact JSON projection (per CONTEXT.md: only memory_id, content, relevance).

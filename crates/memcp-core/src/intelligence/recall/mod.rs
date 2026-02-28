@@ -66,6 +66,7 @@ impl RecallEngine {
     /// - `query_embedding`: Vector embedding of the user's query (required).
     /// - `session_id`: Optional session identifier. Auto-generated if None.
     /// - `reset`: If true, clears session recall history before querying.
+    /// - `workspace`: Optional workspace scope. When Some, returns workspace-scoped + global memories.
     ///
     /// # Returns
     /// A `RecallResult` with session_id, count, and memories slice.
@@ -75,6 +76,7 @@ impl RecallEngine {
         query_embedding: &[f32],
         session_id: Option<String>,
         reset: bool,
+        workspace: Option<&str>,
     ) -> Result<RecallResult, MemcpError> {
         // a. Resolve session_id: generate if not provided.
         let session_id = session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -96,6 +98,7 @@ impl RecallEngine {
                 self.config.min_relevance,
                 self.config.max_memories,
                 self.extraction_enabled,
+                workspace,
             )
             .await?;
 

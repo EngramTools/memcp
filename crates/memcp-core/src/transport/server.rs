@@ -340,6 +340,9 @@ pub struct SearchMemoryParams {
     /// Minimum salience score (0.0-1.0). Results below this threshold are excluded.
     /// Omitting applies config default_min_salience, or no filtering if that is also unset.
     pub min_salience: Option<f64>,
+    /// Workspace scope — returns memories from this workspace plus global (null-workspace) memories.
+    /// Omitting returns all memories regardless of workspace (no filtering).
+    pub workspace: Option<String>,
 }
 
 // Helper: convert MemcpError to CallToolResult with isError: true
@@ -1011,6 +1014,7 @@ Callable from code_execution_20260120 sandboxes.")]
             cursor: params.cursor,
             actor: params.actor,
             audience: params.audience,
+            workspace: None, // MCP list_memories doesn't expose workspace yet
         };
 
         match self.store.list(filter).await {
@@ -1251,6 +1255,7 @@ Callable from code_execution_20260120 sandboxes.")]
             symbolic_k,
             None, // source filter (MCP uses separate params)
             params.audience.as_deref(),
+            params.workspace.as_deref(),
         ).await {
             Ok(hits) => hits,
             Err(e) => return Ok(store_error_to_result(e)),
@@ -1650,7 +1655,7 @@ Callable from code_execution_20260120 sandboxes.")]
         );
 
         let result = engine
-            .recall(&query_embedding, params.session_id, params.reset.unwrap_or(false))
+            .recall(&query_embedding, params.session_id, params.reset.unwrap_or(false), None)
             .await;
 
         match result {

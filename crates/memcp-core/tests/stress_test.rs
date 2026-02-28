@@ -199,6 +199,7 @@ async fn stress_100k_memories(pool: PgPool) {
             None,      // symbolic_k — disable symbolic leg
             None,      // source
             None,      // audience
+            None,      // workspace
         )
         .await
         .expect("hybrid_search failed");

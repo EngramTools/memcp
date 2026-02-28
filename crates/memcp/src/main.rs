@@ -81,6 +81,9 @@ enum Commands {
         /// with embedding_status and embedding_dimension.
         #[arg(long)]
         wait: bool,
+        /// Workspace scope. Overrides MEMCP_WORKSPACE env var and config default_workspace.
+        #[arg(long)]
+        workspace: Option<String>,
     },
     /// Search memories by keyword + metadata matching with salience ranking
     Search {
@@ -117,6 +120,9 @@ enum Commands {
         /// Minimum salience threshold (0.0-1.0). Excludes results below this score.
         #[arg(long)]
         min_salience: Option<f64>,
+        /// Workspace scope — returns memories from this workspace plus global (null-workspace) memories.
+        #[arg(long)]
+        workspace: Option<String>,
     },
     /// List memories with optional filters and pagination
     List {
@@ -142,6 +148,9 @@ enum Commands {
         audience: Option<String>,
         #[arg(long)]
         verbose: bool,
+        /// Workspace scope — returns memories from this workspace plus global (null-workspace) memories.
+        #[arg(long)]
+        workspace: Option<String>,
     },
     /// Retrieve a memory by ID
     Get { id: String },
@@ -227,6 +236,9 @@ enum Commands {
         /// Clear session recall history before recalling (for context compaction)
         #[arg(long)]
         reset: bool,
+        /// Workspace scope — returns memories from this workspace plus global (null-workspace) memories.
+        #[arg(long)]
+        workspace: Option<String>,
     },
     /// AI brain curation — merge, flag stale, and strengthen memories
     Curation {
@@ -514,14 +526,16 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        Commands::Store { content, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait } => {
+        Commands::Store { content, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, workspace } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_store(&store, &config, content, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait).await?;
+            let workspace = cli::resolve_workspace(workspace, &config);
+            cli::cmd_store(&store, &config, content, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, workspace).await?;
         }
 
-        Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience } => {
+        Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience, workspace } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience).await?;
+            let workspace = cli::resolve_workspace(workspace, &config);
+            cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience, workspace).await?;
         }
 
         Commands::Recent { since, source, actor, limit, verbose } => {
@@ -529,9 +543,10 @@ async fn main() -> Result<()> {
             cli::cmd_recent(&store, since, source, actor, limit, verbose).await?;
         }
 
-        Commands::List { type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose } => {
+        Commands::List { type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose, workspace } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_list(&store, type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose).await?;
+            let workspace = cli::resolve_workspace(workspace, &config);
+            cli::cmd_list(&store, type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose, workspace).await?;
         }
 
         Commands::Get { id } => {
@@ -585,9 +600,10 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Recall { query, session_id, reset } => {
+        Commands::Recall { query, session_id, reset, workspace } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_recall(&store, &config, &query, session_id, reset).await?;
+            let workspace = cli::resolve_workspace(workspace, &config);
+            cli::cmd_recall(&store, &config, &query, session_id, reset, workspace).await?;
         }
 
         Commands::Curation { action } => {

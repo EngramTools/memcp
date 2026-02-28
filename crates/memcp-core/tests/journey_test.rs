@@ -124,7 +124,7 @@ async fn test_store_search_recall_journey(pool: PgPool) {
 
     let session_id = "journey-test-session-1".to_string();
     let result1 = engine
-        .recall(&query_emb, Some(session_id.clone()), false)
+        .recall(&query_emb, Some(session_id.clone()), false, None)
         .await
         .unwrap();
 
@@ -140,7 +140,7 @@ async fn test_store_search_recall_journey(pool: PgPool) {
 
     // Verify session dedup: second recall with same session returns 0
     let result2 = engine
-        .recall(&query_emb, Some(session_id.clone()), false)
+        .recall(&query_emb, Some(session_id.clone()), false, None)
         .await
         .unwrap();
     assert_eq!(

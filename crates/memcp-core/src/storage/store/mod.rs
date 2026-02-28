@@ -176,6 +176,9 @@ pub struct ListFilter {
     pub actor: Option<String>,
     /// Filter by audience (exact match, optional)
     pub audience: Option<String>,
+    /// Filter by workspace — returns workspace-scoped AND global (NULL workspace) memories.
+    /// None means no workspace filter (return all regardless of workspace).
+    pub workspace: Option<String>,
 }
 
 impl Default for ListFilter {
@@ -191,6 +194,7 @@ impl Default for ListFilter {
             cursor: None,
             actor: None,
             audience: None,
+            workspace: None,
         }
     }
 }
