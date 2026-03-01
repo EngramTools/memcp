@@ -358,7 +358,7 @@ Plans:
 
 ## Phase 08.8: Plugin Support Primitives
 - **Goal**: Capabilities required by the OpenClaw memcp plugin. `memcp annotate` command to tag and boost salience on existing memories by ID. Auto-store emits memory IDs so callers can annotate what was just stored. Temporal event time extraction on ingest (parses references like "when I was 6", "in 2019" into structured metadata). Workspace scoping (`workspace` column) for multi-workspace isolation. Recall output improvements (--first preamble, truncation, related context hints).
-- **Status**: Planned
+- **Status**: DONE (5/5 plans done)
 - **Depends on**: Phase 08.7
 - **Origin**: memcp scope additions from OpenClaw plugin design (engram/.planning/memcp-openclaw-plugin-design.md)
 - **Plans:** 5/5 plans complete
@@ -367,8 +367,20 @@ Plans:
 - [x] 08.8-01-PLAN.md — Migration 018 (event_time, workspace columns) + Config structs + Memory/CreateMemory field additions [Wave 1]
 - [x] 08.8-02-PLAN.md — Annotate command (CLI + MCP, tag append/replace, salience absolute/multiplier, diff output) [Wave 2, depends on 01]
 - [x] 08.8-03-PLAN.md — Workspace scoping + temporal event-time regex extraction + CLI/MCP output field updates [Wave 2, depends on 01]
-- [ ] 08.8-04-PLAN.md — Auto-store ID emission (.ids.jsonl companion file) + temporal LLM background worker + daemon wiring [Wave 3, depends on 01+03]
-- [ ] 08.8-05-PLAN.md — Recall output improvements (--first preamble, truncation, related context hints) [Wave 3, depends on 01+02+03]
+- [x] 08.8-04-PLAN.md — Auto-store ID emission (.ids.jsonl companion file) + temporal LLM background worker + daemon wiring [Wave 3, depends on 01+03]
+- [x] 08.8-05-PLAN.md — Recall output improvements (--first preamble, truncation, related context hints) [Wave 3, depends on 01+02+03]
+
+## Phase 08.9: Query-less Recall
+- **Goal**: `memcp recall --first` without a query. Ranks memories by salience (primary) + recency (secondary) for cold start injection. Returns top N memories without requiring an embedding query. Includes project summary if tagged `project-summary`. Required by OpenClaw plugin's two-phase injection (cold start before first user message).
+- **Status**: Not started
+- **Depends on**: Phase 08.8
+- **Origin**: engram/.planning/memcp-knowledge-layer-vision.md (Two-Phase Context Injection, lines 96-134)
+
+## Phase 08.10: Memory Content Updates
+- **Goal**: `memcp update --id <id> "new content"` to replace memory content in place. Primary use case: evolving project summaries that agents maintain as living documents. Re-triggers embedding pipeline for the updated content.
+- **Status**: Not started
+- **Depends on**: Phase 08.8
+- **Origin**: engram/.planning/memcp-knowledge-layer-vision.md (Memory Editing, lines 186-198)
 
 ## Phase 09: Documentation & QA Playbook
 - **Goal**: README overhaul, config reference, architecture guide. Must cover both standalone and engram-bundled usage. Includes a scripted QA playbook (CLI + MCP flows against real Postgres) designed to be run by both humans and an AI QA agent.
@@ -407,11 +419,9 @@ Plans:
 - **Depends on**: Phase 11
 - **Note**: Full tenant isolation (row-level security, tenant IDs) is NOT needed. Container-per-tenant means isolation happens at the infrastructure level. This phase is about: API key validation, key rotation, and authenticated identity on stored memories.
 
-## Phase 13: claw-control API Surface
-- **Goal**: API endpoints that claw-control can call for memory management UI — stats, memory browser, search preview, GC controls. Replaces the original "Admin Dashboard" plan since claw-control IS the dashboard for engram.
-- **Status**: Not planned
-- **Depends on**: Phase 12
-- **Note**: memcp does NOT need its own admin UI. claw-control provides the dashboard. memcp provides the API.
+## Phase 13: ~~claw-control API Surface~~
+- **Status**: REMOVED — claw-control IS the dashboard. API endpoints will be added as needed by claw-control integration (engram Phase 4).
+- **Note**: memcp does NOT need its own admin UI or dedicated API surface. claw-control calls memcp CLI/MCP directly.
 
 ## Phase 14: Memory Boosting
 - **Goal**: Competitor-informed improvements (from hindsight/jarvis research in engram-analysis.md)
