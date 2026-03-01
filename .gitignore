@@ -4,3 +4,4 @@
 *.db-wal
 .fastembed_cache/
 data/longmemeval/
+.planning/
