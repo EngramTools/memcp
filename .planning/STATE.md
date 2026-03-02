@@ -8,23 +8,24 @@ progress:
   total_phases: 41
   completed_phases: 17
   total_plans: 88
-  completed_plans: 56
+  completed_plans: 57
 ---
 
 # Project State
 
 ## Current Phase
-Phase 08.12-http-api-remote-daemon — Plan 01 complete, Plan 02+ pending
+Phase 08.12-http-api-remote-daemon — Plan 02 complete, Plan 03+ pending
 
-Progress: [█████████████░░░░░░░] 56/88 plans (64%)
+Progress: [█████████████░░░░░░░] 57/88 plans (65%)
 
 ## Active Context
-- Last completed: Phase 08.12-01 HTTP API server (2026-03-02)
+- Last completed: Phase 08.12-02 CLI remote mode (2026-03-02)
 - REST API /v1/* routes live on port 9090 alongside /health and /status
 - AppState expands HealthState with config + embed_provider + embed_sender
-- 11 integration tests passing
+- 15 api_test integration tests passing (11 Plan 01 + 4 dispatch_remote)
+- --remote <url> / MEMCP_URL routes recall/search/store/annotate/update through HTTP
 - Last session: 2026-03-02
-- Stopped at: Phase 08.12-01 complete
+- Stopped at: Phase 08.12-02 complete
 
 ## Project Reference
 
@@ -35,12 +36,15 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 
 ## Session Continuity
 Last session: 2026-03-02
-Stopped at: Phase 08.12-01 complete (HTTP API server)
+Stopped at: Phase 08.12-02 complete (CLI remote mode)
 Resume file: None
 
 ## Accumulated Context
 
 ### Phase 08.12 Decisions
+- Phase 08.12-02: dispatch_remote() is single pub async fn in cli.rs — one function handles all 5 data commands via POST to /v1/{command}
+- Phase 08.12-02: remote dispatch branches inline in main.rs match arms — no cmd_* signature changes needed, local path unchanged
+- Phase 08.12-02: stdin resolved before remote dispatch for store/update — resolve_content_arg() called regardless of remote mode
 - Phase 08.12-01: AppState replaces HealthState — carries config, embed_provider, embed_sender for /v1/* handlers; health handlers carry extra fields they don't use (acceptable)
 - Phase 08.12-01: EmbeddingPipeline creation moved before health server spawn in daemon.rs so embed_sender is available at AppState construction time
 - Phase 08.12-01: Recall handler returns 503 when embed_provider is None and query non-empty — search degrades to BM25-only (fail-open)
