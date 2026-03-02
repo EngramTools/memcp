@@ -407,6 +407,21 @@ Plans:
 - **Status**: Not started
 - **Depends on**: Phase 08.10
 - **Origin**: engram Phase 3 Docker architecture — plugin needs to reach memcp from a separate container without shared Postgres credentials
+- **Requirements:** [HTTP-01, HTTP-02, HTTP-03, HTTP-04, HTTP-05, HTTP-06, HTTP-07]
+- **Plans:** 2 plans
+
+Requirements:
+- HTTP-01: `POST /v1/recall` — JSON API for recall (query-based and queryless), returns same shape as CLI `--json`
+- HTTP-02: `POST /v1/search` — JSON API for hybrid search with all existing filter params
+- HTTP-03: `POST /v1/store` — JSON API for memory storage with `wait: true` sync option
+- HTTP-04: `POST /v1/annotate` + `POST /v1/update` — JSON API for memory modification
+- HTTP-05: `GET /v1/status` alias + AppState expansion (HealthState -> AppState with config, embed_provider, embed_sender)
+- HTTP-06: `--remote <url>` / `MEMCP_URL` global CLI flag — routes commands through HTTP instead of direct Postgres
+- HTTP-07: CLI output in remote mode identical to local mode — transparent to callers
+
+Plans:
+- [ ] 08.12-01-PLAN.md — AppState + transport/api module (all 6 routes + handlers + types) + daemon wiring + integration tests [Wave 1]
+- [ ] 08.12-02-PLAN.md — CLI --remote flag + dispatch_remote() helper + remote dispatch in 5 data commands + E2E tests [Wave 2, depends on 01]
 
 **Why:** The memcp CLI currently connects directly to Postgres. In Docker (and any split deployment), this means every container that uses memcp needs the binary installed and DATABASE_URL with full DB credentials. An HTTP API on the existing daemon server lets callers reach memcp with just a URL. The daemon's connection pool handles Postgres access. Cleaner separation, no credential leakage, works for self-hosters on k8s or multi-machine setups.
 
@@ -420,12 +435,6 @@ Plans:
 | `POST /v1/annotate` | `cmd_annotate` | Key moment enrichment |
 | `POST /v1/update` | `cmd_update` | Project summary evolution |
 | `GET /v1/status` | existing `/status` | Gateway health check (already exists, alias under /v1/) |
-
-**CLI changes:**
-- `--remote <url>` flag (or `MEMCP_URL` env var) on all subcommands
-- When set: serialize args → HTTP POST → deserialize response
-- When unset: direct Postgres as today (zero behavior change)
-- Response format: same JSON the CLI already outputs with `--json`
 
 **Scope boundaries:**
 - No auth on these routes yet (Phase 12 adds JWT). For now, routes are internal — Docker networking or localhost only.
