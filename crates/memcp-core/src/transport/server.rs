@@ -304,12 +304,16 @@ pub struct AnnotateMemoryParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RecallMemoryParams {
-    /// Query text to find relevant memories for context injection
-    pub query: String,
+    /// Query text to find relevant memories. Omit for query-less cold-start recall (returns top memories by salience).
+    pub query: Option<String>,
     /// Session ID for dedup tracking. Auto-generated if omitted; return value includes session_id.
     pub session_id: Option<String>,
     /// Set to true to clear session recall history (e.g., after context compaction).
     pub reset: Option<bool>,
+    /// Set to true for session-start context injection. Pins project-summary memory (if exists) and adds preamble/datetime.
+    pub first: Option<bool>,
+    /// Override max_memories config. Controls how many memories to return (not counting pinned summary).
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -1592,9 +1596,11 @@ Callable from code_execution_20260120 sandboxes.")]
     }
 
     #[tool(description = "Recall relevant memories for automatic context injection. \
-Returns up to N memories above relevance threshold, excluding already-recalled memories for this session. \
+Query-based: provide 'query' to find semantically similar memories. \
+Query-less: omit 'query' for cold-start recall ranked by salience (stability + recency). \
+Set 'first' to true for session-start mode: pins project-summary memory and adds datetime/preamble. \
+Returns {\"session_id\": \"...\", \"count\": N, \"memories\": [...], \"summary\": {...} | null}. \
 Session-scoped dedup prevents re-injection within a conversation. \
-Returns {\"session_id\": \"...\", \"count\": N, \"memories\": [{\"memory_id\": \"uuid\", \"content\": \"...\", \"relevance\": 0.84}]}. \
 Callable from code_execution_20260120 sandboxes.")]
     async fn recall_memory(
         &self,
@@ -1604,37 +1610,9 @@ Callable from code_execution_20260120 sandboxes.")]
             tool = "recall_memory",
             session_id = ?params.session_id,
             reset = params.reset.unwrap_or(false),
+            first = params.first.unwrap_or(false),
             "Tool called"
         );
-
-        if params.query.trim().is_empty() {
-            return Ok(CallToolResult::structured_error(json!({
-                "isError": true,
-                "error": "Field 'query' is required and cannot be empty",
-                "field": "query"
-            })));
-        }
-
-        // Embed query using inline embedding provider (same as search_memory).
-        let embedding_provider = match &self.embedding_provider {
-            Some(p) => p,
-            None => {
-                return Ok(CallToolResult::structured_error(json!({
-                    "isError": true,
-                    "error": "recall_memory requires an embedding provider — start with 'memcp serve' which loads the provider on startup"
-                })));
-            }
-        };
-
-        let query_embedding = match embedding_provider.embed(&params.query).await {
-            Ok(emb) => emb,
-            Err(e) => {
-                return Ok(CallToolResult::structured_error(json!({
-                    "isError": true,
-                    "error": format!("Embedding failed: {}", e)
-                })));
-            }
-        };
 
         // Get pg_store (required for recall session methods).
         let pg_store = match &self.pg_store {
@@ -1647,23 +1625,83 @@ Callable from code_execution_20260120 sandboxes.")]
             }
         };
 
-        // Create RecallEngine and execute.
         let engine = crate::recall::RecallEngine::new(
-            pg_store,
+            pg_store.clone(),
             self.recall_config.clone(),
             self.extraction_enabled,
         );
 
-        let result = engine
-            .recall(&query_embedding, params.session_id, params.reset.unwrap_or(false), None)
-            .await;
+        let first = params.first.unwrap_or(false);
+        let reset = params.reset.unwrap_or(false);
+
+        // Branch on query presence: Some(non-empty) → query-based, None or empty → queryless.
+        let has_query = params.query.as_ref().map_or(false, |q| !q.trim().is_empty());
+
+        let mut result = if has_query {
+            // Query-based path — needs embedding provider.
+            let embedding_provider = match &self.embedding_provider {
+                Some(p) => p,
+                None => {
+                    return Ok(CallToolResult::structured_error(json!({
+                        "isError": true,
+                        "error": "recall_memory with a query requires an embedding provider"
+                    })));
+                }
+            };
+
+            let query = params.query.as_ref().unwrap();
+            let query_embedding = match embedding_provider.embed(query).await {
+                Ok(emb) => emb,
+                Err(e) => {
+                    return Ok(CallToolResult::structured_error(json!({
+                        "isError": true,
+                        "error": format!("Embedding failed: {}", e)
+                    })));
+                }
+            };
+
+            engine.recall(&query_embedding, params.session_id, reset, None).await
+        } else {
+            // Query-less path — no embedding needed.
+            engine.recall_queryless(params.session_id, reset, None, first, params.limit).await
+        };
+
+        // For query-based path with first=true, fetch project summary separately.
+        // (recall_queryless already handles this internally.)
+        if has_query && first {
+            if let Ok(ref mut r) = result {
+                match pg_store.fetch_project_summary(None).await {
+                    Ok(Some((id, content))) => {
+                        r.summary = Some(crate::recall::RecalledMemory {
+                            memory_id: id,
+                            content,
+                            relevance: 1.0,
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!(error = %e, "fetch_project_summary failed"),
+                }
+            }
+        }
 
         match result {
-            Ok(r) => Ok(CallToolResult::structured(json!({
-                "session_id": r.session_id,
-                "count": r.count,
-                "memories": r.memories,
-            }))),
+            Ok(r) => {
+                let mut response = json!({
+                    "session_id": r.session_id,
+                    "count": r.count,
+                    "memories": r.memories,
+                });
+                // Include summary if present.
+                if let Some(ref summary) = r.summary {
+                    if let serde_json::Value::Object(ref mut map) = response {
+                        map.insert("summary".to_string(), json!({
+                            "memory_id": summary.memory_id,
+                            "content": summary.content,
+                        }));
+                    }
+                }
+                Ok(CallToolResult::structured(response))
+            }
             Err(e) => Ok(store_error_to_result(e)),
         }
     }
