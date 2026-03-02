@@ -1369,6 +1369,7 @@ pub async fn cmd_recall(
     workspace: Option<String>,
     first: bool,
     limit: Option<usize>,
+    boost_tags: &[String],
 ) -> Result<()> {
     // Default preamble text. Tells agents how to use the memory system.
     const DEFAULT_PREAMBLE: &str = "You have access to persistent memory via memcp. \
@@ -1385,7 +1386,7 @@ pub async fn cmd_recall(
 
     let mut result = if query.is_empty() {
         // Query-less path — no embedding needed; ranked by salience + recency.
-        engine.recall_queryless(session_id, reset, workspace.as_deref(), first, limit, &[]).await
+        engine.recall_queryless(session_id, reset, workspace.as_deref(), first, limit, boost_tags).await
             .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?
     } else {
         // Query-based path — embed via daemon for vector similarity.
@@ -1398,7 +1399,7 @@ pub async fn cmd_recall(
             }
         };
 
-        let r = engine.recall(&query_embedding, session_id, reset, workspace.as_deref(), &[]).await
+        let r = engine.recall(&query_embedding, session_id, reset, workspace.as_deref(), boost_tags).await
             .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?;
         r
     };
@@ -1453,6 +1454,14 @@ pub async fn cmd_recall(
         if was_truncated {
             if let serde_json::Value::Object(ref mut map) = obj {
                 map.insert("truncated".to_string(), json!(true));
+            }
+        }
+
+        // Include boost metadata when boost was applied (mirrors serde skip_serializing_if).
+        if mem.boost_applied {
+            if let serde_json::Value::Object(ref mut map) = obj {
+                map.insert("boost_applied".to_string(), json!(true));
+                map.insert("boost_score".to_string(), json!(mem.boost_score));
             }
         }
 

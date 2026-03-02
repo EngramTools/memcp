@@ -250,6 +250,10 @@ enum Commands {
         /// Override max_memories config (default: 3). Controls how many memories to return.
         #[arg(long)]
         limit: Option<usize>,
+        /// Comma-separated boost tags for tag-affinity ranking (e.g. channel:devops,agent:reviewer).
+        /// Memories sharing boost tags get a soft ranking bonus. Prefix matching: "channel:" boosts all channel:* tags.
+        #[arg(long, value_delimiter = ',')]
+        boost_tags: Vec<String>,
     },
     /// AI brain curation — merge, flag stale, and strengthen memories
     Curation {
@@ -634,11 +638,11 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Recall { query, session_id, reset, workspace, first, limit } => {
+        Commands::Recall { query, session_id, reset, workspace, first, limit, boost_tags } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
             let workspace = cli::resolve_workspace(workspace, &config);
             let query_str = query.unwrap_or_default();
-            cli::cmd_recall(&store, &config, &query_str, session_id, reset, workspace, first, limit).await?;
+            cli::cmd_recall(&store, &config, &query_str, session_id, reset, workspace, first, limit, &boost_tags).await?;
         }
 
         Commands::Curation { action } => {

@@ -314,6 +314,9 @@ pub struct RecallMemoryParams {
     pub first: Option<bool>,
     /// Override max_memories config. Controls how many memories to return (not counting pinned summary).
     pub limit: Option<usize>,
+    /// Optional boost tags for tag-affinity ranking. Memories sharing these tags get a soft ranking bonus.
+    /// Prefix matching: "channel:" boosts all channel:* tags. Multiple tags combine additively.
+    pub boost_tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -1633,6 +1636,7 @@ Callable from code_execution_20260120 sandboxes.")]
 
         let first = params.first.unwrap_or(false);
         let reset = params.reset.unwrap_or(false);
+        let boost_tags = params.boost_tags.unwrap_or_default();
 
         // Branch on query presence: Some(non-empty) → query-based, None or empty → queryless.
         let has_query = params.query.as_ref().map_or(false, |q| !q.trim().is_empty());
@@ -1660,10 +1664,10 @@ Callable from code_execution_20260120 sandboxes.")]
                 }
             };
 
-            engine.recall(&query_embedding, params.session_id, reset, None, &[]).await
+            engine.recall(&query_embedding, params.session_id, reset, None, &boost_tags).await
         } else {
             // Query-less path — no embedding needed.
-            engine.recall_queryless(params.session_id, reset, None, first, params.limit, &[]).await
+            engine.recall_queryless(params.session_id, reset, None, first, params.limit, &boost_tags).await
         };
 
         // For query-based path with first=true, fetch project summary separately.
