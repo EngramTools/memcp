@@ -9,3 +9,4 @@ pub mod server;
 pub mod health;
 pub mod ipc;
 pub mod daemon;
+pub mod api;

@@ -95,23 +95,6 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     ready.store(true, std::sync::atomic::Ordering::Release);
     tracing::info!("Daemon ready — accepting health probes");
 
-    // 2.7. Spawn health HTTP server if enabled
-    let health_handle = if config.health.enabled {
-        let addr: std::net::SocketAddr = format!("{}:{}", config.health.bind, config.health.port)
-            .parse()
-            .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], 9090)));
-        let state = crate::health::HealthState {
-            ready: ready.clone(),
-            started_at: tokio::time::Instant::now(),
-            caps: config.resource_caps.clone(),
-            store: Some(store.clone()),
-        };
-        Some(tokio::spawn(crate::health::serve(addr, state)))
-    } else {
-        tracing::info!("Health HTTP server disabled via config");
-        None
-    };
-
     // 3. Create consolidation worker if enabled
     let consolidation_sender = if config.consolidation.enabled {
         let worker = ConsolidationWorker::new(
@@ -187,7 +170,29 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     }
 
     // 4. Create embedding pipeline (uses router for multi-tier support)
+    // Must be created before health server so embed_sender can be shared via AppState.
     let pipeline = EmbeddingPipeline::new(router.clone(), store.clone(), 1000, consolidation_sender, dedup_sender);
+
+    // 2.7. Spawn health HTTP server if enabled
+    // AppState carries config, embed_provider, and embed_sender for /v1/* API handlers.
+    let health_handle = if config.health.enabled {
+        let addr: std::net::SocketAddr = format!("{}:{}", config.health.bind, config.health.port)
+            .parse()
+            .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], 9090)));
+        let state = crate::health::AppState {
+            ready: ready.clone(),
+            started_at: tokio::time::Instant::now(),
+            caps: config.resource_caps.clone(),
+            store: Some(store.clone()),
+            config: std::sync::Arc::new(config.clone()),
+            embed_provider: Some(router.default_provider().clone()),
+            embed_sender: Some(pipeline.sender()),
+        };
+        Some(tokio::spawn(crate::health::serve(addr, state)))
+    } else {
+        tracing::info!("Health HTTP server disabled via config");
+        None
+    };
 
     // 5. Run startup embedding backfill
     let queued = backfill(&store, &pipeline.sender()).await;

@@ -18,21 +18,35 @@ use serde::Serialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::SocketAddr;
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use crate::config::ResourceCapsConfig;
+use crate::config::{Config, ResourceCapsConfig};
+use crate::embedding::{EmbeddingProvider, EmbeddingJob};
 
-/// Shared state for the health server.
+/// Shared state for the health and API server.
+///
+/// Renamed from HealthState in Phase 08.12 to AppState — now carries embedding
+/// pipeline access for HTTP API handlers (/v1/*). Health handlers carry a few
+/// extra fields they don't use — acceptable for a private internal struct.
 #[derive(Clone)]
-pub struct HealthState {
+pub struct AppState {
     /// Set to true after DB connect + migrations complete.
     pub ready: Arc<AtomicBool>,
     /// Startup instant for uptime calculation.
     pub started_at: Instant,
     /// Resource caps from config.
     pub caps: ResourceCapsConfig,
-    /// Postgres store for live queries (/status).
+    /// Postgres store for live queries (/status and /v1/* handlers).
     pub store: Option<Arc<crate::store::postgres::PostgresMemoryStore>>,
+    /// Full daemon config for API handlers (RecallConfig, ExtractionConfig, StoreConfig, etc).
+    pub config: Arc<Config>,
+    /// Embedding provider for in-process query embedding (recall + search handlers).
+    /// None when daemon was unable to init the provider (handlers return 503).
+    pub embed_provider: Option<Arc<dyn EmbeddingProvider + Send + Sync>>,
+    /// Embedding pipeline sender for enqueuing jobs (store handler wait=true path).
+    /// None when pipeline not available (store handler falls back to polling).
+    pub embed_sender: Option<mpsc::Sender<EmbeddingJob>>,
 }
 
 #[derive(Serialize)]
@@ -40,38 +54,9 @@ struct HealthResponse {
     status: &'static str,
 }
 
-#[derive(Serialize)]
-struct StatusResponse {
-    status: &'static str,
-    components: ComponentHealth,
-    resources: ResourceUsage,
-    uptime_secs: u64,
-}
-
-#[derive(Serialize)]
-struct ComponentHealth {
-    db: &'static str,
-    embeddings: &'static str,
-    hnsw: &'static str,
-}
-
-#[derive(Serialize)]
-struct ResourceInfo {
-    current: Option<u64>,
-    limit: Option<u64>,
-}
-
-#[derive(Serialize)]
-struct ResourceUsage {
-    memories: ResourceInfo,
-    embedding_batch_size: ResourceInfo,
-    search_results: ResourceInfo,
-    db_connections: ResourceInfo,
-}
-
 /// GET /health — liveness/readiness probe.
 /// Returns 200 when ready, 503 when not ready.
-async fn health_handler(State(state): State<HealthState>) -> (StatusCode, Json<HealthResponse>) {
+async fn health_handler(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
     if state.ready.load(Ordering::Acquire) {
         (StatusCode::OK, Json(HealthResponse { status: "ok" }))
     } else {
@@ -80,7 +65,8 @@ async fn health_handler(State(state): State<HealthState>) -> (StatusCode, Json<H
 }
 
 /// GET /status — operational status with component health and resource usage.
-async fn status_handler(State(state): State<HealthState>) -> (StatusCode, Json<StatusResponse>) {
+/// Also exposed as pub for use as /v1/status alias.
+pub async fn status_handler(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
     let is_ready = state.ready.load(Ordering::Acquire);
     let uptime = state.started_at.elapsed().as_secs();
 
@@ -125,33 +111,33 @@ async fn status_handler(State(state): State<HealthState>) -> (StatusCode, Json<S
         "starting"
     };
 
-    let resp = StatusResponse {
-        status: overall,
-        components: ComponentHealth {
-            db: db_status,
-            embeddings: embeddings_status,
-            hnsw: hnsw_status,
+    let resp = serde_json::json!({
+        "status": overall,
+        "components": {
+            "db": db_status,
+            "embeddings": embeddings_status,
+            "hnsw": hnsw_status,
         },
-        resources: ResourceUsage {
-            memories: ResourceInfo {
-                current: memory_count,
-                limit: state.caps.max_memories,
+        "resources": {
+            "memories": {
+                "current": memory_count,
+                "limit": state.caps.max_memories,
             },
-            embedding_batch_size: ResourceInfo {
-                current: None, // config limit, not a live count
-                limit: Some(state.caps.max_embedding_batch_size as u64),
+            "embedding_batch_size": {
+                "current": serde_json::Value::Null,
+                "limit": state.caps.max_embedding_batch_size as u64,
             },
-            search_results: ResourceInfo {
-                current: None, // config limit, not a live count
-                limit: Some(state.caps.max_search_results as u64),
+            "search_results": {
+                "current": serde_json::Value::Null,
+                "limit": state.caps.max_search_results as u64,
             },
-            db_connections: ResourceInfo {
-                current: db_conn_count,
-                limit: Some(state.caps.max_db_connections as u64),
+            "db_connections": {
+                "current": db_conn_count,
+                "limit": state.caps.max_db_connections as u64,
             },
         },
-        uptime_secs: uptime,
-    };
+        "uptime_secs": uptime,
+    });
 
     let code = if is_ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
     (code, Json(resp))
@@ -161,10 +147,13 @@ async fn status_handler(State(state): State<HealthState>) -> (StatusCode, Json<S
 ///
 /// Non-fatal: if bind fails, logs a warning and returns rather than crashing the daemon.
 /// Orchestrators should wait for /health to return 200 before sending traffic.
-pub async fn serve(addr: SocketAddr, state: HealthState) {
+pub async fn serve(addr: SocketAddr, state: AppState) {
+    let api_routes = crate::transport::api::router();
+
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/status", get(status_handler))
+        .merge(api_routes)
         .with_state(state);
 
     tracing::info!(%addr, "Health HTTP server starting");
