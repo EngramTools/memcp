@@ -316,3 +316,83 @@ async fn test_search_empty_query(pool: PgPool) {
 
     assert_eq!(resp.status(), 400, "Expected 400 for empty query");
 }
+
+// ---------------------------------------------------------------------------
+// dispatch_remote() end-to-end tests
+// ---------------------------------------------------------------------------
+
+/// dispatch_remote() store: sends HTTP POST and returns JSON with id field.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_dispatch_remote_store(pool: PgPool) {
+    let state = make_test_state(pool, true).await;
+    let base = spawn_test_server(state).await;
+
+    let result = memcp::cli::dispatch_remote(&base, "store", serde_json::json!({
+        "content": "remote test memory"
+    }))
+    .await
+    .expect("dispatch_remote store should succeed");
+
+    assert!(result.get("id").is_some(), "response must have id field");
+    let id = result["id"].as_str().expect("id must be a string");
+    assert_eq!(id.len(), 36, "id must be a UUID");
+    assert!(result.get("embedding_status").is_some(), "embedding_status must be present");
+}
+
+/// dispatch_remote() recall queryless: sends HTTP POST and returns session_id + memories.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_dispatch_remote_recall_queryless(pool: PgPool) {
+    let state = make_test_state(pool, true).await;
+    let base = spawn_test_server(state).await;
+
+    let result = memcp::cli::dispatch_remote(&base, "recall", serde_json::json!({
+        "first": true
+    }))
+    .await
+    .expect("dispatch_remote recall should succeed");
+
+    assert!(result["session_id"].is_string(), "session_id must be a string");
+    assert!(result["memories"].is_array(), "memories must be an array");
+    assert!(result["count"].is_number(), "count must be a number");
+}
+
+/// dispatch_remote() error handling: 503 when not ready → returns Err with "503".
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_dispatch_remote_error_handling(pool: PgPool) {
+    let state = make_test_state(pool, false).await; // ready = false
+    let base = spawn_test_server(state).await;
+
+    let err = memcp::cli::dispatch_remote(&base, "store", serde_json::json!({
+        "content": "should fail"
+    }))
+    .await
+    .expect_err("dispatch_remote should fail when server not ready");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("503"),
+        "Error should mention 503, got: {}",
+        msg
+    );
+}
+
+/// dispatch_remote() connection failure: invalid URL → returns connection error.
+#[tokio::test]
+async fn test_dispatch_remote_invalid_url() {
+    // Port 1 is privileged and never listening — connection refused immediately.
+    let err = memcp::cli::dispatch_remote(
+        "http://127.0.0.1:1",
+        "store",
+        serde_json::json!({"content": "x"}),
+    )
+    .await
+    .expect_err("dispatch_remote should fail on connection refused");
+
+    let msg = err.to_string();
+    // reqwest wraps the OS error; check it's a network/connection error
+    assert!(
+        msg.contains("Remote request") || msg.contains("connection") || msg.contains("refused") || msg.contains("error"),
+        "Expected a connection error, got: {}",
+        msg
+    );
+}
