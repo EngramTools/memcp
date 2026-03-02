@@ -1660,10 +1660,10 @@ Callable from code_execution_20260120 sandboxes.")]
                 }
             };
 
-            engine.recall(&query_embedding, params.session_id, reset, None).await
+            engine.recall(&query_embedding, params.session_id, reset, None, &[]).await
         } else {
             // Query-less path — no embedding needed.
-            engine.recall_queryless(params.session_id, reset, None, first, params.limit).await
+            engine.recall_queryless(params.session_id, reset, None, first, params.limit, &[]).await
         };
 
         // For query-based path with first=true, fetch project summary separately.

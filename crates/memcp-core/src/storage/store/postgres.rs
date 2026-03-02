@@ -2787,7 +2787,8 @@ impl PostgresMemoryStore {
     ///
     /// Session dedup: memories already in session_recalls for this session are excluded via LEFT JOIN.
     ///
-    /// Returns Vec of (memory_id, content, relevance) tuples sorted by relevance DESC, stability DESC.
+    /// Returns Vec of (memory_id, content, relevance, tags) tuples sorted by relevance DESC, stability DESC.
+    /// Tags are included so the recall engine can apply tag-affinity boost without N+1 queries.
     pub async fn recall_candidates(
         &self,
         query_embedding: &[f32],
@@ -2796,7 +2797,7 @@ impl PostgresMemoryStore {
         max_memories: usize,
         extraction_enabled: bool,
         workspace: Option<&str>,
-    ) -> Result<Vec<(String, String, f32)>, MemcpError> {
+    ) -> Result<Vec<(String, String, f32, Option<serde_json::Value>)>, MemcpError> {
         // Serialize embedding to pgvector literal format: '[0.1,0.2,...]'
         let emb_str = format!(
             "[{}]",
@@ -2817,12 +2818,13 @@ impl PostgresMemoryStore {
             // DISTINCT ON (m.id) picks the highest-relevance fact per memory.
             // Outer query sorts and caps at max_memories.
             let sql = format!("
-                SELECT memory_id, content, relevance FROM (
+                SELECT memory_id, content, relevance, tags FROM (
                     SELECT DISTINCT ON (m.id)
                         m.id AS memory_id,
                         ef.fact AS content,
                         (1.0 - (me.embedding <=> $1::vector)) AS relevance,
-                        COALESCE(ms.stability, 1.0) AS stability
+                        COALESCE(ms.stability, 1.0) AS stability,
+                        m.tags AS tags
                     FROM memories m
                     JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = true
                     LEFT JOIN memory_salience ms ON ms.memory_id = m.id
@@ -2861,7 +2863,8 @@ impl PostgresMemoryStore {
                     let relevance: f32 = row.try_get::<f64, _>("relevance").map(|v| v as f32)
                         .or_else(|_| row.try_get::<f32, _>("relevance"))
                         .unwrap_or(0.0);
-                    (memory_id, content, relevance)
+                    let tags: Option<serde_json::Value> = row.try_get("tags").ok().flatten();
+                    (memory_id, content, relevance, tags)
                 })
                 .collect();
             Ok(results)
@@ -2872,7 +2875,8 @@ impl PostgresMemoryStore {
                     m.id AS memory_id,
                     m.content,
                     (1.0 - (me.embedding <=> $1::vector)) AS relevance,
-                    COALESCE(ms.stability, 1.0) AS stability
+                    COALESCE(ms.stability, 1.0) AS stability,
+                    m.tags AS tags
                 FROM memories m
                 JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = true
                 LEFT JOIN memory_salience ms ON ms.memory_id = m.id
@@ -2907,7 +2911,8 @@ impl PostgresMemoryStore {
                     let relevance: f32 = row.try_get::<f64, _>("relevance").map(|v| v as f32)
                         .or_else(|_| row.try_get::<f32, _>("relevance"))
                         .unwrap_or(0.0);
-                    (memory_id, content, relevance)
+                    let tags: Option<serde_json::Value> = row.try_get("tags").ok().flatten();
+                    (memory_id, content, relevance, tags)
                 })
                 .collect();
             Ok(results)
@@ -2932,7 +2937,7 @@ impl PostgresMemoryStore {
         max_memories: usize,
         extraction_enabled: bool,
         workspace: Option<&str>,
-    ) -> Result<Vec<(String, String, f32)>, MemcpError> {
+    ) -> Result<Vec<(String, String, f32, Option<serde_json::Value>)>, MemcpError> {
         if tier_embeddings.is_empty() {
             // No embeddings available — return empty (caller should fall back or warn)
             return Ok(vec![]);
@@ -2944,30 +2949,31 @@ impl PostgresMemoryStore {
             return self.recall_candidates(embedding, session_id, min_relevance, max_memories, extraction_enabled, workspace).await;
         }
 
-        // Multi-tier: query each tier separately and merge by best relevance
-        let mut merged: HashMap<String, (String, f32)> = HashMap::new();
+        // Multi-tier: query each tier separately and merge by best relevance.
+        // Tuple: (content, relevance, tags)
+        let mut merged: HashMap<String, (String, f32, Option<serde_json::Value>)> = HashMap::new();
 
         for embedding in tier_embeddings.values() {
             let tier_results = self.recall_candidates(
                 embedding, session_id, min_relevance, max_memories, extraction_enabled, workspace
             ).await?;
 
-            for (memory_id, content, relevance) in tier_results {
+            for (memory_id, content, relevance, tags) in tier_results {
                 merged
                     .entry(memory_id)
-                    .and_modify(|(_, best_rel)| {
+                    .and_modify(|(_, best_rel, _)| {
                         if relevance > *best_rel {
                             *best_rel = relevance;
                         }
                     })
-                    .or_insert((content, relevance));
+                    .or_insert((content, relevance, tags));
             }
         }
 
         // Sort by relevance descending and cap at max_memories
-        let mut results: Vec<(String, String, f32)> = merged
+        let mut results: Vec<(String, String, f32, Option<serde_json::Value>)> = merged
             .into_iter()
-            .map(|(id, (content, rel))| (id, content, rel))
+            .map(|(id, (content, rel, tags))| (id, content, rel, tags))
             .collect();
         results.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(max_memories);

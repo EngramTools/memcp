@@ -1385,7 +1385,7 @@ pub async fn cmd_recall(
 
     let mut result = if query.is_empty() {
         // Query-less path — no embedding needed; ranked by salience + recency.
-        engine.recall_queryless(session_id, reset, workspace.as_deref(), first, limit).await
+        engine.recall_queryless(session_id, reset, workspace.as_deref(), first, limit, &[]).await
             .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?
     } else {
         // Query-based path — embed via daemon for vector similarity.
@@ -1398,7 +1398,7 @@ pub async fn cmd_recall(
             }
         };
 
-        let r = engine.recall(&query_embedding, session_id, reset, workspace.as_deref()).await
+        let r = engine.recall(&query_embedding, session_id, reset, workspace.as_deref(), &[]).await
             .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?;
         r
     };

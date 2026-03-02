@@ -89,7 +89,7 @@ async fn test_recall_basic(pool: PgPool) {
         ..Default::default()
     };
     let engine = RecallEngine::new(Arc::clone(&store), config, false);
-    let result = engine.recall(&query_emb, Some("session-basic".to_string()), false, None).await.unwrap();
+    let result = engine.recall(&query_emb, Some("session-basic".to_string()), false, None, &[]).await.unwrap();
 
     assert!(result.count > 0, "should recall at least one memory");
     assert_eq!(result.session_id, "session-basic");
@@ -133,14 +133,14 @@ async fn test_recall_session_dedup(pool: PgPool) {
 
     // First recall — should return both memories
     let result1 = engine
-        .recall(&query_emb, Some("session-dedup".to_string()), false, None)
+        .recall(&query_emb, Some("session-dedup".to_string()), false, None, &[])
         .await
         .unwrap();
     assert!(result1.count > 0, "first recall should return memories");
 
     // Second recall with same session — all memories already seen, should return 0
     let result2 = engine
-        .recall(&query_emb, Some("session-dedup".to_string()), false, None)
+        .recall(&query_emb, Some("session-dedup".to_string()), false, None, &[])
         .await
         .unwrap();
     assert_eq!(
@@ -150,7 +150,7 @@ async fn test_recall_session_dedup(pool: PgPool) {
 
     // Recall with different session — should see memories again
     let result3 = engine
-        .recall(&query_emb, Some("session-other".to_string()), false, None)
+        .recall(&query_emb, Some("session-other".to_string()), false, None, &[])
         .await
         .unwrap();
     assert!(result3.count > 0, "different session should recall memories");
@@ -185,21 +185,21 @@ async fn test_recall_reset_clears_session(pool: PgPool) {
 
     // First recall populates session history
     let result1 = engine
-        .recall(&query_emb, Some("session-reset".to_string()), false, None)
+        .recall(&query_emb, Some("session-reset".to_string()), false, None, &[])
         .await
         .unwrap();
     assert!(result1.count > 0);
 
     // Without reset: should return 0 (already seen)
     let result2 = engine
-        .recall(&query_emb, Some("session-reset".to_string()), false, None)
+        .recall(&query_emb, Some("session-reset".to_string()), false, None, &[])
         .await
         .unwrap();
     assert_eq!(result2.count, 0, "without reset, second recall should return 0");
 
     // With reset=true: clears history, should return memories again
     let result3 = engine
-        .recall(&query_emb, Some("session-reset".to_string()), true, None)
+        .recall(&query_emb, Some("session-reset".to_string()), true, None, &[])
         .await
         .unwrap();
     assert!(result3.count > 0, "recall with reset=true should return memories again");
@@ -235,7 +235,7 @@ async fn test_recall_max_memories_cap(pool: PgPool) {
     };
     let engine = RecallEngine::new(Arc::clone(&store), config, false);
     let result = engine
-        .recall(&query_emb, Some("session-cap".to_string()), false, None)
+        .recall(&query_emb, Some("session-cap".to_string()), false, None, &[])
         .await
         .unwrap();
 
@@ -285,7 +285,7 @@ async fn test_recall_extraction_tier(pool: PgPool) {
     // extraction_enabled=true → uses extracted_facts tier
     let engine = RecallEngine::new(Arc::clone(&store), config, true);
     let result = engine
-        .recall(&query_emb, Some("session-extraction".to_string()), false, None)
+        .recall(&query_emb, Some("session-extraction".to_string()), false, None, &[])
         .await
         .unwrap();
 
@@ -355,7 +355,7 @@ async fn test_recall_no_extraction_tier(pool: PgPool) {
     // extraction_enabled=false → filter to fact/summary type_hint
     let engine = RecallEngine::new(Arc::clone(&store), config, false);
     let result = engine
-        .recall(&query_emb, Some("session-noextract".to_string()), false, None)
+        .recall(&query_emb, Some("session-noextract".to_string()), false, None, &[])
         .await
         .unwrap();
 

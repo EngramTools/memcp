@@ -130,6 +130,9 @@ impl RecallEngine {
     /// - `session_id`: Optional session identifier. Auto-generated if None.
     /// - `reset`: If true, clears session recall history before querying.
     /// - `workspace`: Optional workspace scope. When Some, returns workspace-scoped + global memories.
+    /// - `boost_tags`: Explicit boost tags for tag-affinity ranking. Memories sharing these tags
+    ///   receive a soft relevance bonus. Prefix matching: "channel:" boosts all "channel:*" tags.
+    ///   Pass `&[]` to skip explicit boost (backward compatible).
     ///
     /// # Returns
     /// A `RecallResult` with session_id, count, memories, and summary=None (query-based path).
@@ -140,6 +143,7 @@ impl RecallEngine {
         session_id: Option<String>,
         reset: bool,
         workspace: Option<&str>,
+        boost_tags: &[String],
     ) -> Result<RecallResult, MemcpError> {
         // a. Resolve session_id: generate if not provided.
         let session_id = session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -152,7 +156,15 @@ impl RecallEngine {
             self.store.clear_session_recalls(&session_id).await?;
         }
 
-        // d. Execute tiered recall query with session dedup exclusion.
+        // d. Fetch session tags for implicit topic-affinity boost.
+        let session_tags = if self.config.session_topic_tracking {
+            self.store.get_session_tags(&session_id).await.unwrap_or_default()
+        } else {
+            vec![]
+        };
+
+        // e. Execute tiered recall query with session dedup exclusion.
+        //    recall_candidates now returns (memory_id, content, relevance, tags).
         let candidates = self
             .store
             .recall_candidates(
@@ -165,22 +177,60 @@ impl RecallEngine {
             )
             .await?;
 
-        // e. Build result and record each recalled memory in the session.
-        let mut memories = Vec::with_capacity(candidates.len());
-        for (memory_id, content, relevance) in &candidates {
-            self.store
-                .insert_session_recall(&session_id, memory_id, *relevance)
-                .await?;
+        // f. Apply boost, build memories, accumulate tags for session topic tracking.
+        let mut memories: Vec<RecalledMemory> = Vec::with_capacity(candidates.len());
+        let mut accumulated_tags: Vec<String> = Vec::new();
+
+        for (memory_id, content, relevance, tags_json) in &candidates {
+            let memory_tags = extract_tags(tags_json);
+
+            // Compute explicit + implicit boost.
+            let explicit_boost = compute_tag_boost(
+                boost_tags,
+                &memory_tags,
+                self.config.tag_boost_weight,
+                self.config.tag_boost_cap,
+            );
+            let implicit_boost = compute_tag_boost(
+                &session_tags,
+                &memory_tags,
+                self.config.session_boost_weight,
+                self.config.session_boost_cap,
+            );
+            let total_boost = explicit_boost + implicit_boost;
+            let boosted_relevance = relevance + total_boost as f32;
+
             memories.push(RecalledMemory {
                 memory_id: memory_id.clone(),
                 content: content.clone(),
-                relevance: *relevance,
-                boost_applied: false,
-                boost_score: 0.0,
+                relevance: boosted_relevance,
+                boost_applied: total_boost > 0.0,
+                boost_score: total_boost as f32,
             });
+
+            // Collect memory tags for session accumulation.
+            accumulated_tags.extend(memory_tags);
         }
 
-        // f. Fire-and-forget salience bump for all recalled memories.
+        // g. Re-sort by boosted relevance DESC (boost may change relative order).
+        memories.sort_by(|a, b| b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal));
+        // Already capped at max_memories by recall_candidates; no truncate needed.
+
+        // h. Record each recalled memory in the session.
+        for mem in &memories {
+            self.store
+                .insert_session_recall(&session_id, &mem.memory_id, mem.relevance)
+                .await?;
+        }
+
+        // i. Accumulate session tags (for implicit boost on next recall).
+        if self.config.session_topic_tracking && !accumulated_tags.is_empty() {
+            accumulated_tags.sort();
+            accumulated_tags.dedup();
+            let _ = self.store.accumulate_session_tags(&session_id, &accumulated_tags).await;
+        }
+
+        // j. Fire-and-forget salience bump for all recalled memories.
         if !memories.is_empty() {
             let store_clone = Arc::clone(&self.store);
             let ids: Vec<String> = memories.iter().map(|r| r.memory_id.clone()).collect();
@@ -195,7 +245,7 @@ impl RecallEngine {
             });
         }
 
-        // g. Return result. summary=None for the query-based path (backward compatible).
+        // k. Return result. summary=None for the query-based path (backward compatible).
         let count = memories.len();
         Ok(RecallResult {
             session_id,
@@ -222,6 +272,8 @@ impl RecallEngine {
     ///   memory in the `summary` field. Summary is NOT counted toward `count` and NOT
     ///   added to session_recalls (so it reappears on subsequent first-session calls).
     /// - `max_memories_override`: Override for `config.max_memories`. None = use config.
+    /// - `boost_tags`: Explicit boost tags for tag-affinity ranking. Applied after salience
+    ///   scoring, before truncation. Pass `&[]` to skip explicit boost (backward compatible).
     ///
     /// # Returns
     /// A `RecallResult` with session_id, count, memories, and optionally summary.
@@ -232,6 +284,7 @@ impl RecallEngine {
         workspace: Option<&str>,
         first: bool,
         max_memories_override: Option<usize>,
+        boost_tags: &[String],
     ) -> Result<RecallResult, MemcpError> {
         // a. Resolve session_id.
         let session_id = session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -261,7 +314,14 @@ impl RecallEngine {
             None
         };
 
-        // e. Fetch queryless candidates — overfetch 3x for salience re-ranking.
+        // e. Fetch session tags for implicit topic-affinity boost.
+        let session_tags = if self.config.session_topic_tracking {
+            self.store.get_session_tags(&session_id).await.unwrap_or_default()
+        } else {
+            vec![]
+        };
+
+        // f. Fetch queryless candidates — overfetch 3x for salience re-ranking.
         let max_memories = max_memories_override.unwrap_or(self.config.max_memories);
         let overfetch = max_memories * 3;
         let candidates = self
@@ -269,7 +329,7 @@ impl RecallEngine {
             .recall_candidates_queryless(&session_id, overfetch, workspace)
             .await?;
 
-        // f. Build ScoredHit + SalienceInput vectors for salience scoring.
+        // g. Build ScoredHit + SalienceInput vectors for salience scoring.
         //    Fields not available from the queryless query use sensible defaults.
         let mut hits: Vec<ScoredHit> = Vec::with_capacity(candidates.len());
         let mut salience_inputs: Vec<SalienceInput> = Vec::with_capacity(candidates.len());
@@ -325,18 +385,62 @@ impl RecallEngine {
             });
         }
 
-        // g. Run SalienceScorer::rank() and truncate to max_memories.
+        // h. Run SalienceScorer::rank() — assigns salience_score to each hit.
         //    SalienceConfig::default() is correct — rrf_score=0.0 means normalize([0,...])
         //    = [1,...] making the semantic dimension a uniform constant that drops out.
         let salience_config = SalienceConfig::default();
         let scorer = SalienceScorer::new(&salience_config);
         scorer.rank(&mut hits, &salience_inputs);
+
+        // i. Apply tag-affinity boost AFTER salience scoring, BEFORE truncation.
+        //    Boost modifies salience_score in place, then re-sort and truncate.
+        if !boost_tags.is_empty() || !session_tags.is_empty() {
+            for hit in hits.iter_mut() {
+                let memory_tags = extract_tags(&hit.memory.tags);
+                let explicit_boost = compute_tag_boost(
+                    boost_tags,
+                    &memory_tags,
+                    self.config.tag_boost_weight,
+                    self.config.tag_boost_cap,
+                );
+                let implicit_boost = compute_tag_boost(
+                    &session_tags,
+                    &memory_tags,
+                    self.config.session_boost_weight,
+                    self.config.session_boost_cap,
+                );
+                hit.salience_score += explicit_boost + implicit_boost;
+            }
+            // Re-sort after boost.
+            hits.sort_by(|a, b| b.salience_score.partial_cmp(&a.salience_score).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
         hits.truncate(max_memories);
 
-        // h. Record session recalls and build memories vec.
+        // j. Record session recalls and build memories vec.
         //    ONLY for `memories` — NOT for `summary` (Pitfall 1: summary must not be deduped).
+        //    Compute boost fields per hit for RecalledMemory.
         let mut memories = Vec::with_capacity(hits.len());
+        let mut accumulated_tags: Vec<String> = Vec::new();
+
         for hit in &hits {
+            let memory_tags = extract_tags(&hit.memory.tags);
+
+            // Recompute boost for RecalledMemory fields (cheap, already done above).
+            let explicit_boost = compute_tag_boost(
+                boost_tags,
+                &memory_tags,
+                self.config.tag_boost_weight,
+                self.config.tag_boost_cap,
+            );
+            let implicit_boost = compute_tag_boost(
+                &session_tags,
+                &memory_tags,
+                self.config.session_boost_weight,
+                self.config.session_boost_cap,
+            );
+            let total_boost = explicit_boost + implicit_boost;
+
             self.store
                 .insert_session_recall(&session_id, &hit.memory.id, hit.salience_score as f32)
                 .await?;
@@ -344,12 +448,21 @@ impl RecallEngine {
                 memory_id: hit.memory.id.clone(),
                 content: hit.memory.content.clone(),
                 relevance: hit.salience_score as f32,
-                boost_applied: false,
-                boost_score: 0.0,
+                boost_applied: total_boost > 0.0,
+                boost_score: total_boost as f32,
             });
+
+            accumulated_tags.extend(memory_tags);
         }
 
-        // i. Fire-and-forget salience bump (same pattern as recall()).
+        // k. Accumulate session tags (for implicit boost on next recall).
+        if self.config.session_topic_tracking && !accumulated_tags.is_empty() {
+            accumulated_tags.sort();
+            accumulated_tags.dedup();
+            let _ = self.store.accumulate_session_tags(&session_id, &accumulated_tags).await;
+        }
+
+        // l. Fire-and-forget salience bump (same pattern as recall()).
         if !memories.is_empty() {
             let store_clone = Arc::clone(&self.store);
             let ids: Vec<String> = memories.iter().map(|r| r.memory_id.clone()).collect();
@@ -364,7 +477,7 @@ impl RecallEngine {
             });
         }
 
-        // j. Return result. count = memories.len() — does NOT include summary.
+        // m. Return result. count = memories.len() — does NOT include summary.
         let count = memories.len();
         Ok(RecallResult {
             session_id,
