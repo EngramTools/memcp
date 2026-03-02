@@ -1260,6 +1260,7 @@ pub async fn cmd_recall(
     reset: bool,
     workspace: Option<String>,
     first: bool,
+    limit: Option<usize>,
 ) -> Result<()> {
     // Default preamble text. Tells agents how to use the memory system.
     const DEFAULT_PREAMBLE: &str = "You have access to persistent memory via memcp. \
@@ -1268,26 +1269,48 @@ pub async fn cmd_recall(
         `memcp annotate --id <id> --tags tag1 --salience 1.5x` to enrich. \
         Memories persist across sessions. Store important decisions, preferences, and context.";
 
-    // Recall requires vector similarity — embed via daemon.
-    let query_embedding = match embed_via_daemon(query).await {
-        Some(emb) => emb,
-        None => {
-            eprintln!("error: recall requires the daemon to be running for query embedding");
-            eprintln!("hint: start the daemon with 'memcp daemon start'");
-            std::process::exit(1);
-        }
-    };
-
-    // Create RecallEngine with store, config, and extraction flag.
     let engine = crate::recall::RecallEngine::new(
         Arc::clone(store),
         config.recall.clone(),
         config.extraction.enabled,
     );
 
-    // Execute recall.
-    let result = engine.recall(&query_embedding, session_id, reset, workspace.as_deref()).await
-        .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?;
+    let mut result = if query.is_empty() {
+        // Query-less path — no embedding needed; ranked by salience + recency.
+        engine.recall_queryless(session_id, reset, workspace.as_deref(), first, limit).await
+            .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?
+    } else {
+        // Query-based path — embed via daemon for vector similarity.
+        let query_embedding = match embed_via_daemon(query).await {
+            Some(emb) => emb,
+            None => {
+                eprintln!("error: recall requires the daemon to be running for query embedding");
+                eprintln!("hint: start the daemon with 'memcp daemon start'");
+                std::process::exit(1);
+            }
+        };
+
+        let r = engine.recall(&query_embedding, session_id, reset, workspace.as_deref()).await
+            .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?;
+        r
+    };
+
+    // For query-based path with first=true, fetch project summary separately.
+    // (recall_queryless already handles this internally via the first parameter.)
+    if !query.is_empty() && first && result.summary.is_none() {
+        result.summary = match store.fetch_project_summary(workspace.as_deref()).await {
+            Ok(Some((id, content))) => Some(crate::recall::RecalledMemory {
+                memory_id: id,
+                content,
+                relevance: 1.0,
+            }),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(error = %e, "fetch_project_summary failed — skipping");
+                None
+            }
+        };
+    }
 
     // Collect memory IDs for related context lookup.
     let memory_ids: Vec<String> = result.memories.iter().map(|m| m.memory_id.clone()).collect();
@@ -1345,6 +1368,16 @@ pub async fn cmd_recall(
         "count": result.count,
         "memories": memories,
     });
+
+    // Add summary if present (query-less with first=true, or query-based with first=true).
+    if let Some(ref summary) = result.summary {
+        if let serde_json::Value::Object(ref mut map) = output {
+            map.insert("summary".to_string(), json!({
+                "id": summary.memory_id,
+                "content": summary.content,
+            }));
+        }
+    }
 
     if first {
         let preamble = config.recall.preamble_override

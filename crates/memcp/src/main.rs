@@ -228,8 +228,8 @@ enum Commands {
     },
     /// Recall relevant memories for automatic context injection
     Recall {
-        /// Query text to find relevant memories
-        query: String,
+        /// Query text to find relevant memories (omit for query-less cold start)
+        query: Option<String>,
         /// Session ID (auto-generated if omitted)
         #[arg(long)]
         session_id: Option<String>,
@@ -243,6 +243,9 @@ enum Commands {
         /// Without this flag, recall returns only memories (no preamble, saves tokens).
         #[arg(long)]
         first: bool,
+        /// Override max_memories config (default: 3). Controls how many memories to return.
+        #[arg(long)]
+        limit: Option<usize>,
     },
     /// AI brain curation — merge, flag stale, and strengthen memories
     Curation {
@@ -604,10 +607,11 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Recall { query, session_id, reset, workspace, first } => {
+        Commands::Recall { query, session_id, reset, workspace, first, limit } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
             let workspace = cli::resolve_workspace(workspace, &config);
-            cli::cmd_recall(&store, &config, &query, session_id, reset, workspace, first).await?;
+            let query_str = query.unwrap_or_default();
+            cli::cmd_recall(&store, &config, &query_str, session_id, reset, workspace, first, limit).await?;
         }
 
         Commands::Curation { action } => {
