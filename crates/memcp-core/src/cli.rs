@@ -222,6 +222,51 @@ pub fn resolve_content_arg(content: Option<String>, stdin: bool) -> Result<Optio
 }
 
 // ---------------------------------------------------------------------------
+// Remote dispatch
+// ---------------------------------------------------------------------------
+
+/// Send a command to a remote memcp daemon via HTTP API.
+///
+/// Routes CLI commands through the HTTP API when `--remote <url>` or `MEMCP_URL` is set.
+/// Returns the parsed JSON response. Returns Err on non-success HTTP status or network error.
+pub async fn dispatch_remote(
+    base_url: &str,
+    command: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let url = format!("{}/v1/{}", base_url.trim_end_matches('/'), command);
+    let resp = client
+        .post(&url)
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Remote request to {} failed: {}", url, e))?;
+
+    let status = resp.status();
+    let body_text = resp
+        .text()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read remote response: {}", e))?;
+
+    let json: serde_json::Value = serde_json::from_str(&body_text)
+        .unwrap_or_else(|_| serde_json::json!({"error": body_text}));
+
+    if !status.is_success() {
+        let msg = json
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("remote error");
+        anyhow::bail!("Remote memcp error ({}): {}", status.as_u16(), msg);
+    }
+
+    Ok(json)
+}
+
+// ---------------------------------------------------------------------------
 // Subcommand handlers
 // ---------------------------------------------------------------------------
 

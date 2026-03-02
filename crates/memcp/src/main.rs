@@ -54,6 +54,11 @@ struct Cli {
     /// Skip automatic database migration on startup
     #[arg(long, global = true)]
     skip_migrate: bool,
+
+    /// Route commands through HTTP API instead of direct Postgres.
+    /// Can also be set via MEMCP_URL environment variable.
+    #[arg(long, env = "MEMCP_URL", global = true)]
+    remote: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -565,15 +570,49 @@ async fn main() -> Result<()> {
 
         Commands::Store { content, stdin, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, workspace } => {
             let resolved = cli::resolve_content_arg(content, stdin)?;
-            let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            let workspace = cli::resolve_workspace(workspace, &config);
-            cli::cmd_store(&store, &config, resolved, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, workspace).await?;
+            if let Some(ref remote_url) = cli.remote {
+                let body = serde_json::json!({
+                    "content": resolved.as_deref().unwrap_or(""),
+                    "type_hint": type_hint,
+                    "source": source,
+                    "tags": tags,
+                    "actor": actor,
+                    "actor_type": actor_type,
+                    "audience": audience,
+                    "idempotency_key": idempotency_key,
+                    "wait": wait,
+                    "workspace": workspace,
+                });
+                let result = cli::dispatch_remote(remote_url, "store", body).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let store = cli::connect_store(&config, cli.skip_migrate).await?;
+                let workspace = cli::resolve_workspace(workspace, &config);
+                cli::cmd_store(&store, &config, resolved, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, workspace).await?;
+            }
         }
 
         Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience, workspace } => {
-            let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            let workspace = cli::resolve_workspace(workspace, &config);
-            cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience, workspace).await?;
+            if let Some(ref remote_url) = cli.remote {
+                let body = serde_json::json!({
+                    "query": query,
+                    "limit": limit,
+                    "tags": tags,
+                    "source": source,
+                    "type_hint": type_hint,
+                    "audience": audience,
+                    "workspace": workspace,
+                    "min_salience": min_salience,
+                    "fields": fields,
+                    "cursor": cursor,
+                });
+                let result = cli::dispatch_remote(remote_url, "search", body).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let store = cli::connect_store(&config, cli.skip_migrate).await?;
+                let workspace = cli::resolve_workspace(workspace, &config);
+                cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience, workspace).await?;
+            }
         }
 
         Commands::Recent { since, source, actor, limit, verbose } => {
@@ -639,10 +678,24 @@ async fn main() -> Result<()> {
         }
 
         Commands::Recall { query, session_id, reset, workspace, first, limit, boost_tags } => {
-            let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            let workspace = cli::resolve_workspace(workspace, &config);
-            let query_str = query.unwrap_or_default();
-            cli::cmd_recall(&store, &config, &query_str, session_id, reset, workspace, first, limit, &boost_tags).await?;
+            if let Some(ref remote_url) = cli.remote {
+                let body = serde_json::json!({
+                    "query": query.as_deref().unwrap_or(""),
+                    "session_id": session_id,
+                    "first": first,
+                    "reset": reset,
+                    "workspace": workspace,
+                    "limit": limit,
+                    "boost_tags": boost_tags,
+                });
+                let result = cli::dispatch_remote(remote_url, "recall", body).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let store = cli::connect_store(&config, cli.skip_migrate).await?;
+                let workspace = cli::resolve_workspace(workspace, &config);
+                let query_str = query.unwrap_or_default();
+                cli::cmd_recall(&store, &config, &query_str, session_id, reset, workspace, first, limit, &boost_tags).await?;
+            }
         }
 
         Commands::Curation { action } => {
@@ -661,14 +714,37 @@ async fn main() -> Result<()> {
         }
 
         Commands::Annotate { id, tags, replace_tags, salience } => {
-            let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_annotate(&store, &id, tags, replace_tags, salience).await?;
+            if let Some(ref remote_url) = cli.remote {
+                let body = serde_json::json!({
+                    "id": id,
+                    "tags": tags,
+                    "replace_tags": replace_tags,
+                    "salience": salience,
+                });
+                let result = cli::dispatch_remote(remote_url, "annotate", body).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let store = cli::connect_store(&config, cli.skip_migrate).await?;
+                cli::cmd_annotate(&store, &id, tags, replace_tags, salience).await?;
+            }
         }
 
         Commands::Update { id, content, stdin, type_hint, source, tags, wait } => {
             let resolved = cli::resolve_content_arg(content, stdin)?;
-            let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            cli::cmd_update(&store, &config, id, resolved, type_hint, source, tags, wait).await?;
+            if let Some(ref remote_url) = cli.remote {
+                let body = serde_json::json!({
+                    "id": id,
+                    "content": resolved,
+                    "type_hint": type_hint,
+                    "source": source,
+                    "tags": tags,
+                });
+                let result = cli::dispatch_remote(remote_url, "update", body).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let store = cli::connect_store(&config, cli.skip_migrate).await?;
+                cli::cmd_update(&store, &config, id, resolved, type_hint, source, tags, wait).await?;
+            }
         }
 
         Commands::Serve => {
