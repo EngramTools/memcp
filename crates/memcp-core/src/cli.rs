@@ -203,6 +203,24 @@ pub fn resolve_workspace(cli_flag: Option<String>, config: &Config) -> Option<St
         .or_else(|| config.workspace.default_workspace.clone())
 }
 
+/// Resolve content from a positional arg or --stdin flag.
+///
+/// Returns Err if both are provided. Returns Ok(None) if neither is provided.
+/// Callers decide whether None is valid (update: yes; store: no).
+pub fn resolve_content_arg(content: Option<String>, stdin: bool) -> Result<Option<String>> {
+    match (content, stdin) {
+        (Some(_), true) => Err(anyhow::anyhow!("Cannot specify both content and --stdin")),
+        (Some(c), false) => Ok(Some(c)),
+        (None, true) => {
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf)?;
+            Ok(Some(buf.trim_end().to_string()))
+        }
+        (None, false) => Ok(None),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Subcommand handlers
 // ---------------------------------------------------------------------------
@@ -210,10 +228,11 @@ pub fn resolve_workspace(cli_flag: Option<String>, config: &Config) -> Option<St
 /// Store a new memory. Outputs the created memory as JSON.
 ///
 /// Enforces max_memories resource cap if configured. Exits with error when cap exceeded.
+/// Content is required — provide as positional arg or via --stdin (resolved by caller).
 pub async fn cmd_store(
     store: &Arc<PostgresMemoryStore>,
     config: &Config,
-    content: String,
+    content: Option<String>,
     type_hint: String,
     source: String,
     tags: Option<Vec<String>>,
@@ -224,6 +243,10 @@ pub async fn cmd_store(
     wait: bool,
     workspace: Option<String>,
 ) -> Result<()> {
+    let content = content.ok_or_else(|| anyhow::anyhow!(
+        "Content is required — provide as argument or use --stdin"
+    ))?;
+
     // Resource cap: max_memories — hard reject at hard_cap_percent
     if let Some(max) = config.resource_caps.max_memories {
         let count = store.count_live_memories().await
@@ -309,6 +332,91 @@ pub async fn cmd_store(
         "{}",
         serde_json::to_string(&response_json)?
     );
+
+    warn_if_no_daemon(store).await;
+    Ok(())
+}
+
+/// Update a memory's content or metadata in place.
+///
+/// At least one of content, type_hint, source, or tags must be provided.
+/// If content changes, embedding_status is reset to "pending" so the daemon re-embeds.
+/// Note: Content filtering is skipped here — consistent with cmd_store. Content filtering
+/// is a server-layer concern only (MCP serve mode).
+pub async fn cmd_update(
+    store: &Arc<PostgresMemoryStore>,
+    config: &Config,
+    id: String,
+    content: Option<String>,
+    type_hint: Option<String>,
+    source: Option<String>,
+    tags: Option<Vec<String>>,
+    wait: bool,
+) -> Result<()> {
+    // Validate: at least one field must be provided
+    if content.is_none() && type_hint.is_none() && source.is_none() && tags.is_none() {
+        return Err(anyhow::anyhow!(
+            "At least one field required: content, --type-hint, --source, or --tags"
+        ));
+    }
+
+    let has_content_change = content.is_some();
+
+    let input = UpdateMemory {
+        content,
+        type_hint,
+        source,
+        tags,
+    };
+
+    let memory = store
+        .update(&id, input)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // If content changed, reset embedding_status to "pending" so daemon re-embeds.
+    // store.update() only updates fields in UpdateMemory — it does NOT reset
+    // embedding_status. CLI has no pipeline access, so daemon polling handles re-embed.
+    if has_content_change {
+        if let Err(e) = store.update_embedding_status(&id, "pending").await {
+            tracing::warn!("Failed to reset embedding_status: {}", e);
+            // Fail-open: don't abort the update
+        }
+    }
+
+    // Format output (matches cmd_store output style)
+    let mut response_json = format_memory_json(&memory, false);
+
+    // --wait: poll embedding_status until complete (reuse cmd_store pattern)
+    if wait && has_content_change {
+        let timeout = std::time::Duration::from_secs(config.store.sync_timeout_secs);
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed() >= timeout {
+                if let serde_json::Value::Object(ref mut map) = response_json {
+                    map.insert("embedding_status".to_string(), serde_json::json!("pending"));
+                }
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            match store.get(&memory.id).await {
+                Ok(m) => {
+                    if m.embedding_status == "complete" || m.embedding_status == "failed" {
+                        if let serde_json::Value::Object(ref mut map) = response_json {
+                            map.insert(
+                                "embedding_status".to_string(),
+                                serde_json::json!(m.embedding_status),
+                            );
+                        }
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
+    println!("{}", serde_json::to_string(&response_json)?);
 
     warn_if_no_daemon(store).await;
     Ok(())
