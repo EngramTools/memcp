@@ -796,6 +796,24 @@ pub struct RecallConfig {
     /// one non-trivial tag and a ready-made search command for the agent to explore.
     #[serde(default = "default_recall_related_context_enabled")]
     pub related_context_enabled: bool,
+    /// Weight per matching boost tag (default 0.1). Additive per match.
+    /// Memories sharing N boost tags get N * tag_boost_weight added to their score.
+    #[serde(default = "default_tag_boost_weight")]
+    pub tag_boost_weight: f64,
+    /// Weight per matching session-accumulated tag (default 0.05). Lighter than explicit.
+    /// Session tags are accumulated from recalled memories within the session.
+    #[serde(default = "default_session_boost_weight")]
+    pub session_boost_weight: f64,
+    /// Maximum total explicit tag boost (default 0.3). Prevents override of strong salience signals.
+    #[serde(default = "default_tag_boost_cap")]
+    pub tag_boost_cap: f64,
+    /// Maximum total session tag boost (default 0.15).
+    #[serde(default = "default_session_boost_cap")]
+    pub session_boost_cap: f64,
+    /// Enable session topic accumulation (default true). When true, recalled memory tags
+    /// are cached on the session for implicit boosting on subsequent recalls.
+    #[serde(default = "default_session_topic_tracking")]
+    pub session_topic_tracking: bool,
 }
 
 fn default_recall_max_memories() -> usize { 3 }
@@ -805,6 +823,11 @@ fn default_recall_bump_multiplier() -> f64 { 0.15 }
 fn default_recall_stability_ceiling() -> f64 { 100.0 }
 fn default_recall_truncation_chars() -> usize { 200 }
 fn default_recall_related_context_enabled() -> bool { true }
+fn default_tag_boost_weight() -> f64 { 0.1 }
+fn default_session_boost_weight() -> f64 { 0.05 }
+fn default_tag_boost_cap() -> f64 { 0.3 }
+fn default_session_boost_cap() -> f64 { 0.15 }
+fn default_session_topic_tracking() -> bool { true }
 
 impl Default for RecallConfig {
     fn default() -> Self {
@@ -817,6 +840,11 @@ impl Default for RecallConfig {
             truncation_chars: default_recall_truncation_chars(),
             preamble_override: None,
             related_context_enabled: default_recall_related_context_enabled(),
+            tag_boost_weight: default_tag_boost_weight(),
+            session_boost_weight: default_session_boost_weight(),
+            tag_boost_cap: default_tag_boost_cap(),
+            session_boost_cap: default_session_boost_cap(),
+            session_topic_tracking: default_session_topic_tracking(),
         }
     }
 }

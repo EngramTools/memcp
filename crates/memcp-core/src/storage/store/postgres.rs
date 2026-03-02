@@ -2659,6 +2659,10 @@ impl PostgresMemoryStore {
 
     /// Clear all recall records for a session and reset its last_active_at.
     ///
+    /// Also clears accumulated session_tags so subsequent recalls start with a clean
+    /// topic slate (Pitfall 4 from RESEARCH.md: stale session tags should not bias
+    /// fresh session after reset).
+    ///
     /// Resetting last_active_at prevents the session from being immediately
     /// re-expired by the cleanup worker right after a reset (Pitfall 3 from RESEARCH.md).
     pub async fn clear_session_recalls(&self, session_id: &str) -> Result<(), MemcpError> {
@@ -2669,12 +2673,64 @@ impl PostgresMemoryStore {
             .map_err(|e| MemcpError::Storage(format!("Failed to clear session recalls: {}", e)))?;
 
         sqlx::query(
-            "UPDATE sessions SET last_active_at = NOW() WHERE session_id = $1",
+            "UPDATE sessions SET last_active_at = NOW(), session_tags = NULL WHERE session_id = $1",
         )
         .bind(session_id)
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to touch session after clear: {}", e)))?;
+        Ok(())
+    }
+
+    /// Read accumulated session tags for a session.
+    ///
+    /// Returns an empty Vec when the session has no accumulated tags or does not exist.
+    /// Deduplication happens on read (simpler than SQL dedup — see RESEARCH.md Pitfall 3).
+    pub async fn get_session_tags(&self, session_id: &str) -> Result<Vec<String>, MemcpError> {
+        let row = sqlx::query(
+            "SELECT COALESCE(session_tags, '[]'::jsonb) as tags FROM sessions WHERE session_id = $1",
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to get session tags: {}", e)))?;
+
+        match row {
+            None => Ok(vec![]),
+            Some(row) => {
+                let value: serde_json::Value = row.get("tags");
+                let tags = serde_json::from_value::<Vec<String>>(value).unwrap_or_default();
+                // Dedup on read — accumulate_session_tags appends without deduplication.
+                let mut seen = std::collections::HashSet::new();
+                let deduped = tags.into_iter().filter(|t| seen.insert(t.clone())).collect();
+                Ok(deduped)
+            }
+        }
+    }
+
+    /// Append new tags to the session's accumulated topic set.
+    ///
+    /// Tags are appended without deduplication — dedup happens on read in get_session_tags.
+    /// No-op when new_tags is empty.
+    pub async fn accumulate_session_tags(
+        &self,
+        session_id: &str,
+        new_tags: &[String],
+    ) -> Result<(), MemcpError> {
+        if new_tags.is_empty() {
+            return Ok(());
+        }
+        let tags_json = serde_json::Value::Array(
+            new_tags.iter().map(|t| serde_json::Value::String(t.clone())).collect(),
+        );
+        sqlx::query(
+            "UPDATE sessions SET session_tags = COALESCE(session_tags, '[]'::jsonb) || $2::jsonb WHERE session_id = $1",
+        )
+        .bind(session_id)
+        .bind(tags_json)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to accumulate session tags: {}", e)))?;
         Ok(())
     }
 
