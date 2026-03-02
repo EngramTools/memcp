@@ -57,6 +57,21 @@ pub struct RelatedContext {
     pub shared_tags: Vec<String>,
 }
 
+/// Candidate memory returned by query-less recall (no vector search).
+///
+/// Co-fetches salience data in a single query so the recall engine can
+/// run `SalienceScorer::rank()` without a second round-trip.
+#[derive(Debug, Clone)]
+pub struct QuerylessCandidate {
+    pub memory_id: String,
+    pub content: String,
+    pub updated_at: chrono::DateTime<Utc>,
+    pub access_count: i64,
+    pub stability: f64,
+    pub last_reinforced_at: Option<chrono::DateTime<Utc>>,
+    pub tags: Option<serde_json::Value>,
+}
+
 /// A curation run record from the curation_runs table.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CurationRunRow {
@@ -2902,6 +2917,127 @@ impl PostgresMemoryStore {
         results.truncate(max_memories);
 
         Ok(results)
+    }
+
+    /// Query-less recall candidates: ranked by salience (stability DESC, updated_at DESC)
+    /// without any vector search.
+    ///
+    /// Co-fetches salience data in one query. Applies session dedup exclusion and
+    /// excludes memories tagged `project-summary` (they are fetched separately via
+    /// `fetch_project_summary` and pinned outside the candidate pool).
+    ///
+    /// Returns at most `overfetch_limit` candidates for re-ranking by `SalienceScorer`.
+    pub async fn recall_candidates_queryless(
+        &self,
+        session_id: &str,
+        overfetch_limit: usize,
+        workspace: Option<&str>,
+    ) -> Result<Vec<QuerylessCandidate>, MemcpError> {
+        let limit = overfetch_limit as i64;
+        let workspace_clause = if workspace.is_some() {
+            " AND (m.workspace = $3 OR m.workspace IS NULL)"
+        } else {
+            ""
+        };
+
+        let sql = format!("
+            SELECT
+                m.id AS memory_id,
+                m.content,
+                m.updated_at,
+                m.access_count,
+                COALESCE(ms.stability, 1.0) AS stability,
+                ms.last_reinforced_at,
+                m.tags
+            FROM memories m
+            LEFT JOIN memory_salience ms ON ms.memory_id = m.id
+            LEFT JOIN session_recalls sr ON sr.session_id = $1 AND sr.memory_id = m.id
+            WHERE m.deleted_at IS NULL
+              AND m.embedding_status = 'complete'
+              AND sr.memory_id IS NULL
+              AND (m.tags IS NULL OR NOT (m.tags @> '[\"project-summary\"]'::jsonb))
+              {workspace_clause}
+            ORDER BY COALESCE(ms.stability, 1.0) DESC, m.updated_at DESC
+            LIMIT $2
+        ");
+
+        let mut q = sqlx::query(&sql)
+            .bind(session_id)
+            .bind(limit);
+        if let Some(ws) = workspace {
+            q = q.bind(ws);
+        }
+
+        let rows = q
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("recall_candidates_queryless failed: {}", e)))?;
+
+        let results = rows
+            .iter()
+            .map(|row| {
+                let memory_id: String = row.get("memory_id");
+                let content: String = row.get("content");
+                let updated_at: chrono::DateTime<Utc> = row.get("updated_at");
+                let access_count: i64 = row.get("access_count");
+                let stability: f64 = row.try_get::<f64, _>("stability").unwrap_or(1.0);
+                let last_reinforced_at: Option<chrono::DateTime<Utc>> = row.get("last_reinforced_at");
+                let tags: Option<serde_json::Value> = row.get("tags");
+                QuerylessCandidate {
+                    memory_id,
+                    content,
+                    updated_at,
+                    access_count,
+                    stability,
+                    last_reinforced_at,
+                    tags,
+                }
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Fetch the most recent memory tagged `project-summary` for the given workspace scope.
+    ///
+    /// Returns `(memory_id, content)` or `None` if no project-summary memory exists.
+    /// Does NOT require `embedding_status = 'complete'` — summaries may not be embedded
+    /// yet but are still valid pinned context.
+    pub async fn fetch_project_summary(
+        &self,
+        workspace: Option<&str>,
+    ) -> Result<Option<(String, String)>, MemcpError> {
+        let workspace_clause = if workspace.is_some() {
+            " AND (m.workspace = $1 OR m.workspace IS NULL)"
+        } else {
+            ""
+        };
+
+        let sql = format!("
+            SELECT m.id, m.content
+            FROM memories m
+            WHERE m.deleted_at IS NULL
+              AND m.tags @> '[\"project-summary\"]'::jsonb
+              {workspace_clause}
+            ORDER BY m.updated_at DESC
+            LIMIT 1
+        ");
+
+        let mut q = sqlx::query(&sql);
+        if let Some(ws) = workspace {
+            q = q.bind(ws);
+        }
+
+        let row = q
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("fetch_project_summary failed: {}", e)))?;
+
+        Ok(row.map(|r| {
+            let id: String = r.get("id");
+            let content: String = r.get("content");
+            (id, content)
+        }))
     }
 
     /// Update GC metrics in daemon_status after a GC run.
