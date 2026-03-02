@@ -28,11 +28,63 @@ use crate::store::Memory;
 /// A single memory returned by the recall engine.
 ///
 /// Contains only the fields needed for context injection: id, content, relevance.
+/// boost_applied and boost_score are populated by Plan 02 when tag-affinity boost is active.
+/// They default to false/0.0 and are omitted from JSON output when unset.
 #[derive(Debug, Clone, Serialize)]
 pub struct RecalledMemory {
     pub memory_id: String,
     pub content: String,
     pub relevance: f32,
+    /// Whether any tag boost (explicit or session) was applied to this memory.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub boost_applied: bool,
+    /// Total boost score added (explicit + session). 0.0 when no boost.
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub boost_score: f32,
+}
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
+}
+
+/// Prefix-aware tag matching. If boost_tag ends with ':', it's a prefix match.
+/// Otherwise exact match.
+///
+/// Examples:
+/// - "channel:" matches "channel:devops", "channel:security" (prefix)
+/// - "channel:devops" matches only "channel:devops" (exact)
+fn tag_matches(boost_tag: &str, memory_tag: &str) -> bool {
+    if boost_tag.ends_with(':') {
+        memory_tag.starts_with(boost_tag)
+    } else {
+        memory_tag == boost_tag
+    }
+}
+
+/// Compute additive tag boost score. Counts distinct boost_tags that match any memory_tag.
+///
+/// Multiple matching tags stack: 2 matches * weight = 2x weight. Capped at cap.
+/// Returns 0.0 immediately when either input is empty.
+pub fn compute_tag_boost(boost_tags: &[String], memory_tags: &[String], weight: f64, cap: f64) -> f64 {
+    if boost_tags.is_empty() || memory_tags.is_empty() {
+        return 0.0;
+    }
+    let matches = boost_tags
+        .iter()
+        .filter(|bt| memory_tags.iter().any(|mt| tag_matches(bt, mt)))
+        .count();
+    (matches as f64 * weight).min(cap)
+}
+
+/// Extract tags from a Memory.tags JSONB field into Vec<String>.
+///
+/// Reuses the established pattern from annotate_logic / phase 08.8.
+/// Returns empty Vec when tags is None or contains no string elements.
+pub fn extract_tags(tags: &Option<serde_json::Value>) -> Vec<String> {
+    tags.as_ref()
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+        .unwrap_or_default()
 }
 
 /// The result of a recall operation.
@@ -123,6 +175,8 @@ impl RecallEngine {
                 memory_id: memory_id.clone(),
                 content: content.clone(),
                 relevance: *relevance,
+                boost_applied: false,
+                boost_score: 0.0,
             });
         }
 
@@ -198,6 +252,8 @@ impl RecallEngine {
                     memory_id: id,
                     content,
                     relevance: 1.0, // pinned, not relevance-ranked
+                    boost_applied: false,
+                    boost_score: 0.0,
                 }),
                 None => None,
             }
@@ -288,6 +344,8 @@ impl RecallEngine {
                 memory_id: hit.memory.id.clone(),
                 content: hit.memory.content.clone(),
                 relevance: hit.salience_score as f32,
+                boost_applied: false,
+                boost_score: 0.0,
             });
         }
 

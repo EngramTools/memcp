@@ -1676,6 +1676,8 @@ Callable from code_execution_20260120 sandboxes.")]
                             memory_id: id,
                             content,
                             relevance: 1.0,
+                            boost_applied: false,
+                            boost_score: 0.0,
                         });
                     }
                     Ok(None) => {}
