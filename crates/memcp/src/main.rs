@@ -60,7 +60,11 @@ struct Cli {
 enum Commands {
     /// Store a new memory (writes to DB, exits immediately)
     Store {
-        content: String,
+        /// Memory content (positional, optional). Omit if using --stdin.
+        content: Option<String>,
+        /// Read content from stdin (for multi-paragraph content)
+        #[arg(long)]
+        stdin: bool,
         #[arg(long, default_value = "fact")]
         type_hint: String,
         #[arg(long, default_value = "default")]
@@ -266,6 +270,28 @@ enum Commands {
         /// Salience value. Absolute (e.g., "0.9") or multiplier (e.g., "1.5x").
         #[arg(long)]
         salience: Option<String>,
+    },
+    /// Update a memory's content or metadata in place
+    Update {
+        /// Memory ID to update
+        id: String,
+        /// New content (positional, optional). Omit if using --stdin.
+        content: Option<String>,
+        /// Read content from stdin (for multi-paragraph content like project summaries)
+        #[arg(long)]
+        stdin: bool,
+        /// New type hint (replaces existing)
+        #[arg(long)]
+        type_hint: Option<String>,
+        /// New source (replaces existing)
+        #[arg(long)]
+        source: Option<String>,
+        /// New tags (replaces existing). Comma-separated.
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        /// Block until re-embedding completes (or timeout)
+        #[arg(long)]
+        wait: bool,
     },
 }
 
@@ -533,10 +559,11 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        Commands::Store { content, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, workspace } => {
+        Commands::Store { content, stdin, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, workspace } => {
+            let resolved = cli::resolve_content_arg(content, stdin)?;
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
             let workspace = cli::resolve_workspace(workspace, &config);
-            cli::cmd_store(&store, &config, content, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, workspace).await?;
+            cli::cmd_store(&store, &config, resolved, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, workspace).await?;
         }
 
         Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience, workspace } => {
@@ -632,6 +659,12 @@ async fn main() -> Result<()> {
         Commands::Annotate { id, tags, replace_tags, salience } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
             cli::cmd_annotate(&store, &id, tags, replace_tags, salience).await?;
+        }
+
+        Commands::Update { id, content, stdin, type_hint, source, tags, wait } => {
+            let resolved = cli::resolve_content_arg(content, stdin)?;
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_update(&store, &config, id, resolved, type_hint, source, tags, wait).await?;
         }
 
         Commands::Serve => {
