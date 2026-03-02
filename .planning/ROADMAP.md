@@ -408,7 +408,7 @@ Plans:
 - **Depends on**: Phase 08.10
 - **Origin**: engram Phase 3 Docker architecture — plugin needs to reach memcp from a separate container without shared Postgres credentials
 - **Requirements:** [HTTP-01, HTTP-02, HTTP-03, HTTP-04, HTTP-05, HTTP-06, HTTP-07]
-- **Plans:** 2 plans
+- **Plans:** 1/2 plans executed
 
 Requirements:
 - HTTP-01: `POST /v1/recall` — JSON API for recall (query-based and queryless), returns same shape as CLI `--json`

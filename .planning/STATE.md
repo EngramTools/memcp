@@ -3,31 +3,50 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-02T17:27:50Z"
+last_updated: "2026-03-02T18:30:00.000Z"
 progress:
-  total_phases: 40
-  completed_phases: 16
-  total_plans: 86
-  completed_plans: 54
+  total_phases: 41
+  completed_phases: 17
+  total_plans: 88
+  completed_plans: 56
 ---
 
 # Project State
 
 ## Current Phase
-Phase 08.11-warm-recall-session-ranking — Plan 02 complete (2/2 plans) — PHASE COMPLETE
+Phase 08.12-http-api-remote-daemon — Plan 01 complete, Plan 02+ pending
+
+Progress: [█████████████░░░░░░░] 56/88 plans (64%)
 
 ## Active Context
-- Last completed: Phase 08.11 warm recall session ranking (2026-03-02)
-- recall_candidates() now returns tags column — SQL extended to SELECT m.tags in both tiers
-- RecallEngine::recall() and recall_queryless() accept boost_tags param — applies explicit + session boost after scoring, re-sorts, accumulates session tags
-- CLI --boost-tags flag with comma delimiter (e.g. --boost-tags channel:devops,agent:reviewer)
-- MCP recall_memory accepts optional boost_tags array
-- Session tags accumulate automatically after each recall — implicit boost grows across conversation
-- reset=true clears session tags (via 08.11-01's clear_session_recalls)
+- Last completed: Phase 08.12-01 HTTP API server (2026-03-02)
+- REST API /v1/* routes live on port 9090 alongside /health and /status
+- AppState expands HealthState with config + embed_provider + embed_sender
+- 11 integration tests passing
 - Last session: 2026-03-02
-- Stopped at: Phase 08.11 Plan 02 complete — tag-affinity boosting fully wired end-to-end
+- Stopped at: Phase 08.12-01 complete
+
+## Project Reference
+
+See: .planning/PROJECT.md (updated 2026-03-02)
+
+**Core value:** Persistent memory for AI agents via MCP + CLI
+**Current focus:** Phase 09 — Documentation
+
+## Session Continuity
+Last session: 2026-03-02
+Stopped at: Phase 08.12-01 complete (HTTP API server)
+Resume file: None
 
 ## Accumulated Context
+
+### Phase 08.12 Decisions
+- Phase 08.12-01: AppState replaces HealthState — carries config, embed_provider, embed_sender for /v1/* handlers; health handlers carry extra fields they don't use (acceptable)
+- Phase 08.12-01: EmbeddingPipeline creation moved before health server spawn in daemon.rs so embed_sender is available at AppState construction time
+- Phase 08.12-01: Recall handler returns 503 when embed_provider is None and query non-empty — search degrades to BM25-only (fail-open)
+- Phase 08.12-01: Store handler uses polling (200ms, sync_timeout_secs) for wait=true — matches CLI cmd_store behavior exactly, avoids oneshot complexity
+- Phase 08.12-01: status_handler made pub to allow /v1/status alias in api::router() to reference it directly without wrapper
+- Phase 08.12-01: StatusResponse/ComponentHealth/ResourceInfo/ResourceUsage structs removed from health/mod.rs — converted to inline serde_json::json!() to support pub return type
 
 ### Phase 08.11 Decisions
 - Phase 08.11-01: Dedup session_tags on read (get_session_tags) via HashSet — simpler than SQL JSONB dedup on every write (RESEARCH.md Pitfall 3)
