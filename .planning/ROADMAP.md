@@ -448,10 +448,26 @@ Plans:
 - **Note**: QA playbook absorbed from dropped Phase 08.1. Playbook should be structured for AI agent execution (machine-parseable assertions, clear pass/fail criteria) as well as human walkthroughs.
 
 ## Phase 10: Production Hardening
-- **Goal**: Connection pooling, rate limiting, observability/metrics. Engram-specific: per-instance resource limits, Prometheus/OpenTelemetry metrics for hosted monitoring.
-- **Status**: Not planned
+- **Goal**: Connection pool observability, global rate limiting on HTTP API, Prometheus metrics endpoint, and structured logging improvements. All work targets the daemon process (port 9090).
+- **Status**: Planning complete
 - **Depends on**: Phase 09
-- **Note (quantum-safe encryption)**: TLS 1.3 with post-quantum key exchange (ML-KEM/Kyber) for DB connections. AES-256 at-rest via pgcrypto is already quantum-resistant. Consider optional column-level encryption for sensitive memory content.
+- **Requirements:** [PH-01, PH-02, PH-03, PH-04, PH-05, PH-06, PH-07]
+- **Plans:** 3 plans
+- **Note (quantum-safe encryption)**: TLS 1.3 with post-quantum key exchange (ML-KEM/Kyber) for DB connections. AES-256 at-rest via pgcrypto is already quantum-resistant. Consider optional column-level encryption for sensitive memory content. DEFERRED.
+
+Requirements:
+- PH-01: `GET /metrics` Prometheus scrape endpoint on port 9090 with all 13 declared metrics (request counters, duration histograms, pool gauges, worker counters)
+- PH-02: Connection pool observability — poll pool.size()/num_idle() every 10s → Prometheus gauges, wire max_db_connections config into PgPoolOptions
+- PH-03: Global rate limiting on `/v1/*` routes — per-endpoint token bucket via governor/tower_governor, configurable RPS, 429 with Retry-After + JSON body
+- PH-04: Config structs — `RateLimitConfig` and `ObservabilityConfig` with serde defaults, `[rate_limit]` and `[observability]` sections in memcp.toml
+- PH-05: Enriched `/status` endpoint — pool_active, pool_idle, pending embedding count, model name in component details
+- PH-06: Structured logging — request-scoped tracing spans with request_id (UUID) + endpoint + method, `Redacted<T>` wrapper for memory content privacy
+- PH-07: Worker metric instrumentation — GC runs/pruned counters, embedding jobs/duration, dedup merges, recall/search result count histograms
+
+Plans:
+- [ ] 10-01-PLAN.md — Prometheus infrastructure: dependencies, config structs, recorder install, /metrics endpoint, pool config wiring, pool poller [Wave 1]
+- [ ] 10-02-PLAN.md — Rate limiting + metrics middleware on /v1/* routes + enriched /status [Wave 2, depends on 01]
+- [ ] 10-03-PLAN.md — Structured logging (request spans, Redacted) + worker/handler metric instrumentation [Wave 2, depends on 01]
 
 ## Phase 10.1: Stress & Load Testing
 - **Goal**: Load test all core operations under simulated multi-tenant conditions. Establish capacity numbers and known breaking points.
@@ -489,4 +505,33 @@ Plans:
 - **Status**: Not planned
 - **Depends on**: Phase 12
 - **Note**: PRIVATE — stays in private repo, never enters public memcp fork
+
+## Phase 15: Import & Migration
+- **Goal**: Import memories from external AI tools (OpenClaw, Claude Code, ChatGPT, Claude.ai, markdown, JSONL) and export memcp memories in multiple formats. The onboarding moment — user runs `memcp import`, instantly has thousands of searchable memories from existing AI usage. Three-tier curation pipeline (rule-based noise filter → optional LLM triage → existing memcp hygiene). Embedding reuse from OpenClaw for zero-cost import. Round-trip export for anti-lock-in.
+- **Status**: Planning complete
+- **Depends on**: Phase 08.12 (HTTP API for `--remote` import), Phase 08.4 (chunking for markdown import)
+- **Design doc**: engram/.planning/memcp-import-design.md
+- **Requirements:** [IMP-01, IMP-02, IMP-03, IMP-04, IMP-05, IMP-06, IMP-07, IMP-08, IMP-09, IMP-10, IMP-11, IMP-12]
+- **Plans:** 5 plans
+
+Requirements:
+- IMP-01: `memcp import <source> [path]` CLI subcommand with 6 source readers (openclaw, claude-code, chatgpt, claude, markdown, jsonl)
+- IMP-02: ImportSource trait + ImportEngine pipeline: read → noise filter → dedup → batch insert with progress bar
+- IMP-03: Three-tier curation: Tier 1 rule-based noise filter (always), Tier 2 LLM triage (--curate), Tier 3 existing memcp hygiene (automatic)
+- IMP-04: SHA-256 content-hash dedup within batch and against existing store; near-duplicates imported with `duplicate_of` tag
+- IMP-05: Checkpoint/resume: interrupted imports resume from last completed batch; report.json with summary stats
+- IMP-06: OpenClaw reader: SQLite chunks, memory→fact / sessions→observation, embedding reuse when model+dimension match
+- IMP-07: Claude Code reader: MEMORY.md (fact, chunked by headers) + opt-in history.jsonl (observation)
+- IMP-08: ChatGPT + Claude.ai + Markdown readers: ZIP parsing, per-conversation grouping, section-based chunking
+- IMP-09: `memcp import --discover` auto-detects local sources, shows export instructions for non-local
+- IMP-10: `memcp export --format <jsonl|csv|markdown>` with --output, --project, --tags, --since filters
+- IMP-11: Export --include-embeddings and --include-state flags; JSONL round-trip fidelity with import
+- IMP-12: `[import]` config section in memcp.toml for noise_patterns, batch_size, default_project
+
+Plans:
+- [ ] 15-01-PLAN.md — Core import infrastructure: ImportSource trait, ImportEngine pipeline, noise filter, dedup, batch insert, checkpoint, progress bar, JSONL reader [Wave 1]
+- [ ] 15-02-PLAN.md — Export pipeline: JSONL/CSV/Markdown formatters, ExportEngine, CLI wiring, round-trip test [Wave 1]
+- [ ] 15-03-PLAN.md — OpenClaw reader (SQLite + embedding reuse) + Claude Code reader (MEMORY.md + history.jsonl) + Discovery command [Wave 2, depends on 01]
+- [ ] 15-04-PLAN.md — ChatGPT + Claude.ai ZIP readers + Markdown reader + Tier 2 LLM triage (--curate) [Wave 2, depends on 01]
+- [ ] 15-05-PLAN.md — Review/rescue commands + --remote import + ImportConfig + integration tests [Wave 3, depends on 03+04]
 
