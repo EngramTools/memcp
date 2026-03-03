@@ -22,30 +22,6 @@ fn make_zip_with_entries(entry_count: usize) -> Vec<u8> {
     zip.finish().unwrap().into_inner()
 }
 
-/// Build a ZIP archive with a single entry whose declared uncompressed size equals `size`.
-/// We use a small repeating buffer to keep the test fast — we only need the size metadata.
-fn make_zip_with_declared_size(declared_size_bytes: u64) -> Vec<u8> {
-    // We can't easily create a real file that large in tests.
-    // Instead we test the size calculation helper directly.
-    // For the entry-count path we use make_zip_with_entries.
-    // This function is intentionally a no-op placeholder for that reason.
-    let _ = declared_size_bytes;
-    make_zip_with_entries(0)
-}
-
-/// Create a real small ZIP with one entry whose compressed content is `content`.
-fn make_zip_with_content(filename: &str, content: &[u8]) -> NamedTempFile {
-    let tmp = NamedTempFile::with_suffix(".zip").unwrap();
-    let file = std::fs::File::create(tmp.path()).unwrap();
-    let mut zip = zip::ZipWriter::new(file);
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
-    zip.start_file(filename, options).unwrap();
-    zip.write_all(content).unwrap();
-    zip.finish().unwrap();
-    tmp
-}
-
 // ── ZIP bomb protection — entry count ─────────────────────────────────────────
 
 /// ZIP archives with > 10,000 entries must be rejected.

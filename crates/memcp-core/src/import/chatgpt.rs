@@ -21,6 +21,13 @@ use super::{DiscoveredSource, ImportChunk, ImportOpts, ImportSource, ImportSourc
 /// Maximum chunk size in characters. Conversations longer than this are split.
 const MAX_CHUNK_CHARS: usize = 2048;
 
+/// Maximum number of entries allowed in an import ZIP (ZIP bomb protection).
+pub const MAX_ZIP_ENTRIES: usize = 10_000;
+
+/// Maximum total decompressed size allowed in an import ZIP (ZIP bomb protection).
+/// Checked via stored size metadata — no actual extraction is performed.
+pub const MAX_DECOMPRESSED_SIZE: u64 = 500 * 1024 * 1024; // 500MB
+
 // ── JSON structures for conversations.json ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -101,6 +108,28 @@ impl ImportSource for ChatGptReader {
 
         let mut archive = zip::ZipArchive::new(BufReader::new(file))
             .with_context(|| "Failed to read ZIP archive")?;
+
+        // ZIP bomb protection: reject archives with too many entries or excessive decompressed size.
+        let entry_count = archive.len();
+        if entry_count > MAX_ZIP_ENTRIES {
+            anyhow::bail!(
+                "ZIP file has {} entries (max {}). This may be a ZIP bomb. \
+                 If this is a legitimate file, contact support.",
+                entry_count,
+                MAX_ZIP_ENTRIES
+            );
+        }
+        let total_size: u64 = (0..entry_count)
+            .map(|i| archive.by_index(i).map(|f| f.size()).unwrap_or(0))
+            .sum();
+        if total_size > MAX_DECOMPRESSED_SIZE {
+            anyhow::bail!(
+                "ZIP decompressed size is {} bytes (max {} bytes / 500MB). \
+                 This may be a ZIP bomb.",
+                total_size,
+                MAX_DECOMPRESSED_SIZE
+            );
+        }
 
         // Find conversations.json — do not assume it is entry 0.
         let conversations_json = {

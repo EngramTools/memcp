@@ -16,8 +16,8 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use super::{
-    chatgpt::chunk_content, DiscoveredSource, ImportChunk, ImportOpts, ImportSource,
-    ImportSourceKind,
+    chatgpt::{chunk_content, MAX_DECOMPRESSED_SIZE, MAX_ZIP_ENTRIES},
+    DiscoveredSource, ImportChunk, ImportOpts, ImportSource, ImportSourceKind,
 };
 
 /// Maximum chunk size in characters. Conversations longer than this are split.
@@ -85,6 +85,28 @@ impl ImportSource for ClaudeAiReader {
 
         let mut archive = zip::ZipArchive::new(BufReader::new(file))
             .with_context(|| "Failed to read ZIP archive")?;
+
+        // ZIP bomb protection: reject archives with too many entries or excessive decompressed size.
+        let entry_count = archive.len();
+        if entry_count > MAX_ZIP_ENTRIES {
+            anyhow::bail!(
+                "ZIP file has {} entries (max {}). This may be a ZIP bomb. \
+                 If this is a legitimate file, contact support.",
+                entry_count,
+                MAX_ZIP_ENTRIES
+            );
+        }
+        let total_size: u64 = (0..entry_count)
+            .map(|i| archive.by_index(i).map(|f| f.size()).unwrap_or(0))
+            .sum();
+        if total_size > MAX_DECOMPRESSED_SIZE {
+            anyhow::bail!(
+                "ZIP decompressed size is {} bytes (max {} bytes / 500MB). \
+                 This may be a ZIP bomb.",
+                total_size,
+                MAX_DECOMPRESSED_SIZE
+            );
+        }
 
         // Collect all JSON entry contents from the archive.
         // Claude.ai may ship a single conversations.json or per-conversation JSON files.

@@ -14,12 +14,14 @@ pub mod batch;
 pub mod checkpoint;
 pub mod jsonl;
 pub mod export;
+pub mod history;
 pub mod openclaw;
 pub mod chatgpt;
 pub mod claude_ai;
 pub mod claude_code;
 pub mod markdown;
 pub mod curate;
+pub mod security;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -334,6 +336,13 @@ impl ImportEngine {
         } else {
             survivors
         };
+
+        // Step 4.5: Flag suspicious content (prompt injection patterns).
+        // Tags are added WITHOUT modifying content. Idempotent.
+        let mut survivors: Vec<ImportChunk> = survivors;
+        for chunk in &mut survivors {
+            security::flag_injection(chunk);
+        }
 
         // Dry-run: show what would be imported and return.
         if self.opts.dry_run {
