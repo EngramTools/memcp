@@ -213,10 +213,33 @@ impl ImportEngine {
 
         // Step 3: Noise filter.
         let mut survivors = Vec::new();
-        let mut filtered_chunks = Vec::new();
         for chunk in chunks {
             if noise_filter.is_noise(&chunk.content) {
-                filtered_chunks.push(chunk);
+                // Persist filtered item so user can review/rescue later.
+                let reason = if chunk.content.trim().len() < noise::DEFAULT_MIN_CHARS {
+                    "noise:too-short".to_string()
+                } else {
+                    // Find which pattern matched.
+                    let lower = chunk.content.to_lowercase();
+                    let matched = noise_filter.patterns().iter()
+                        .find(|p| lower.contains(p.to_lowercase().as_str()))
+                        .map(|p| p.as_str())
+                        .unwrap_or("pattern");
+                    format!("noise:{}", matched)
+                };
+                let filtered_item = checkpoint::FilteredItem {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    content: chunk.content.clone(),
+                    reason,
+                    source: chunk.source.clone(),
+                    tags: chunk.tags.clone(),
+                    type_hint: chunk.type_hint.clone(),
+                    created_at: chunk.created_at,
+                    rescued: false,
+                };
+                if let Err(e) = checkpoint::FilteredItem::append(&import_dir, &filtered_item) {
+                    warn!("Failed to persist filtered item: {}", e);
+                }
                 result.filtered += 1;
             } else {
                 survivors.push(chunk);
@@ -268,6 +291,20 @@ impl ImportEngine {
                             .filter_map(|(mut chunk, decision)| {
                                 match decision.action {
                                     CurationAction::Skip => {
+                                        // Persist LLM-skipped item for review/rescue.
+                                        let filtered_item = checkpoint::FilteredItem {
+                                            id: uuid::Uuid::new_v4().to_string(),
+                                            content: chunk.content.clone(),
+                                            reason: "llm:skip".to_string(),
+                                            source: chunk.source.clone(),
+                                            tags: chunk.tags.clone(),
+                                            type_hint: chunk.type_hint.clone(),
+                                            created_at: chunk.created_at,
+                                            rescued: false,
+                                        };
+                                        if let Err(e) = checkpoint::FilteredItem::append(&import_dir, &filtered_item) {
+                                            warn!("Failed to persist LLM-filtered item: {}", e);
+                                        }
                                         result.filtered += 1;
                                         None
                                     }

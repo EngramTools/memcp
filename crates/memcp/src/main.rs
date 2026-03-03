@@ -27,6 +27,8 @@ use memcp::import::chatgpt::ChatGptReader;
 use memcp::import::claude_ai::ClaudeAiReader;
 use memcp::import::markdown::MarkdownReader;
 use memcp::import::curate::ImportCurator;
+use memcp::import::checkpoint::{find_latest_import_dir, load_filtered, save_filtered};
+use memcp::import::batch::batch_insert_memories;
 use rmcp::ServiceExt;
 
 #[derive(Parser)]
@@ -1202,11 +1204,122 @@ async fn main() -> Result<()> {
                     let sources = discover_all_sources(&config.embedding).await;
                     println!("{}", serde_json::to_string_pretty(&sources)?);
                 }
-                ImportAction::Review { last: _ } => {
-                    todo!("memcp import review — implemented in Plan 05")
+                ImportAction::Review { last } => {
+                    // Find the import directory to review.
+                    let dir = if last {
+                        find_latest_import_dir()
+                            .ok_or_else(|| anyhow::anyhow!("No import runs found in ~/.memcp/imports/"))?
+                    } else {
+                        find_latest_import_dir()
+                            .ok_or_else(|| anyhow::anyhow!("No import runs found in ~/.memcp/imports/. Use --last to review the most recent run."))?
+                    };
+
+                    let items = load_filtered(&dir);
+
+                    // Summarize by reason prefix.
+                    let mut noise_count = 0usize;
+                    let mut llm_count = 0usize;
+                    let mut dedup_count = 0usize;
+                    for item in &items {
+                        if item.rescued { continue; }
+                        if item.reason.starts_with("noise:") {
+                            noise_count += 1;
+                        } else if item.reason.starts_with("llm:") {
+                            llm_count += 1;
+                        } else if item.reason.starts_with("dedup:") {
+                            dedup_count += 1;
+                        }
+                    }
+
+                    let unrescued: Vec<&_> = items.iter().filter(|i| !i.rescued).collect();
+                    let total = unrescued.len();
+
+                    eprintln!("{} items filtered (noise: {}, llm: {}, dedup: {})", total, noise_count, llm_count, dedup_count);
+                    eprintln!("Import dir: {}", dir.display());
+                    eprintln!();
+
+                    // Print a summary table to stderr, then output JSON to stdout.
+                    for item in &unrescued {
+                        let preview: String = item.content.chars().take(80).collect();
+                        let short_id = &item.id[..8];
+                        eprintln!("[{}] {} | {}", short_id, item.reason, preview);
+                    }
+
+                    println!("{}", serde_json::to_string_pretty(&unrescued)?);
                 }
-                ImportAction::Rescue { id: _, all: _ } => {
-                    todo!("memcp import rescue — implemented in Plan 05")
+                ImportAction::Rescue { id, all } => {
+                    let dir = find_latest_import_dir()
+                        .ok_or_else(|| anyhow::anyhow!("No import runs found in ~/.memcp/imports/"))?;
+
+                    let mut items = load_filtered(&dir);
+                    let store = cli::connect_store(&config, cli.skip_migrate).await?;
+                    let pool = store.pool();
+
+                    // Collect items to rescue.
+                    let to_rescue: Vec<usize> = if all {
+                        items.iter().enumerate()
+                            .filter(|(_, item)| !item.rescued)
+                            .map(|(i, _)| i)
+                            .collect()
+                    } else if let Some(ref rescue_id) = id {
+                        // Support full UUID or short 8-char prefix.
+                        let matched: Vec<usize> = items.iter().enumerate()
+                            .filter(|(_, item)| !item.rescued && (item.id == *rescue_id || item.id.starts_with(rescue_id.as_str())))
+                            .map(|(i, _)| i)
+                            .collect();
+                        if matched.is_empty() {
+                            return Err(anyhow::anyhow!("No filtered item found with id '{}'", rescue_id));
+                        }
+                        matched
+                    } else {
+                        return Err(anyhow::anyhow!("Provide a specific <id> or use --all"));
+                    };
+
+                    // Convert to ImportChunks and batch insert.
+                    let chunks: Vec<memcp::import::ImportChunk> = to_rescue.iter()
+                        .map(|&idx| {
+                            let item = &items[idx];
+                            memcp::import::ImportChunk {
+                                content: item.content.clone(),
+                                type_hint: item.type_hint.clone(),
+                                source: item.source.clone(),
+                                tags: item.tags.clone(),
+                                created_at: item.created_at,
+                                actor: None,
+                                embedding: None,
+                                embedding_model: None,
+                                workspace: None,
+                            }
+                        })
+                        .collect();
+
+                    let opts = ImportOpts {
+                        project: None,
+                        tags: vec![],
+                        skip_embeddings: false,
+                        batch_size: chunks.len().max(1),
+                        since: None,
+                        dry_run: false,
+                        curate: false,
+                        skip_patterns: vec![],
+                    };
+
+                    let rescued_count = if !chunks.is_empty() {
+                        let result = batch_insert_memories(pool, &chunks, &opts).await?;
+                        result.inserted
+                    } else {
+                        0
+                    };
+
+                    // Mark rescued items in filtered.jsonl.
+                    for &idx in &to_rescue {
+                        items[idx].rescued = true;
+                    }
+                    if let Err(e) = save_filtered(&dir, &items) {
+                        eprintln!("Warning: failed to update filtered.jsonl: {}", e);
+                    }
+
+                    println!("{} items rescued and stored", rescued_count);
                 }
             }
         }

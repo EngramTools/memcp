@@ -14,6 +14,110 @@ use tracing::warn;
 
 use super::ImportResult;
 
+/// A single item that was filtered during import (noise, LLM triage, or dedup).
+///
+/// Written to `<import_dir>/filtered.jsonl` — one JSON object per line.
+/// The `id` field is used for individual rescue via `memcp import rescue <id>`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilteredItem {
+    /// UUID assigned at filter time — used for individual `rescue <id>`.
+    pub id: String,
+    /// Original content that was filtered.
+    pub content: String,
+    /// Reason for filtering: "noise:HEARTBEAT_OK", "llm:skip", "dedup:<hash>".
+    /// Prefix indicates which tier: `noise:` Tier 1, `llm:skip` Tier 2, `dedup:` dedup.
+    pub reason: String,
+    /// Source name (e.g., "openclaw", "chatgpt").
+    pub source: String,
+    /// Tags that would have been applied to this memory.
+    pub tags: Vec<String>,
+    /// Type hint that would have been applied.
+    pub type_hint: Option<String>,
+    /// When this item was created (from source, if available).
+    pub created_at: Option<DateTime<Utc>>,
+    /// Whether this item has been rescued (moved back into memcp).
+    #[serde(default)]
+    pub rescued: bool,
+}
+
+impl FilteredItem {
+    /// Append a filtered item to `<dir>/filtered.jsonl`.
+    pub fn append(dir: &Path, item: &FilteredItem) -> Result<()> {
+        use std::io::Write;
+        let path = dir.join("filtered.jsonl");
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&path)?;
+        let line = serde_json::to_string(item)?;
+        writeln!(file, "{}", line)?;
+        Ok(())
+    }
+}
+
+/// Load all filtered items from `<dir>/filtered.jsonl`.
+///
+/// Skips malformed lines with a warning rather than failing the entire load.
+pub fn load_filtered(dir: &Path) -> Vec<FilteredItem> {
+    let path = dir.join("filtered.jsonl");
+    if !path.exists() {
+        return vec![];
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(content) => content
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|line| match serde_json::from_str::<FilteredItem>(line) {
+                Ok(item) => Some(item),
+                Err(e) => {
+                    warn!("Skipping malformed line in filtered.jsonl: {}", e);
+                    None
+                }
+            })
+            .collect(),
+        Err(e) => {
+            warn!("Failed to read filtered.jsonl at {:?}: {}", path, e);
+            vec![]
+        }
+    }
+}
+
+/// Rewrite `<dir>/filtered.jsonl` with the given items (used after rescue to mark items).
+pub fn save_filtered(dir: &Path, items: &[FilteredItem]) -> Result<()> {
+    let path = dir.join("filtered.jsonl");
+    let mut content = String::new();
+    for item in items {
+        content.push_str(&serde_json::to_string(item)?);
+        content.push('\n');
+    }
+    std::fs::write(&path, content)?;
+    Ok(())
+}
+
+/// Scan `~/.memcp/imports/` and return the path of the most recently created import directory.
+///
+/// Directories are sorted by name which encodes the timestamp (lexicographic = chronological).
+pub fn find_latest_import_dir() -> Option<PathBuf> {
+    let imports_dir = dirs::home_dir()?.join(".memcp").join("imports");
+    if !imports_dir.exists() {
+        return None;
+    }
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(&imports_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+
+    // Sort descending by name (timestamp embedded in dir name ensures chronological order).
+    entries.sort_by(|a, b| {
+        b.file_name()
+            .cmp(&a.file_name())
+    });
+
+    entries.into_iter().next()
+}
+
 /// Checkpoint saved after each batch, enabling resume on interruption.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Checkpoint {

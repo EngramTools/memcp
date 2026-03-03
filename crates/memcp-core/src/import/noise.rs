@@ -80,6 +80,11 @@ impl NoiseFilter {
     pub fn pattern_count(&self) -> usize {
         self.patterns.len()
     }
+
+    /// Returns a reference to the configured noise patterns.
+    pub fn patterns(&self) -> &[String] {
+        &self.patterns
+    }
 }
 
 #[cfg(test)]
