@@ -13,8 +13,12 @@ pub mod dedup;
 pub mod batch;
 pub mod checkpoint;
 pub mod jsonl;
+pub mod export;
 pub mod openclaw;
-// claude_code, chatgpt, claude_ai, markdown readers in later plans
+pub mod chatgpt;
+pub mod claude_ai;
+pub mod markdown;
+// claude_code reader in a later plan
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
