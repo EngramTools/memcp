@@ -512,7 +512,7 @@ Plans:
 - **Depends on**: Phase 08.12 (HTTP API for `--remote` import), Phase 08.4 (chunking for markdown import)
 - **Design doc**: engram/.planning/memcp-import-design.md
 - **Requirements:** [IMP-01, IMP-02, IMP-03, IMP-04, IMP-05, IMP-06, IMP-07, IMP-08, IMP-09, IMP-10, IMP-11, IMP-12]
-- **Plans:** 2/5 plans executed
+- **Plans:** 3/5 plans executed
 
 Requirements:
 - IMP-01: `memcp import <source> [path]` CLI subcommand with 6 source readers (openclaw, claude-code, chatgpt, claude, markdown, jsonl)

@@ -37,10 +37,19 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 
 ## Session Continuity
 Last session: 2026-03-03
-Stopped at: Phase 15-04 complete (ChatGPT/Claude.ai/Markdown readers + Tier 2 curation)
+Stopped at: Phase 15-02 complete (export pipeline — JSONL/CSV/Markdown formatters + CLI)
 Resume file: None
 
 ## Accumulated Context
+
+### Phase 15-02 Decisions
+- Phase 15-02: ExportableMemory flat struct (not trait) — formatters receive plain slice, no dispatch overhead
+- Phase 15-02: Embedding join uses m.embedding::text cast in SELECT, parsed from [0.1,...] text repr — avoids pgvector type complexity in raw sqlx query
+- Phase 15-02: BufWriter branching (file vs stdout) instead of Box<dyn Write> — avoids StdoutLock lifetime issues with trait objects
+- Phase 15-02: CSV tags serialized as space-separated string within cell — deterministic, avoids nested quoting complexity
+- Phase 15-02: Markdown uses BTreeMap<type_hint, Vec<&ExportableMemory>> for sorted deterministic groups
+- Phase 15-02: Round-trip test validates dedup detection — exported JSONL → reimport skips via content hash, proves format parseable
+- Phase 15-02: Chatgpt/Claude/Markdown ImportAction match arms added (Rule 3 fix) — prior plans left them unimplemented, blocked compilation
 
 ### Phase 15-04 Decisions
 - Phase 15-04: chunk_content() placed in chatgpt.rs as pub fn, shared via pub use by claude_ai and markdown — avoids separate util module
