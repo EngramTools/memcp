@@ -1469,6 +1469,40 @@ impl Default for ResourceLimitsConfig {
     }
 }
 
+/// Configuration for the `memcp import` pipeline.
+///
+/// Applied during all import commands (jsonl, openclaw, chatgpt, etc.).
+/// Noise patterns here are merged with per-source hardcoded patterns.
+/// Nested env var overrides use double underscores:
+///   MEMCP_IMPORT__BATCH_SIZE=50
+///   MEMCP_IMPORT__DEFAULT_PROJECT=myproject
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImportConfig {
+    /// Custom noise patterns to apply during import (in addition to per-source defaults).
+    /// Each pattern is a case-insensitive substring — matching content is dropped (noise).
+    /// Example: ["CUSTOM_NOISE", "system heartbeat"]
+    pub noise_patterns: Vec<String>,
+
+    /// Default batch size for import database transactions (default: 100).
+    /// CLI --batch-size flag overrides this value.
+    pub batch_size: usize,
+
+    /// Default project/workspace for imported memories (default: none).
+    /// CLI --project flag overrides this value.
+    pub default_project: Option<String>,
+}
+
+impl Default for ImportConfig {
+    fn default() -> Self {
+        Self {
+            noise_patterns: vec![],
+            batch_size: 100,
+            default_project: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Log level: trace, debug, info, warn, error
@@ -1598,6 +1632,12 @@ pub struct Config {
     /// Existing configs without [temporal] section still work (serde default applied).
     #[serde(default)]
     pub temporal: TemporalConfig,
+
+    /// Import pipeline configuration.
+    /// Controls noise patterns, batch size, and default project for `memcp import` commands.
+    /// Existing configs without [import] section still work (serde default applied).
+    #[serde(default)]
+    pub import: ImportConfig,
 }
 
 fn default_log_level() -> String {
@@ -1637,6 +1677,7 @@ impl Default for Config {
             user: UserConfig::default(),
             workspace: WorkspaceConfig::default(),
             temporal: TemporalConfig::default(),
+            import: ImportConfig::default(),
         }
     }
 }

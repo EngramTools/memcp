@@ -373,3 +373,128 @@ async fn test_export_import_round_trip(pool: PgPool) {
         "All 3 memories should either be re-imported or detected as duplicates"
     );
 }
+
+/// Config integration: custom noise_patterns in ImportOpts.skip_patterns are applied.
+///
+/// Simulates what `[import] noise_patterns = ["CUSTOM_NOISE"]` in memcp.toml achieves:
+/// user-configured patterns are merged into ImportOpts.skip_patterns before engine construction.
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_config_noise_patterns_applied(pool: PgPool) {
+    let store = Arc::new(PostgresMemoryStore::from_pool(pool).await.unwrap());
+
+    // Create content that would pass the 50-char default filter but matches a custom pattern.
+    let custom_noise = "CUSTOM_NOISE: this entry should be filtered by user config but is long enough";
+    let signal = "User prefers Rust over Go for backend services due to memory safety guarantees";
+
+    let lines = &[
+        format!(r#"{{"content":"{}"}}"#, custom_noise),
+        format!(r#"{{"content":"{}"}}"#, signal),
+    ];
+    let line_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+    let file = make_jsonl_file(&line_refs);
+
+    // Simulate config.import.noise_patterns merged into skip_patterns.
+    let opts = ImportOpts {
+        skip_patterns: vec!["CUSTOM_NOISE".to_string()],
+        ..ImportOpts::default()
+    };
+    let reader = JsonlReader;
+    let engine = ImportEngine::new(store.clone(), opts);
+
+    let result = engine.run(&reader, file.path()).await.unwrap();
+
+    assert_eq!(result.total, 2, "Should read 2 chunks");
+    assert_eq!(result.filtered, 1, "Custom noise pattern should filter 1 chunk");
+    assert_eq!(result.imported, 1, "Only the signal memory should be imported");
+}
+
+/// Filtered items persistence: noise-filtered items are saved to filtered.jsonl.
+#[test]
+fn test_filtered_item_roundtrip() {
+    use memcp::import::checkpoint::{FilteredItem, load_filtered};
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+
+    // Append a filtered item.
+    let item = FilteredItem {
+        id: "test-uuid-1234-5678".to_string(),
+        content: "This content was filtered by the noise filter at import time".to_string(),
+        reason: "noise:HEARTBEAT_OK".to_string(),
+        source: "openclaw".to_string(),
+        tags: vec!["imported".to_string()],
+        type_hint: Some("observation".to_string()),
+        created_at: None,
+        rescued: false,
+    };
+
+    FilteredItem::append(dir.path(), &item).unwrap();
+
+    // Load and verify round-trip.
+    let loaded = load_filtered(dir.path());
+    assert_eq!(loaded.len(), 1, "Should load 1 filtered item");
+    assert_eq!(loaded[0].id, item.id);
+    assert_eq!(loaded[0].content, item.content);
+    assert_eq!(loaded[0].reason, item.reason);
+    assert!(!loaded[0].rescued, "Item should not be rescued initially");
+}
+
+/// Rescue marking: save_filtered correctly marks items as rescued.
+#[test]
+fn test_rescue_marks_item_as_rescued() {
+    use memcp::import::checkpoint::{FilteredItem, load_filtered, save_filtered};
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+
+    let item1 = FilteredItem {
+        id: "aaaabbbb-0000-0000-0000-000000000001".to_string(),
+        content: "First item that was filtered during import and should be rescuable here".to_string(),
+        reason: "noise:too-short-actually-no".to_string(),
+        source: "jsonl".to_string(),
+        tags: vec![],
+        type_hint: None,
+        created_at: None,
+        rescued: false,
+    };
+
+    let item2 = FilteredItem {
+        id: "aaaabbbb-0000-0000-0000-000000000002".to_string(),
+        content: "Second item that was filtered and should remain unrescued in the file".to_string(),
+        reason: "llm:skip".to_string(),
+        source: "chatgpt".to_string(),
+        tags: vec![],
+        type_hint: None,
+        created_at: None,
+        rescued: false,
+    };
+
+    FilteredItem::append(dir.path(), &item1).unwrap();
+    FilteredItem::append(dir.path(), &item2).unwrap();
+
+    // Mark item1 as rescued.
+    let mut items = load_filtered(dir.path());
+    assert_eq!(items.len(), 2, "Should have 2 filtered items");
+    items[0].rescued = true;
+    save_filtered(dir.path(), &items).unwrap();
+
+    // Reload and verify.
+    let reloaded = load_filtered(dir.path());
+    assert_eq!(reloaded.len(), 2, "Both items should persist in file");
+    assert!(reloaded[0].rescued, "First item should be marked rescued");
+    assert!(!reloaded[1].rescued, "Second item should not be rescued");
+}
+
+/// find_latest_import_dir test: returns most recent directory by name.
+#[test]
+fn test_find_latest_import_dir_empty() {
+    use memcp::import::checkpoint::find_latest_import_dir;
+
+    // This test doesn't modify ~/.memcp/imports/ — it just ensures the function doesn't panic
+    // when no imports have been run. Result is either None or a valid path.
+    let result = find_latest_import_dir();
+    // Either None (no runs) or Some(path) — either is valid.
+    if let Some(path) = result {
+        assert!(path.is_dir(), "find_latest_import_dir must return an existing directory");
+    }
+}

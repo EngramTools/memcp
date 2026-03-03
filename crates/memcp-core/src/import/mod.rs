@@ -61,6 +61,10 @@ pub struct ImportOpts {
     pub dry_run: bool,
     pub curate: bool,
     pub skip_patterns: Vec<String>,
+    /// If set, route batch inserts through HTTP API instead of direct Postgres.
+    /// Reads local files, processes locally, POSTs to /v1/store on the remote.
+    /// NOTE: Remote import does not transfer embeddings — daemon re-embeds on the remote side.
+    pub remote_url: Option<String>,
 }
 
 impl Default for ImportOpts {
@@ -74,6 +78,7 @@ impl Default for ImportOpts {
             dry_run: false,
             curate: false,
             skip_patterns: vec![],
+            remote_url: None,
         }
     }
 }
@@ -342,11 +347,17 @@ impl ImportEngine {
         }
 
         // Step 4: Batch-level dedup (within this import) + store-level dedup.
+        // In remote mode, we skip store-level dedup (can't query remote DB directly).
         let pool = self.store.pool();
         let all_hashes: Vec<String> = survivors.iter()
             .map(|c| dedup::normalized_hash(&c.content))
             .collect();
-        let existing_hashes = dedup::check_existing(pool, &all_hashes).await?;
+        let existing_hashes = if self.opts.remote_url.is_some() {
+            // Remote mode: skip DB dedup query — remote daemon handles its own dedup.
+            std::collections::HashSet::new()
+        } else {
+            dedup::check_existing(pool, &all_hashes).await?
+        };
         let mut batch_seen: HashSet<String> = HashSet::new();
 
         let mut deduped = Vec::new();
@@ -376,7 +387,7 @@ impl ImportEngine {
         );
         pb.set_message(result.filtered.to_string());
 
-        // Step 6: Process each batch.
+        // Step 6: Process each batch — local DB insert or remote HTTP dispatch.
         for (batch_idx, batch) in batches.iter().enumerate() {
             // Skip already-completed batches if resuming.
             if batch_idx < resume_from_batch {
@@ -384,22 +395,66 @@ impl ImportEngine {
                 continue;
             }
 
-            let batch_result = batch::batch_insert_memories(pool, batch, &self.opts).await;
-            match batch_result {
-                Ok(br) => {
-                    result.imported += br.inserted;
-                    result.skipped_dedup += br.skipped;
-                    pb.inc(batch.len() as u64);
+            if let Some(ref remote_url) = self.opts.remote_url {
+                // Remote mode: POST each item to /v1/store on the remote daemon.
+                // NOTE: embeddings are not transferred — remote daemon re-embeds from content.
+                let mut batch_inserted = 0;
+                for chunk in batch {
+                    // Build tags: chunk tags + CLI tags + imported auto-tags.
+                    let mut tags = chunk.tags.clone();
+                    tags.extend(self.opts.tags.iter().cloned());
+                    if !tags.iter().any(|t| t == "imported") {
+                        tags.push("imported".to_string());
+                    }
+                    let source_tag = format!("imported:{}", chunk.source.trim_start_matches("imported:"));
+                    if !tags.contains(&source_tag) {
+                        tags.push(source_tag);
+                    }
+                    tags.sort();
+                    tags.dedup();
+
+                    let body = serde_json::json!({
+                        "content": chunk.content,
+                        "type_hint": chunk.type_hint.as_deref().unwrap_or("fact"),
+                        "source": chunk.source,
+                        "tags": tags,
+                        "workspace": self.opts.project.as_deref()
+                            .or(chunk.workspace.as_deref()),
+                    });
+
+                    match crate::cli::dispatch_remote(remote_url, "store", body).await {
+                        Ok(_) => batch_inserted += 1,
+                        Err(e) => {
+                            warn!("Remote store failed for chunk: {}", e);
+                            result.failed += 1;
+                            result.errors.push(ImportError {
+                                content_preview: chunk.content.chars().take(100).collect(),
+                                reason: format!("remote store failed: {}", e),
+                            });
+                        }
+                    }
                 }
-                Err(e) => {
-                    warn!("Batch {} failed: {}", batch_idx, e);
-                    // Record each item in the batch as failed.
-                    for chunk in batch {
-                        result.failed += 1;
-                        result.errors.push(ImportError {
-                            content_preview: chunk.content.chars().take(100).collect(),
-                            reason: e.to_string(),
-                        });
+                result.imported += batch_inserted;
+                pb.inc(batch.len() as u64);
+            } else {
+                // Local mode: direct Postgres batch insert.
+                let batch_result = batch::batch_insert_memories(pool, batch, &self.opts).await;
+                match batch_result {
+                    Ok(br) => {
+                        result.imported += br.inserted;
+                        result.skipped_dedup += br.skipped;
+                        pb.inc(batch.len() as u64);
+                    }
+                    Err(e) => {
+                        warn!("Batch {} failed: {}", batch_idx, e);
+                        // Record each item in the batch as failed.
+                        for chunk in batch {
+                            result.failed += 1;
+                            result.errors.push(ImportError {
+                                content_preview: chunk.content.chars().take(100).collect(),
+                                reason: e.to_string(),
+                            });
+                        }
                     }
                 }
             }

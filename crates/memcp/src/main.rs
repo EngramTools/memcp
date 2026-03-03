@@ -28,7 +28,6 @@ use memcp::import::claude_ai::ClaudeAiReader;
 use memcp::import::markdown::MarkdownReader;
 use memcp::import::curate::ImportCurator;
 use memcp::import::checkpoint::{find_latest_import_dir, load_filtered, save_filtered};
-use memcp::import::batch::batch_insert_memories;
 use rmcp::ServiceExt;
 
 #[derive(Parser)]
@@ -1003,15 +1002,18 @@ async fn main() -> Result<()> {
                         None
                     };
 
+                    let mut skip_patterns = skip_pattern.unwrap_or_default();
+                    skip_patterns.extend(config.import.noise_patterns.iter().cloned());
                     let opts = ImportOpts {
-                        project,
+                        project: project.or_else(|| config.import.default_project.clone()),
                         tags: tags.unwrap_or_default(),
                         skip_embeddings,
                         batch_size,
                         since: since_dt,
                         dry_run,
                         curate: false,
-                        skip_patterns: skip_pattern.unwrap_or_default(),
+                        skip_patterns,
+                        remote_url: cli.remote.clone(),
                     };
 
                     let reader = JsonlReader;
@@ -1053,15 +1055,18 @@ async fn main() -> Result<()> {
                                 ))?
                         }
                     };
+                    let mut skip_patterns = skip_pattern.unwrap_or_default();
+                    skip_patterns.extend(config.import.noise_patterns.iter().cloned());
                     let opts = ImportOpts {
-                        project,
+                        project: project.or_else(|| config.import.default_project.clone()),
                         tags: tags.unwrap_or_default(),
                         skip_embeddings,
                         batch_size,
                         since: since_dt,
                         dry_run,
                         curate: false,
-                        skip_patterns: skip_pattern.unwrap_or_default(),
+                        skip_patterns,
+                        remote_url: cli.remote.clone(),
                     };
                     let engine = ImportEngine::new(store, opts);
                     let result = engine.run(&reader, &import_path).await?;
@@ -1095,15 +1100,18 @@ async fn main() -> Result<()> {
                                 ))?
                         }
                     };
+                    let mut skip_patterns = skip_pattern.unwrap_or_default();
+                    skip_patterns.extend(config.import.noise_patterns.iter().cloned());
                     let opts = ImportOpts {
-                        project,
+                        project: project.or_else(|| config.import.default_project.clone()),
                         tags: tags.unwrap_or_default(),
                         skip_embeddings,
                         batch_size,
                         since: since_dt,
                         dry_run,
                         curate: false,
-                        skip_patterns: skip_pattern.unwrap_or_default(),
+                        skip_patterns,
+                        remote_url: cli.remote.clone(),
                     };
                     let engine = ImportEngine::new(store, opts);
                     let result = engine.run(&reader, &import_path).await?;
@@ -1123,15 +1131,18 @@ async fn main() -> Result<()> {
                 } => {
                     let store = cli::connect_store(&config, cli.skip_migrate).await?;
                     let since_dt = parse_since(since.as_deref())?;
+                    let mut skip_patterns = skip_pattern.unwrap_or_default();
+                    skip_patterns.extend(config.import.noise_patterns.iter().cloned());
                     let opts = ImportOpts {
-                        project,
+                        project: project.or_else(|| config.import.default_project.clone()),
                         tags: tags.unwrap_or_default(),
                         skip_embeddings,
                         batch_size,
                         since: since_dt,
                         dry_run,
                         curate,
-                        skip_patterns: skip_pattern.unwrap_or_default(),
+                        skip_patterns,
+                        remote_url: cli.remote.clone(),
                     };
                     let curator = if curate { ImportCurator::new(&config) } else { None };
                     let reader = ChatGptReader;
@@ -1153,15 +1164,18 @@ async fn main() -> Result<()> {
                 } => {
                     let store = cli::connect_store(&config, cli.skip_migrate).await?;
                     let since_dt = parse_since(since.as_deref())?;
+                    let mut skip_patterns = skip_pattern.unwrap_or_default();
+                    skip_patterns.extend(config.import.noise_patterns.iter().cloned());
                     let opts = ImportOpts {
-                        project,
+                        project: project.or_else(|| config.import.default_project.clone()),
                         tags: tags.unwrap_or_default(),
                         skip_embeddings,
                         batch_size,
                         since: since_dt,
                         dry_run,
                         curate,
-                        skip_patterns: skip_pattern.unwrap_or_default(),
+                        skip_patterns,
+                        remote_url: cli.remote.clone(),
                     };
                     let curator = if curate { ImportCurator::new(&config) } else { None };
                     let reader = ClaudeAiReader;
@@ -1183,15 +1197,18 @@ async fn main() -> Result<()> {
                 } => {
                     let store = cli::connect_store(&config, cli.skip_migrate).await?;
                     let since_dt = parse_since(since.as_deref())?;
+                    let mut skip_patterns = skip_pattern.unwrap_or_default();
+                    skip_patterns.extend(config.import.noise_patterns.iter().cloned());
                     let opts = ImportOpts {
-                        project,
+                        project: project.or_else(|| config.import.default_project.clone()),
                         tags: tags.unwrap_or_default(),
                         skip_embeddings,
                         batch_size,
                         since: since_dt,
                         dry_run,
                         curate,
-                        skip_patterns: skip_pattern.unwrap_or_default(),
+                        skip_patterns,
+                        remote_url: cli.remote.clone(),
                     };
                     let curator = if curate { ImportCurator::new(&config) } else { None };
                     let reader = MarkdownReader;
@@ -1294,7 +1311,7 @@ async fn main() -> Result<()> {
                         .collect();
 
                     let opts = ImportOpts {
-                        project: None,
+                        project: config.import.default_project.clone(),
                         tags: vec![],
                         skip_embeddings: false,
                         batch_size: chunks.len().max(1),
@@ -1302,13 +1319,37 @@ async fn main() -> Result<()> {
                         dry_run: false,
                         curate: false,
                         skip_patterns: vec![],
+                        remote_url: cli.remote.clone(),
                     };
 
-                    let rescued_count = if !chunks.is_empty() {
+                    let rescued_count = if chunks.is_empty() {
+                        0
+                    } else if let Some(ref remote_url) = cli.remote {
+                        // Remote rescue: POST each item to the remote daemon.
+                        let mut count = 0;
+                        for chunk in &chunks {
+                            let mut tags = chunk.tags.clone();
+                            if !tags.iter().any(|t| t == "imported") { tags.push("imported".to_string()); }
+                            tags.push("rescued".to_string());
+                            tags.sort();
+                            tags.dedup();
+                            let body = serde_json::json!({
+                                "content": chunk.content,
+                                "type_hint": chunk.type_hint.as_deref().unwrap_or("fact"),
+                                "source": chunk.source,
+                                "tags": tags,
+                                "workspace": opts.project.as_deref(),
+                            });
+                            match cli::dispatch_remote(remote_url, "store", body).await {
+                                Ok(_) => count += 1,
+                                Err(e) => eprintln!("Warning: remote rescue store failed: {}", e),
+                            }
+                        }
+                        count
+                    } else {
+                        use memcp::import::batch::batch_insert_memories;
                         let result = batch_insert_memories(pool, &chunks, &opts).await?;
                         result.inserted
-                    } else {
-                        0
                     };
 
                     // Mark rescued items in filtered.jsonl.
