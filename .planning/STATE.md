@@ -8,26 +8,30 @@ progress:
   total_phases: 43
   completed_phases: 18
   total_plans: 90
-  completed_plans: 59
+  completed_plans: 60
 ---
 
 # Project State
 
 ## Current Phase
-Phase 15-import-migration — Plans 01-04 complete, Plan 05+ pending
+Phase 15-import-migration — All 5 plans complete
 
-Progress: [█████████████░░░░░░░] 59/90 plans (66%)
+Progress: [█████████████░░░░░░░] 60/90 plans (67%)
 
 ## Active Context
-- Last completed: Phase 15-04 ChatGPT/Claude.ai/Markdown readers + Tier 2 curation (2026-03-03)
-- ChatGptReader, ClaudeAiReader, MarkdownReader, ImportCurator in crates/memcp-core/src/import/
-- memcp import chatgpt/claude/markdown CLI commands all working with --curate, --dry-run, --project, --tags
-- 81 import unit tests passing
+- Last completed: Phase 15-05 Review/Rescue + Remote Import + ImportConfig (2026-03-03)
+- FilteredItem persistence to filtered.jsonl during import pipeline noise filtering
+- memcp import review --last, memcp import rescue <id>, memcp import rescue --all wired
+- --remote flag routes import batch inserts via dispatch_remote to HTTP API
+- ImportConfig in config.rs with noise_patterns, batch_size, default_project
+- 11 import integration tests passing
+- Phase 15-04: ChatGptReader, ClaudeAiReader, MarkdownReader, ImportCurator all working
+- 81 import unit tests passing (in addition to 11 integration tests)
 - Tier 2 curation reuses SummarizationProvider (no new config)
 - Plan 03 Openclaw/ClaudeCode CLI match arms also wired in this plan
 - Plan 03 SUMMARY added: OpenClawReader (3830 SQLite chunks, updated_at INTEGER ms fix), ClaudeCodeReader (MEMORY.md section chunking), discover_all_sources
 - Last session: 2026-03-03
-- Stopped at: Phase 15-04 complete
+- Stopped at: Phase 15-05 complete
 
 ## Project Reference
 
@@ -38,10 +42,18 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 
 ## Session Continuity
 Last session: 2026-03-03
-Stopped at: Phase 15-03 complete (OpenClaw + Claude Code readers with embedded reuse and section chunking)
+Stopped at: Phase 15-05 complete (Review/Rescue + Remote Import + ImportConfig — Phase 15 fully complete)
 Resume file: None
 
 ## Accumulated Context
+
+### Phase 15-05 Decisions
+- Phase 15-05: FilteredItem appended to filtered.jsonl per-item (not batched) — simpler, atomicity not needed for audit log
+- Phase 15-05: Remote mode skips store-level dedup — remote daemon handles its own dedup on ingest
+- Phase 15-05: ImportConfig.batch_size sets default for opts construction; CLI --batch-size always wins (clap default_value)
+- Phase 15-05: find_latest_import_dir sorts by directory name descending — timestamp in dir name ensures lexicographic = chronological
+- Phase 15-05: LLM-skipped items (CurationAction::Skip) also persisted to filtered.jsonl with reason=llm:skip
+- Phase 15-05: NoiseFilter::patterns() accessor added to expose patterns for reason string construction in mod.rs
 
 ### Phase 15-03 Decisions
 - Phase 15-03: OpenClaw updated_at is INTEGER milliseconds since epoch (not ISO 8601 string) — DateTime::from_timestamp(ms/1000, ns) is the correct parse; row.get::<Option<String>> silently returns None for INTEGER columns
