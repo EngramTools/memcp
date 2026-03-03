@@ -17,8 +17,9 @@ pub mod export;
 pub mod openclaw;
 pub mod chatgpt;
 pub mod claude_ai;
+pub mod claude_code;
 pub mod markdown;
-// claude_code reader in a later plan
+pub mod curate;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,7 +32,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use crate::config::EmbeddingConfig;
 use crate::storage::store::postgres::PostgresMemoryStore;
+use crate::import::curate::{CurationAction, ImportCurator};
 
 /// A single chunk of content to be imported.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,12 +156,20 @@ pub struct ImportEngine {
     /// are merged in `run()` via `NoiseFilter::new_with_source_patterns()`.
     _noise_filter: noise::NoiseFilter,
     opts: ImportOpts,
+    /// Optional Tier 2 LLM triage. None when --curate not requested or no provider configured.
+    curator: Option<ImportCurator>,
 }
 
 impl ImportEngine {
     pub fn new(store: Arc<PostgresMemoryStore>, opts: ImportOpts) -> Self {
         let _noise_filter = noise::NoiseFilter::new(&opts.skip_patterns);
-        Self { store, _noise_filter, opts }
+        Self { store, _noise_filter, opts, curator: None }
+    }
+
+    /// Attach a Tier 2 LLM curator for use when `opts.curate` is true.
+    pub fn with_curator(mut self, curator: Option<ImportCurator>) -> Self {
+        self.curator = curator;
+        self
     }
 
     /// Run the full import pipeline: read → filter → dedup → batch insert → checkpoint → report.
@@ -211,6 +222,76 @@ impl ImportEngine {
                 survivors.push(chunk);
             }
         }
+
+        // Step 3.5: Tier 2 LLM curation (only when --curate and curator available).
+        let survivors = if self.opts.curate {
+            match &self.curator {
+                Some(curator) => {
+                    let source_kind = source.source_kind();
+                    let is_conversation_source = matches!(
+                        source_kind,
+                        ImportSourceKind::ChatGpt | ImportSourceKind::ClaudeAi
+                    );
+
+                    if is_conversation_source {
+                        // Conversation sources: summarize each full conversation into one memory.
+                        let mut curated = Vec::new();
+                        for mut chunk in survivors {
+                            // Extract title from content header line (# Title).
+                            let title = chunk.content.lines().next()
+                                .map(|l| l.trim_start_matches('#').trim().to_string())
+                                .unwrap_or_else(|| "Untitled".to_string());
+                            match curator.summarize_conversation(&chunk.content, &title).await {
+                                Ok(summary) => {
+                                    chunk.content = summary;
+                                    chunk.type_hint = Some("observation".to_string());
+                                    curated.push(chunk);
+                                }
+                                Err(e) => {
+                                    warn!("Conversation summarization failed: {} — storing raw", e);
+                                    curated.push(chunk);
+                                }
+                            }
+                        }
+                        curated
+                    } else {
+                        // Other sources: classify chunks, apply keep/skip/merge decisions.
+                        let decisions = match curator.classify_batch(&survivors).await {
+                            Ok(d) => d,
+                            Err(e) => {
+                                warn!("Curation classify_batch failed: {} — keeping all chunks", e);
+                                vec![curate::CurationDecision::default(); survivors.len()]
+                            }
+                        };
+
+                        survivors.into_iter().zip(decisions.into_iter())
+                            .filter_map(|(mut chunk, decision)| {
+                                match decision.action {
+                                    CurationAction::Skip => {
+                                        result.filtered += 1;
+                                        None
+                                    }
+                                    CurationAction::Keep | CurationAction::Merge => {
+                                        // Update type_hint if LLM provided one and chunk has none.
+                                        if chunk.type_hint.is_none() {
+                                            chunk.type_hint = Some(decision.type_hint);
+                                        }
+                                        Some(chunk)
+                                    }
+                                }
+                            })
+                            .collect()
+                    }
+                }
+                None => {
+                    // --curate requested but no provider configured: warn and continue without.
+                    eprintln!("Warning: LLM provider not configured — skipping Tier 2 curation");
+                    survivors
+                }
+            }
+        } else {
+            survivors
+        };
 
         // Dry-run: show what would be imported and return.
         if self.opts.dry_run {
@@ -327,4 +408,47 @@ impl ImportEngine {
 
         Ok(result)
     }
+}
+
+/// Discover all locally-available import sources.
+///
+/// Runs discovery for each local source (OpenClaw, Claude Code) and collects results.
+/// Also returns static entries for non-local sources (ChatGPT, Claude.ai) with
+/// export instructions.
+pub async fn discover_all_sources(embedding_config: &EmbeddingConfig) -> Vec<DiscoveredSource> {
+    let mut sources = Vec::new();
+
+    // OpenClaw — auto-discovered from ~/.openclaw/memory/*.sqlite
+    let openclaw_reader = openclaw::OpenClawReader::new(None, embedding_config);
+    match openclaw_reader.discover().await {
+        Ok(discovered) => sources.extend(discovered),
+        Err(e) => warn!("OpenClaw discovery failed: {}", e),
+    }
+
+    // Claude Code — auto-discovered from ~/.claude/
+    let claude_code_reader = claude_code::ClaudeCodeReader::new(false);
+    match claude_code_reader.discover().await {
+        Ok(discovered) => sources.extend(discovered),
+        Err(e) => warn!("Claude Code discovery failed: {}", e),
+    }
+
+    // Non-local sources: provide export instructions as static entries.
+    // These cannot be auto-discovered but the user can export and import manually.
+    let non_local = vec![
+        DiscoveredSource {
+            path: PathBuf::from("chatgpt-export.zip"),
+            source_type: "chatgpt".to_string(),
+            item_count: 0,
+            description: "ChatGPT: export at Settings > Data Controls > Export Data (ZIP via email)".to_string(),
+        },
+        DiscoveredSource {
+            path: PathBuf::from("claude-ai-export.zip"),
+            source_type: "claude-ai".to_string(),
+            item_count: 0,
+            description: "Claude.ai: export at Settings > Export Data (ZIP download)".to_string(),
+        },
+    ];
+    sources.extend(non_local);
+
+    sources
 }
