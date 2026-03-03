@@ -2,27 +2,28 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-last_updated: "2026-03-02T18:30:00.000Z"
+status: active
+last_updated: "2026-03-03T00:00:00.000Z"
 progress:
-  total_phases: 41
-  completed_phases: 17
-  total_plans: 88
-  completed_plans: 57
+  total_phases: 43
+  completed_phases: 18
+  total_plans: 90
+  completed_plans: 58
 ---
 
 # Project State
 
 ## Current Phase
-Phase 08.12-http-api-remote-daemon — Plan 02 complete, Plan 03+ pending
+Phase 15-import-migration — Plan 01 complete, Plan 02+ pending
 
-Progress: [█████████████░░░░░░░] 57/88 plans (65%)
+Progress: [█████████████░░░░░░░] 58/90 plans (64%)
 
 ## Active Context
-- Last completed: Phase 08.12-02 CLI remote mode (2026-03-02)
-- REST API /v1/* routes live on port 9090 alongside /health and /status
-- AppState expands HealthState with config + embed_provider + embed_sender
-- 15 api_test integration tests passing (11 Plan 01 + 4 dispatch_remote)
+- Last completed: Phase 15-01 Import infrastructure + JSONL reader (2026-03-03)
+- ImportSource trait, ImportEngine pipeline (noise → dedup → batch INSERT) in crates/memcp-core/src/import/
+- `memcp import jsonl <path>` CLI command working end-to-end with --dry-run, --project, --tags
+- 25 import tests passing (19 unit + 6 integration)
+- Dependencies added: rusqlite, zip, sha2 (memcp-core); chrono (memcp-bin)
 - --remote <url> / MEMCP_URL routes recall/search/store/annotate/update through HTTP
 - Last session: 2026-03-02
 - Stopped at: Phase 08.12-02 complete
@@ -35,11 +36,18 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 **Current focus:** Phase 09 — Documentation
 
 ## Session Continuity
-Last session: 2026-03-02
-Stopped at: Phase 08.12-02 complete (CLI remote mode)
+Last session: 2026-03-03
+Stopped at: Phase 15-01 complete (import infrastructure + JSONL reader)
 Resume file: None
 
 ## Accumulated Context
+
+### Phase 15-01 Decisions
+- Phase 15-01: import_dir() uses UUID 8-char suffix + timestamp — prevents same-second collision in checkpoint paths (found during dedup test)
+- Phase 15-01: check_existing() fetches raw content from DB (no normalized_hash column), computes SHA-256 on fly — acceptable for one-time import; future optimization: add column
+- Phase 15-01: ImportEngine stores _noise_filter (unused, prefixed _) — kept for future OpenClaw/ClaudeCode integration that needs source-level noise config at construction
+- Phase 15-01: batch_insert_memories uses single tx per batch, ON CONFLICT DO NOTHING on id — atomicity + safety net; embedding insert failure is non-fatal (falls back to pending status)
+- Phase 15-01: todo!() for Discover/Review/Rescue ImportAction — Plan 05 implements these
 
 ### Phase 08.12 Decisions
 - Phase 08.12-02: dispatch_remote() is single pub async fn in cli.rs — one function handles all 5 data commands via POST to /v1/{command}
