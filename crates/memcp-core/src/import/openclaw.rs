@@ -34,7 +34,8 @@ struct ChunkRow {
     path: String,
     embedding: Option<String>,
     model: Option<String>,
-    updated_at: Option<String>,
+    /// updated_at as milliseconds since Unix epoch (INTEGER in OpenClaw SQLite).
+    updated_at_ms: Option<i64>,
 }
 
 /// Reads memories from OpenClaw SQLite databases.
@@ -219,7 +220,8 @@ impl ImportSource for OpenClawReader {
                     path: row.get(3)?,
                     embedding: row.get(4)?,
                     model: row.get(5)?,
-                    updated_at: row.get(6)?,
+                    // updated_at is INTEGER (ms since epoch) in OpenClaw SQLite.
+                    updated_at_ms: row.get(6).ok(),
                 })
             })
             .with_context(|| "Failed to query OpenClaw chunks")?
@@ -235,17 +237,11 @@ impl ImportSource for OpenClawReader {
             let mut import_chunks = Vec::with_capacity(rows.len());
 
             for row in rows {
-                // Parse created_at from updated_at field.
-                let created_at = row.updated_at.as_deref().and_then(|s| {
-                    DateTime::parse_from_rfc3339(s)
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .ok()
-                        .or_else(|| {
-                            // Try without timezone suffix.
-                            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
-                                .ok()
-                                .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc))
-                        })
+                // Parse created_at from updated_at_ms (milliseconds since Unix epoch).
+                let created_at = row.updated_at_ms.and_then(|ms| {
+                    let secs = ms / 1000;
+                    let nsecs = ((ms % 1000) * 1_000_000) as u32;
+                    DateTime::from_timestamp(secs, nsecs)
                 });
 
                 // Apply --since filter.
