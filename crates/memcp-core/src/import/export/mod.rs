@@ -167,6 +167,26 @@ impl ExportEngine {
         Ok(count)
     }
 
+    /// Run the export pipeline writing to an arbitrary writer.
+    ///
+    /// Used by the HTTP export endpoint to write directly to a response buffer.
+    /// Returns the number of memories exported.
+    pub async fn run_to_writer<W: std::io::Write>(&self, writer: &mut W, opts: &ExportOpts) -> Result<usize> {
+        let pool = self.store.pool();
+        let memories = self.fetch_memories(pool, opts).await?;
+        let count = memories.len();
+
+        info!(count = count, format = ?opts.format, "Exporting memories to writer");
+
+        match opts.format {
+            ExportFormat::Jsonl => jsonl::write_jsonl(writer, &memories, opts)?,
+            ExportFormat::Csv => csv::write_csv(writer, &memories, opts)?,
+            ExportFormat::Markdown => markdown::write_markdown(writer, &memories, opts)?,
+        }
+
+        Ok(count)
+    }
+
     /// Query memories from Postgres with optional filters.
     async fn fetch_memories(
         &self,

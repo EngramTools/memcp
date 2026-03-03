@@ -266,6 +266,49 @@ pub async fn dispatch_remote(
     Ok(json)
 }
 
+/// Send a GET request to a remote memcp daemon and return the raw response body.
+///
+/// Used by `memcp export --remote` to fetch exported data from a hosted instance.
+/// Unlike `dispatch_remote` which expects JSON, this returns raw bytes as a String
+/// (the export data in the requested format: jsonl, csv, or markdown).
+pub async fn dispatch_remote_get(
+    base_url: &str,
+    command: &str,
+    params: &[(&str, String)],
+) -> Result<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()?;
+    let url = format!("{}/v1/{}", base_url.trim_end_matches('/'), command);
+
+    let mut req = client.get(&url);
+    for (key, value) in params {
+        req = req.query(&[(key, value)]);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Remote GET request to {} failed: {}", url, e))?;
+
+    let status = resp.status();
+    let body_text = resp
+        .text()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read remote response: {}", e))?;
+
+    if !status.is_success() {
+        // Try to parse an error message from JSON.
+        let msg = serde_json::from_str::<serde_json::Value>(&body_text)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(|s| s.to_string()))
+            .unwrap_or_else(|| body_text.clone());
+        anyhow::bail!("Remote memcp error ({}): {}", status.as_u16(), msg);
+    }
+
+    Ok(body_text)
+}
+
 // ---------------------------------------------------------------------------
 // Subcommand handlers
 // ---------------------------------------------------------------------------
