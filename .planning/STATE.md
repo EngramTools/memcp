@@ -25,6 +25,7 @@ Progress: [█████████████░░░░░░░] 59/90 p
 - 81 import unit tests passing
 - Tier 2 curation reuses SummarizationProvider (no new config)
 - Plan 03 Openclaw/ClaudeCode CLI match arms also wired in this plan
+- Plan 03 SUMMARY added: OpenClawReader (3830 SQLite chunks, updated_at INTEGER ms fix), ClaudeCodeReader (MEMORY.md section chunking), discover_all_sources
 - Last session: 2026-03-03
 - Stopped at: Phase 15-04 complete
 
@@ -37,10 +38,17 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 
 ## Session Continuity
 Last session: 2026-03-03
-Stopped at: Phase 15-02 complete (export pipeline — JSONL/CSV/Markdown formatters + CLI)
+Stopped at: Phase 15-03 complete (OpenClaw + Claude Code readers with embedded reuse and section chunking)
 Resume file: None
 
 ## Accumulated Context
+
+### Phase 15-03 Decisions
+- Phase 15-03: OpenClaw updated_at is INTEGER milliseconds since epoch (not ISO 8601 string) — DateTime::from_timestamp(ms/1000, ns) is the correct parse; row.get::<Option<String>> silently returns None for INTEGER columns
+- Phase 15-03: Embedding reuse gated on model name AND dimension — both must match or chunk gets embedding_status=pending (conservative to avoid cross-model incompatibility)
+- Phase 15-03: MEMORY.md section chunking uses manual header split (# and ##) not sentence-based chunking — preserves semantic structure of user-curated knowledge
+- Phase 15-03: Agent name from sessions/{agent}/date path; memory/ sources fall back to SQLite filename stem (e.g., "main" from main.sqlite)
+- Phase 15-03: discover_all_sources includes static non-local entries (ChatGPT, Claude.ai) with export instructions alongside real discovered sources
 
 ### Phase 15-02 Decisions
 - Phase 15-02: ExportableMemory flat struct (not trait) — formatters receive plain slice, no dispatch overhead
