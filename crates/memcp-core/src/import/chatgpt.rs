@@ -354,8 +354,10 @@ mod tests {
 
     #[test]
     fn test_sanitize_tag() {
-        assert_eq!(sanitize_tag("Hello World!"), "hello-world-");
+        // Trailing punctuation is trimmed (trim_matches('-') removes boundary dashes).
+        assert_eq!(sanitize_tag("Hello World!"), "hello-world");
         assert_eq!(sanitize_tag("Rust Programming"), "rust-programming");
+        // Interior non-alphanumeric chars become dashes.
         assert_eq!(sanitize_tag("AI & ML"), "ai---ml");
     }
 
