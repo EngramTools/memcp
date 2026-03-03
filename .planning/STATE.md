@@ -8,25 +8,25 @@ progress:
   total_phases: 43
   completed_phases: 18
   total_plans: 90
-  completed_plans: 58
+  completed_plans: 59
 ---
 
 # Project State
 
 ## Current Phase
-Phase 15-import-migration — Plan 01 complete, Plan 02+ pending
+Phase 15-import-migration — Plans 01-04 complete, Plan 05+ pending
 
-Progress: [█████████████░░░░░░░] 58/90 plans (64%)
+Progress: [█████████████░░░░░░░] 59/90 plans (66%)
 
 ## Active Context
-- Last completed: Phase 15-01 Import infrastructure + JSONL reader (2026-03-03)
-- ImportSource trait, ImportEngine pipeline (noise → dedup → batch INSERT) in crates/memcp-core/src/import/
-- `memcp import jsonl <path>` CLI command working end-to-end with --dry-run, --project, --tags
-- 25 import tests passing (19 unit + 6 integration)
-- Dependencies added: rusqlite, zip, sha2 (memcp-core); chrono (memcp-bin)
-- --remote <url> / MEMCP_URL routes recall/search/store/annotate/update through HTTP
-- Last session: 2026-03-02
-- Stopped at: Phase 08.12-02 complete
+- Last completed: Phase 15-04 ChatGPT/Claude.ai/Markdown readers + Tier 2 curation (2026-03-03)
+- ChatGptReader, ClaudeAiReader, MarkdownReader, ImportCurator in crates/memcp-core/src/import/
+- memcp import chatgpt/claude/markdown CLI commands all working with --curate, --dry-run, --project, --tags
+- 81 import unit tests passing
+- Tier 2 curation reuses SummarizationProvider (no new config)
+- Plan 03 Openclaw/ClaudeCode CLI match arms also wired in this plan
+- Last session: 2026-03-03
+- Stopped at: Phase 15-04 complete
 
 ## Project Reference
 
@@ -37,10 +37,19 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 
 ## Session Continuity
 Last session: 2026-03-03
-Stopped at: Phase 15-01 complete (import infrastructure + JSONL reader)
+Stopped at: Phase 15-04 complete (ChatGPT/Claude.ai/Markdown readers + Tier 2 curation)
 Resume file: None
 
 ## Accumulated Context
+
+### Phase 15-04 Decisions
+- Phase 15-04: chunk_content() placed in chatgpt.rs as pub fn, shared via pub use by claude_ai and markdown — avoids separate util module
+- Phase 15-04: ClaudeAiReader handles both per-file and bulk conversations.json ZIP formats — iterates all .json entries, detects format by filename
+- Phase 15-04: ImportCurator::new() returns Option<Self> — None when no provider configured, with tracing::warn; fail-open design
+- Phase 15-04: ImportEngine::with_curator() builder — curator field is None by default, set only when --curate requested
+- Phase 15-04: Tier 2 at step 3.5 (after noise filter, before dedup) — conversation sources use summarize_conversation(), others use classify_batch() via source_kind()
+- Phase 15-04: parse_since() helper at end of main.rs — eliminates repeated --since parsing boilerplate across 5 match arms
+- Phase 15-04: Openclaw/ClaudeCode CLI match arms wired in this plan (Plan 03 added enum variants but forgot match arms)
 
 ### Phase 15-01 Decisions
 - Phase 15-01: import_dir() uses UUID 8-char suffix + timestamp — prevents same-second collision in checkpoint paths (found during dedup test)
