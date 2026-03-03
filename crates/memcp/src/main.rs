@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::io::BufRead as _;
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,6 +29,7 @@ use memcp::import::claude_ai::ClaudeAiReader;
 use memcp::import::markdown::MarkdownReader;
 use memcp::import::curate::ImportCurator;
 use memcp::import::checkpoint::{find_latest_import_dir, load_filtered, save_filtered};
+use memcp::import::history::{ImportHistoryRecord, append_record, find_record, default_history_path};
 use rmcp::ServiceExt;
 
 #[derive(Parser)]
@@ -376,6 +378,9 @@ enum ImportAction {
         /// Additional noise patterns to filter (comma-separated substrings)
         #[arg(long, value_delimiter = ',')]
         skip_pattern: Option<Vec<String>>,
+        /// Disable Tier 1 noise filtering — import all chunks regardless of length or pattern
+        #[arg(long)]
+        no_filter: bool,
     },
     /// Import from OpenClaw SQLite database
     Openclaw {
@@ -405,6 +410,9 @@ enum ImportAction {
         /// Additional noise patterns to filter (comma-separated substrings)
         #[arg(long, value_delimiter = ',')]
         skip_pattern: Option<Vec<String>>,
+        /// Disable Tier 1 noise filtering — import all chunks regardless of length or pattern
+        #[arg(long)]
+        no_filter: bool,
     },
     /// Import from Claude Code MEMORY.md files
     ClaudeCode {
@@ -434,6 +442,9 @@ enum ImportAction {
         /// Additional noise patterns to filter (comma-separated substrings)
         #[arg(long, value_delimiter = ',')]
         skip_pattern: Option<Vec<String>>,
+        /// Disable Tier 1 noise filtering — import all chunks regardless of length or pattern
+        #[arg(long)]
+        no_filter: bool,
     },
     /// Import from ChatGPT export ZIP
     Chatgpt {
@@ -463,6 +474,9 @@ enum ImportAction {
         /// Additional noise patterns to filter (comma-separated substrings)
         #[arg(long, value_delimiter = ',')]
         skip_pattern: Option<Vec<String>>,
+        /// Disable Tier 1 noise filtering — import all chunks regardless of length or pattern
+        #[arg(long)]
+        no_filter: bool,
     },
     /// Import from Claude.ai export ZIP
     Claude {
@@ -492,6 +506,9 @@ enum ImportAction {
         /// Additional noise patterns to filter (comma-separated substrings)
         #[arg(long, value_delimiter = ',')]
         skip_pattern: Option<Vec<String>>,
+        /// Disable Tier 1 noise filtering — import all chunks regardless of length or pattern
+        #[arg(long)]
+        no_filter: bool,
     },
     /// Import from Markdown files or directory
     Markdown {
@@ -521,9 +538,16 @@ enum ImportAction {
         /// Additional noise patterns to filter (comma-separated substrings)
         #[arg(long, value_delimiter = ',')]
         skip_pattern: Option<Vec<String>>,
+        /// Disable Tier 1 noise filtering — import all chunks regardless of length or pattern
+        #[arg(long)]
+        no_filter: bool,
     },
     /// Auto-detect importable sources on this machine
-    Discover,
+    Discover {
+        /// Auto-accept all discovered sources without prompting
+        #[arg(long)]
+        yes: bool,
+    },
     /// Review what was filtered in the last import
     Review {
         /// Show results from the most recent import run
@@ -587,6 +611,28 @@ enum StatuslineAction {
     Install,
     /// Remove status line script
     Remove,
+}
+
+/// Print a compact import summary to stderr with per-source lines and actionable next steps.
+fn print_import_summary(results: &[(String, memcp::import::ImportResult)]) {
+    if results.is_empty() {
+        return;
+    }
+    eprintln!();
+    for (source, result) in results {
+        eprintln!(
+            "  {}: {} imported, {} noise filtered, {} duplicates skipped",
+            source, result.imported, result.filtered, result.skipped_dedup
+        );
+    }
+    eprintln!();
+
+    let total_imported: usize = results.iter().map(|r| r.1.imported).sum();
+    if total_imported > 0 {
+        eprintln!("Done! Your brain has {} new memories.", total_imported);
+        eprintln!("  -> Run `memcp search <query>` to try it");
+        eprintln!("  -> Run `memcp status` to check daemon health");
+    }
 }
 
 /// Create the extraction provider based on configuration.
@@ -988,6 +1034,7 @@ async fn main() -> Result<()> {
                     batch_size,
                     since,
                     skip_pattern,
+                    no_filter,
                 } => {
                     let store = cli::connect_store(&config, cli.skip_migrate).await?;
 
@@ -1014,6 +1061,7 @@ async fn main() -> Result<()> {
                         curate: false,
                         skip_patterns,
                         remote_url: cli.remote.clone(),
+                        no_filter,
                     };
 
                     let reader = JsonlReader;
@@ -1036,6 +1084,7 @@ async fn main() -> Result<()> {
                     batch_size,
                     since,
                     skip_pattern,
+                    no_filter,
                 } => {
                     let store = cli::connect_store(&config, cli.skip_migrate).await?;
                     let since_dt = if let Some(ref s) = since {
@@ -1067,6 +1116,7 @@ async fn main() -> Result<()> {
                         curate: false,
                         skip_patterns,
                         remote_url: cli.remote.clone(),
+                        no_filter,
                     };
                     let engine = ImportEngine::new(store, opts);
                     let result = engine.run(&reader, &import_path).await?;
@@ -1083,6 +1133,7 @@ async fn main() -> Result<()> {
                     batch_size,
                     since,
                     skip_pattern,
+                    no_filter,
                 } => {
                     let store = cli::connect_store(&config, cli.skip_migrate).await?;
                     let since_dt = if let Some(ref s) = since {
@@ -1112,6 +1163,7 @@ async fn main() -> Result<()> {
                         curate: false,
                         skip_patterns,
                         remote_url: cli.remote.clone(),
+                        no_filter,
                     };
                     let engine = ImportEngine::new(store, opts);
                     let result = engine.run(&reader, &import_path).await?;
@@ -1128,6 +1180,7 @@ async fn main() -> Result<()> {
                     batch_size,
                     since,
                     skip_pattern,
+                    no_filter,
                 } => {
                     let store = cli::connect_store(&config, cli.skip_migrate).await?;
                     let since_dt = parse_since(since.as_deref())?;
@@ -1143,6 +1196,7 @@ async fn main() -> Result<()> {
                         curate,
                         skip_patterns,
                         remote_url: cli.remote.clone(),
+                        no_filter,
                     };
                     let curator = if curate { ImportCurator::new(&config) } else { None };
                     let reader = ChatGptReader;
@@ -1161,6 +1215,7 @@ async fn main() -> Result<()> {
                     batch_size,
                     since,
                     skip_pattern,
+                    no_filter,
                 } => {
                     let store = cli::connect_store(&config, cli.skip_migrate).await?;
                     let since_dt = parse_since(since.as_deref())?;
@@ -1176,6 +1231,7 @@ async fn main() -> Result<()> {
                         curate,
                         skip_patterns,
                         remote_url: cli.remote.clone(),
+                        no_filter,
                     };
                     let curator = if curate { ImportCurator::new(&config) } else { None };
                     let reader = ClaudeAiReader;
@@ -1194,6 +1250,7 @@ async fn main() -> Result<()> {
                     batch_size,
                     since,
                     skip_pattern,
+                    no_filter,
                 } => {
                     let store = cli::connect_store(&config, cli.skip_migrate).await?;
                     let since_dt = parse_since(since.as_deref())?;
@@ -1209,6 +1266,7 @@ async fn main() -> Result<()> {
                         curate,
                         skip_patterns,
                         remote_url: cli.remote.clone(),
+                        no_filter,
                     };
                     let curator = if curate { ImportCurator::new(&config) } else { None };
                     let reader = MarkdownReader;
@@ -1217,9 +1275,99 @@ async fn main() -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&result)?);
                     if result.failed > 0 { std::process::exit(1); }
                 }
-                ImportAction::Discover => {
+                ImportAction::Discover { yes } => {
                     let sources = discover_all_sources(&config.embedding).await;
-                    println!("{}", serde_json::to_string_pretty(&sources)?);
+                    let history_path = default_history_path();
+
+                    // Help text for sources needing manual export.
+                    let help_text: std::collections::HashMap<&str, &str> = std::collections::HashMap::from([
+                        ("chatgpt", "export from Settings > Data Controls > Export"),
+                        ("claude-ai", "export from Account Settings"),
+                    ]);
+
+                    let store = cli::connect_store(&config, cli.skip_migrate).await?;
+                    let mut results: Vec<(String, memcp::import::ImportResult)> = Vec::new();
+
+                    for source in &sources {
+                        if source.item_count == 0 {
+                            let help = help_text.get(source.source_type.as_str()).copied().unwrap_or("not found on this machine");
+                            eprintln!("  {} — not found ({})", source.source_type, help);
+                            continue;
+                        }
+
+                        // Check import history.
+                        if let Some(record) = find_record(&source.source_type) {
+                            eprintln!(
+                                "  {} — already imported ({} memories on {})",
+                                source.source_type,
+                                record.count,
+                                record.timestamp.format("%Y-%m-%d")
+                            );
+                            continue;
+                        }
+
+                        // Prompt or auto-accept.
+                        let should_import = if yes {
+                            true
+                        } else {
+                            eprint!("  Import {} ({} chunks)? [Y/n] ", source.source_type, source.item_count);
+                            let mut input = String::new();
+                            std::io::stdin().read_line(&mut input)?;
+                            let trimmed = input.trim().to_lowercase();
+                            trimmed.is_empty() || trimmed == "y" || trimmed == "yes"
+                        };
+
+                        if !should_import {
+                            eprintln!("  {} — skipped", source.source_type);
+                            continue;
+                        }
+
+                        // Dispatch to appropriate reader.
+                        let opts = ImportOpts {
+                            project: config.import.default_project.clone(),
+                            tags: vec![],
+                            skip_embeddings: false,
+                            batch_size: 100,
+                            since: None,
+                            dry_run: false,
+                            curate: false,
+                            skip_patterns: config.import.noise_patterns.clone(),
+                            remote_url: cli.remote.clone(),
+                            no_filter: false,
+                        };
+
+                        let result = match source.source_type.as_str() {
+                            "openclaw" => {
+                                let reader = OpenClawReader::new(None, &config.embedding);
+                                let engine = ImportEngine::new(store.clone(), opts);
+                                engine.run(&reader, &source.path).await?
+                            }
+                            "claude-code" => {
+                                let reader = ClaudeCodeReader::new(false);
+                                let engine = ImportEngine::new(store.clone(), opts);
+                                engine.run(&reader, &source.path).await?
+                            }
+                            _ => {
+                                eprintln!("  {} — unsupported source type, skipping", source.source_type);
+                                continue;
+                            }
+                        };
+
+                        // Record import history.
+                        let record = ImportHistoryRecord {
+                            source_type: source.source_type.clone(),
+                            path: source.path.to_string_lossy().to_string(),
+                            count: result.imported,
+                            timestamp: chrono::Utc::now(),
+                        };
+                        if let Err(e) = append_record(&record) {
+                            eprintln!("  Warning: failed to record import history: {}", e);
+                        }
+
+                        results.push((source.source_type.clone(), result));
+                    }
+
+                    print_import_summary(&results);
                 }
                 ImportAction::Review { last } => {
                     // Find the import directory to review.
@@ -1320,6 +1468,7 @@ async fn main() -> Result<()> {
                         curate: false,
                         skip_patterns: vec![],
                         remote_url: cli.remote.clone(),
+                        no_filter: true, // rescued items already passed curation — skip re-filtering
                     };
 
                     let rescued_count = if chunks.is_empty() {
@@ -1374,10 +1523,6 @@ async fn main() -> Result<()> {
             include_embeddings,
             include_state,
         } => {
-            // Parse format string.
-            let export_format = ExportFormat::from_str(&format)
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-
             // Parse --since into DateTime if provided.
             let since_dt = if let Some(ref s) = since {
                 Some(
@@ -1389,27 +1534,52 @@ async fn main() -> Result<()> {
                 None
             };
 
-            let opts = ExportOpts {
-                format: export_format,
-                output,
-                project,
-                tags,
-                since: since_dt,
-                include_embeddings,
-                include_state,
-            };
+            if let Some(ref remote_url) = cli.remote {
+                // Remote export: GET /v1/export with query params via dispatch_remote_get.
+                let mut params: Vec<(&str, String)> = vec![("format", format.clone())];
+                if let Some(ref p) = project { params.push(("project", p.clone())); }
+                if let Some(ref t) = tags {
+                    for tag in t { params.push(("tag", tag.clone())); }
+                }
+                if let Some(ref s) = since { params.push(("since", s.clone())); }
+                if include_embeddings { params.push(("include_embeddings", "true".to_string())); }
+                if include_state { params.push(("include_state", "true".to_string())); }
 
-            let store = Arc::new(
-                PostgresMemoryStore::new(&config.database_url, !cli.skip_migrate)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to connect to database: {}", e))?,
-            );
+                let response = cli::dispatch_remote_get(remote_url, "export", &params).await?;
 
-            let engine = ExportEngine::new(store);
-            let count = engine.run(&opts).await?;
+                if let Some(ref out_path) = output {
+                    std::fs::write(out_path, &response)?;
+                    eprintln!("Exported to {}", out_path.display());
+                } else {
+                    print!("{}", response);
+                }
+            } else {
+                // Local export: direct Postgres connection.
+                let export_format = ExportFormat::from_str(&format)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-            // Report count to stderr (stdout is reserved for data output).
-            eprintln!("Exported {} memories", count);
+                let opts = ExportOpts {
+                    format: export_format,
+                    output,
+                    project,
+                    tags,
+                    since: since_dt,
+                    include_embeddings,
+                    include_state,
+                };
+
+                let store = Arc::new(
+                    PostgresMemoryStore::new(&config.database_url, !cli.skip_migrate)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Failed to connect to database: {}", e))?,
+                );
+
+                let engine = ExportEngine::new(store);
+                let count = engine.run(&opts).await?;
+
+                // Report count to stderr (stdout is reserved for data output).
+                eprintln!("Exported {} memories", count);
+            }
         }
 
         Commands::Serve => {

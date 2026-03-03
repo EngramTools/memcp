@@ -67,6 +67,9 @@ pub struct ImportOpts {
     /// Reads local files, processes locally, POSTs to /v1/store on the remote.
     /// NOTE: Remote import does not transfer embeddings — daemon re-embeds on the remote side.
     pub remote_url: Option<String>,
+    /// When true, skip Tier 1 noise filtering entirely (length check + pattern matching).
+    /// Tier 2 LLM curation (--curate) is independent and still works when this is set.
+    pub no_filter: bool,
 }
 
 impl Default for ImportOpts {
@@ -81,6 +84,7 @@ impl Default for ImportOpts {
             curate: false,
             skip_patterns: vec![],
             remote_url: None,
+            no_filter: false,
         }
     }
 }
@@ -218,40 +222,46 @@ impl ImportEngine {
         let source_patterns: Vec<String> = source.noise_patterns().iter().map(|s| s.to_string()).collect();
         let noise_filter = noise::NoiseFilter::new_with_source_patterns(&self.opts.skip_patterns, &source_patterns);
 
-        // Step 3: Noise filter.
-        let mut survivors = Vec::new();
-        for chunk in chunks {
-            if noise_filter.is_noise(&chunk.content) {
-                // Persist filtered item so user can review/rescue later.
-                let reason = if chunk.content.trim().len() < noise::DEFAULT_MIN_CHARS {
-                    "noise:too-short".to_string()
+        // Step 3: Noise filter (skip entirely when --no-filter is set).
+        let survivors = if self.opts.no_filter {
+            info!("Noise filtering disabled (--no-filter)");
+            chunks
+        } else {
+            let mut survivors = Vec::new();
+            for chunk in chunks {
+                if noise_filter.is_noise(&chunk.content) {
+                    // Persist filtered item so user can review/rescue later.
+                    let reason = if chunk.content.trim().len() < noise::DEFAULT_MIN_CHARS {
+                        "noise:too-short".to_string()
+                    } else {
+                        // Find which pattern matched.
+                        let lower = chunk.content.to_lowercase();
+                        let matched = noise_filter.patterns().iter()
+                            .find(|p| lower.contains(p.to_lowercase().as_str()))
+                            .map(|p| p.as_str())
+                            .unwrap_or("pattern");
+                        format!("noise:{}", matched)
+                    };
+                    let filtered_item = checkpoint::FilteredItem {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        content: chunk.content.clone(),
+                        reason,
+                        source: chunk.source.clone(),
+                        tags: chunk.tags.clone(),
+                        type_hint: chunk.type_hint.clone(),
+                        created_at: chunk.created_at,
+                        rescued: false,
+                    };
+                    if let Err(e) = checkpoint::FilteredItem::append(&import_dir, &filtered_item) {
+                        warn!("Failed to persist filtered item: {}", e);
+                    }
+                    result.filtered += 1;
                 } else {
-                    // Find which pattern matched.
-                    let lower = chunk.content.to_lowercase();
-                    let matched = noise_filter.patterns().iter()
-                        .find(|p| lower.contains(p.to_lowercase().as_str()))
-                        .map(|p| p.as_str())
-                        .unwrap_or("pattern");
-                    format!("noise:{}", matched)
-                };
-                let filtered_item = checkpoint::FilteredItem {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    content: chunk.content.clone(),
-                    reason,
-                    source: chunk.source.clone(),
-                    tags: chunk.tags.clone(),
-                    type_hint: chunk.type_hint.clone(),
-                    created_at: chunk.created_at,
-                    rescued: false,
-                };
-                if let Err(e) = checkpoint::FilteredItem::append(&import_dir, &filtered_item) {
-                    warn!("Failed to persist filtered item: {}", e);
+                    survivors.push(chunk);
                 }
-                result.filtered += 1;
-            } else {
-                survivors.push(chunk);
             }
-        }
+            survivors
+        };
 
         // Step 3.5: Tier 2 LLM curation (only when --curate and curator available).
         let survivors = if self.opts.curate {
