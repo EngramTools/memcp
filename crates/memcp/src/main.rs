@@ -18,8 +18,15 @@ use memcp::query_intelligence::openai::OpenAIQueryIntelligenceProvider;
 use memcp::content_filter::CompositeFilter;
 use memcp::server::MemoryService;
 use memcp::store::postgres::PostgresMemoryStore;
-use memcp::import::{ImportEngine, ImportOpts};
+use memcp::import::{ImportEngine, ImportOpts, ImportSource, DiscoveredSource, discover_all_sources};
 use memcp::import::jsonl::JsonlReader;
+use memcp::import::export::{ExportEngine, ExportFormat, ExportOpts};
+use memcp::import::openclaw::OpenClawReader;
+use memcp::import::claude_code::ClaudeCodeReader;
+use memcp::import::chatgpt::ChatGptReader;
+use memcp::import::claude_ai::ClaudeAiReader;
+use memcp::import::markdown::MarkdownReader;
+use memcp::import::curate::ImportCurator;
 use rmcp::ServiceExt;
 
 #[derive(Parser)]
@@ -309,6 +316,30 @@ enum Commands {
         #[command(subcommand)]
         action: ImportAction,
     },
+    /// Export memories to file (jsonl, csv, or markdown)
+    Export {
+        /// Output format: jsonl, csv, or markdown
+        #[arg(long, default_value = "jsonl")]
+        format: String,
+        /// Output file path (default: stdout)
+        #[arg(long)]
+        output: Option<std::path::PathBuf>,
+        /// Filter by project/workspace
+        #[arg(long)]
+        project: Option<String>,
+        /// Filter by tags (comma-separated) — memories must have ALL specified tags
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        /// Only export memories created on or after this timestamp (ISO 8601)
+        #[arg(long)]
+        since: Option<String>,
+        /// Include embedding vectors in JSONL output
+        #[arg(long)]
+        include_embeddings: bool,
+        /// Include FSRS/salience state in output
+        #[arg(long)]
+        include_state: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -339,6 +370,151 @@ enum ImportAction {
         #[arg(long, default_value = "100")]
         batch_size: usize,
         /// Only import memories created after this timestamp (ISO 8601, e.g. 2024-01-01T00:00:00Z)
+        #[arg(long)]
+        since: Option<String>,
+        /// Additional noise patterns to filter (comma-separated substrings)
+        #[arg(long, value_delimiter = ',')]
+        skip_pattern: Option<Vec<String>>,
+    },
+    /// Import from OpenClaw SQLite database
+    Openclaw {
+        /// Path to .sqlite file (auto-detected from ~/.openclaw/memory/ if omitted)
+        path: Option<std::path::PathBuf>,
+        /// Filter to a specific agent name
+        #[arg(long)]
+        agent: Option<String>,
+        /// Show what would be imported without writing to the database
+        #[arg(long)]
+        dry_run: bool,
+        /// Scope imported memories to this project (workspace)
+        #[arg(long)]
+        project: Option<String>,
+        /// Extra tags to add to all imported memories (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        /// Skip embedding generation (imported memories get embedding_status=pending)
+        #[arg(long)]
+        skip_embeddings: bool,
+        /// Number of memories to insert per database transaction (default: 100)
+        #[arg(long, default_value = "100")]
+        batch_size: usize,
+        /// Only import memories created after this timestamp (ISO 8601, e.g. 2024-01-01T00:00:00Z)
+        #[arg(long)]
+        since: Option<String>,
+        /// Additional noise patterns to filter (comma-separated substrings)
+        #[arg(long, value_delimiter = ',')]
+        skip_pattern: Option<Vec<String>>,
+    },
+    /// Import from Claude Code MEMORY.md files
+    ClaudeCode {
+        /// Path to MEMORY.md file or directory (auto-detected from ~/.claude/ if omitted)
+        path: Option<std::path::PathBuf>,
+        /// Also import assistant messages from history.jsonl (opt-in)
+        #[arg(long)]
+        include_history: bool,
+        /// Show what would be imported without writing to the database
+        #[arg(long)]
+        dry_run: bool,
+        /// Scope imported memories to this project (workspace)
+        #[arg(long)]
+        project: Option<String>,
+        /// Extra tags to add to all imported memories (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        /// Skip embedding generation (imported memories get embedding_status=pending)
+        #[arg(long)]
+        skip_embeddings: bool,
+        /// Number of memories to insert per database transaction (default: 100)
+        #[arg(long, default_value = "100")]
+        batch_size: usize,
+        /// Only import memories created after this timestamp (ISO 8601, e.g. 2024-01-01T00:00:00Z)
+        #[arg(long)]
+        since: Option<String>,
+        /// Additional noise patterns to filter (comma-separated substrings)
+        #[arg(long, value_delimiter = ',')]
+        skip_pattern: Option<Vec<String>>,
+    },
+    /// Import from ChatGPT export ZIP
+    Chatgpt {
+        /// Path to ChatGPT export ZIP file
+        path: std::path::PathBuf,
+        /// Enable LLM-assisted curation (summarize conversations instead of chunking)
+        #[arg(long)]
+        curate: bool,
+        /// Show what would be imported without writing to the database
+        #[arg(long)]
+        dry_run: bool,
+        /// Scope imported memories to this project
+        #[arg(long)]
+        project: Option<String>,
+        /// Extra tags to add to all imported memories (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        /// Skip embedding generation (imported memories get embedding_status=pending)
+        #[arg(long)]
+        skip_embeddings: bool,
+        /// Number of memories to insert per database transaction (default: 100)
+        #[arg(long, default_value = "100")]
+        batch_size: usize,
+        /// Only import memories created after this timestamp (ISO 8601)
+        #[arg(long)]
+        since: Option<String>,
+        /// Additional noise patterns to filter (comma-separated substrings)
+        #[arg(long, value_delimiter = ',')]
+        skip_pattern: Option<Vec<String>>,
+    },
+    /// Import from Claude.ai export ZIP
+    Claude {
+        /// Path to Claude.ai export ZIP file
+        path: std::path::PathBuf,
+        /// Enable LLM-assisted curation (summarize conversations instead of chunking)
+        #[arg(long)]
+        curate: bool,
+        /// Show what would be imported without writing to the database
+        #[arg(long)]
+        dry_run: bool,
+        /// Scope imported memories to this project
+        #[arg(long)]
+        project: Option<String>,
+        /// Extra tags to add to all imported memories (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        /// Skip embedding generation (imported memories get embedding_status=pending)
+        #[arg(long)]
+        skip_embeddings: bool,
+        /// Number of memories to insert per database transaction (default: 100)
+        #[arg(long, default_value = "100")]
+        batch_size: usize,
+        /// Only import memories created after this timestamp (ISO 8601)
+        #[arg(long)]
+        since: Option<String>,
+        /// Additional noise patterns to filter (comma-separated substrings)
+        #[arg(long, value_delimiter = ',')]
+        skip_pattern: Option<Vec<String>>,
+    },
+    /// Import from Markdown files or directory
+    Markdown {
+        /// Path to .md file or directory of .md files
+        path: std::path::PathBuf,
+        /// Enable LLM-assisted curation (classify chunks as keep/skip/merge)
+        #[arg(long)]
+        curate: bool,
+        /// Show what would be imported without writing to the database
+        #[arg(long)]
+        dry_run: bool,
+        /// Scope imported memories to this project
+        #[arg(long)]
+        project: Option<String>,
+        /// Extra tags to add to all imported memories (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        /// Skip embedding generation (imported memories get embedding_status=pending)
+        #[arg(long)]
+        skip_embeddings: bool,
+        /// Number of memories to insert per database transaction (default: 100)
+        #[arg(long, default_value = "100")]
+        batch_size: usize,
+        /// Only import memories created after this timestamp (ISO 8601)
         #[arg(long)]
         since: Option<String>,
         /// Additional noise patterns to filter (comma-separated substrings)
@@ -846,8 +1022,185 @@ async fn main() -> Result<()> {
                         std::process::exit(1);
                     }
                 }
+                ImportAction::Openclaw {
+                    path,
+                    agent,
+                    dry_run,
+                    project,
+                    tags,
+                    skip_embeddings,
+                    batch_size,
+                    since,
+                    skip_pattern,
+                } => {
+                    let store = cli::connect_store(&config, cli.skip_migrate).await?;
+                    let since_dt = if let Some(ref s) = since {
+                        Some(chrono::DateTime::parse_from_rfc3339(s)
+                            .map_err(|e| anyhow::anyhow!("Invalid --since timestamp '{}': {}", s, e))?
+                            .with_timezone(&chrono::Utc))
+                    } else { None };
+                    let reader = OpenClawReader::new(agent, &config.embedding);
+                    let import_path = match path {
+                        Some(p) => p,
+                        None => {
+                            let sources: Vec<DiscoveredSource> = ImportSource::discover(&reader).await?;
+                            sources.into_iter().next().map(|s| s.path)
+                                .ok_or_else(|| anyhow::anyhow!(
+                                    "No OpenClaw database found at ~/.openclaw/memory/. \
+                                     Provide a path explicitly with: memcp import openclaw <path>"
+                                ))?
+                        }
+                    };
+                    let opts = ImportOpts {
+                        project,
+                        tags: tags.unwrap_or_default(),
+                        skip_embeddings,
+                        batch_size,
+                        since: since_dt,
+                        dry_run,
+                        curate: false,
+                        skip_patterns: skip_pattern.unwrap_or_default(),
+                    };
+                    let engine = ImportEngine::new(store, opts);
+                    let result = engine.run(&reader, &import_path).await?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    if result.failed > 0 { std::process::exit(1); }
+                }
+                ImportAction::ClaudeCode {
+                    path,
+                    include_history,
+                    dry_run,
+                    project,
+                    tags,
+                    skip_embeddings,
+                    batch_size,
+                    since,
+                    skip_pattern,
+                } => {
+                    let store = cli::connect_store(&config, cli.skip_migrate).await?;
+                    let since_dt = if let Some(ref s) = since {
+                        Some(chrono::DateTime::parse_from_rfc3339(s)
+                            .map_err(|e| anyhow::anyhow!("Invalid --since timestamp '{}': {}", s, e))?
+                            .with_timezone(&chrono::Utc))
+                    } else { None };
+                    let reader = ClaudeCodeReader::new(include_history);
+                    let import_path = match path {
+                        Some(p) => p,
+                        None => {
+                            ClaudeCodeReader::default_base_path()
+                                .ok_or_else(|| anyhow::anyhow!(
+                                    "Could not determine home directory for Claude Code auto-detection"
+                                ))?
+                        }
+                    };
+                    let opts = ImportOpts {
+                        project,
+                        tags: tags.unwrap_or_default(),
+                        skip_embeddings,
+                        batch_size,
+                        since: since_dt,
+                        dry_run,
+                        curate: false,
+                        skip_patterns: skip_pattern.unwrap_or_default(),
+                    };
+                    let engine = ImportEngine::new(store, opts);
+                    let result = engine.run(&reader, &import_path).await?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    if result.failed > 0 { std::process::exit(1); }
+                }
+                ImportAction::Chatgpt {
+                    path,
+                    curate,
+                    dry_run,
+                    project,
+                    tags,
+                    skip_embeddings,
+                    batch_size,
+                    since,
+                    skip_pattern,
+                } => {
+                    let store = cli::connect_store(&config, cli.skip_migrate).await?;
+                    let since_dt = parse_since(since.as_deref())?;
+                    let opts = ImportOpts {
+                        project,
+                        tags: tags.unwrap_or_default(),
+                        skip_embeddings,
+                        batch_size,
+                        since: since_dt,
+                        dry_run,
+                        curate,
+                        skip_patterns: skip_pattern.unwrap_or_default(),
+                    };
+                    let curator = if curate { ImportCurator::new(&config) } else { None };
+                    let reader = ChatGptReader;
+                    let engine = ImportEngine::new(store, opts).with_curator(curator);
+                    let result = engine.run(&reader, &path).await?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    if result.failed > 0 { std::process::exit(1); }
+                }
+                ImportAction::Claude {
+                    path,
+                    curate,
+                    dry_run,
+                    project,
+                    tags,
+                    skip_embeddings,
+                    batch_size,
+                    since,
+                    skip_pattern,
+                } => {
+                    let store = cli::connect_store(&config, cli.skip_migrate).await?;
+                    let since_dt = parse_since(since.as_deref())?;
+                    let opts = ImportOpts {
+                        project,
+                        tags: tags.unwrap_or_default(),
+                        skip_embeddings,
+                        batch_size,
+                        since: since_dt,
+                        dry_run,
+                        curate,
+                        skip_patterns: skip_pattern.unwrap_or_default(),
+                    };
+                    let curator = if curate { ImportCurator::new(&config) } else { None };
+                    let reader = ClaudeAiReader;
+                    let engine = ImportEngine::new(store, opts).with_curator(curator);
+                    let result = engine.run(&reader, &path).await?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    if result.failed > 0 { std::process::exit(1); }
+                }
+                ImportAction::Markdown {
+                    path,
+                    curate,
+                    dry_run,
+                    project,
+                    tags,
+                    skip_embeddings,
+                    batch_size,
+                    since,
+                    skip_pattern,
+                } => {
+                    let store = cli::connect_store(&config, cli.skip_migrate).await?;
+                    let since_dt = parse_since(since.as_deref())?;
+                    let opts = ImportOpts {
+                        project,
+                        tags: tags.unwrap_or_default(),
+                        skip_embeddings,
+                        batch_size,
+                        since: since_dt,
+                        dry_run,
+                        curate,
+                        skip_patterns: skip_pattern.unwrap_or_default(),
+                    };
+                    let curator = if curate { ImportCurator::new(&config) } else { None };
+                    let reader = MarkdownReader;
+                    let engine = ImportEngine::new(store, opts).with_curator(curator);
+                    let result = engine.run(&reader, &path).await?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    if result.failed > 0 { std::process::exit(1); }
+                }
                 ImportAction::Discover => {
-                    todo!("memcp import discover — implemented in Plan 05")
+                    let sources = discover_all_sources(&config.embedding).await;
+                    println!("{}", serde_json::to_string_pretty(&sources)?);
                 }
                 ImportAction::Review { last: _ } => {
                     todo!("memcp import review — implemented in Plan 05")
@@ -856,6 +1209,53 @@ async fn main() -> Result<()> {
                     todo!("memcp import rescue — implemented in Plan 05")
                 }
             }
+        }
+
+        Commands::Export {
+            format,
+            output,
+            project,
+            tags,
+            since,
+            include_embeddings,
+            include_state,
+        } => {
+            // Parse format string.
+            let export_format = ExportFormat::from_str(&format)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+            // Parse --since into DateTime if provided.
+            let since_dt = if let Some(ref s) = since {
+                Some(
+                    chrono::DateTime::parse_from_rfc3339(s)
+                        .map_err(|e| anyhow::anyhow!("Invalid --since timestamp '{}': {}", s, e))?
+                        .with_timezone(&chrono::Utc),
+                )
+            } else {
+                None
+            };
+
+            let opts = ExportOpts {
+                format: export_format,
+                output,
+                project,
+                tags,
+                since: since_dt,
+                include_embeddings,
+                include_state,
+            };
+
+            let store = Arc::new(
+                PostgresMemoryStore::new(&config.database_url, !cli.skip_migrate)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to connect to database: {}", e))?,
+            );
+
+            let engine = ExportEngine::new(store);
+            let count = engine.run(&opts).await?;
+
+            // Report count to stderr (stdout is reserved for data output).
+            eprintln!("Exported {} memories", count);
         }
 
         Commands::Serve => {
@@ -1053,4 +1453,16 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Parse an optional --since ISO 8601 timestamp string into a DateTime<Utc>.
+fn parse_since(s: Option<&str>) -> anyhow::Result<Option<chrono::DateTime<chrono::Utc>>> {
+    match s {
+        None => Ok(None),
+        Some(ts) => {
+            let dt = chrono::DateTime::parse_from_rfc3339(ts)
+                .map_err(|e| anyhow::anyhow!("Invalid --since timestamp '{}': {}", ts, e))?;
+            Ok(Some(dt.with_timezone(&chrono::Utc)))
+        }
+    }
 }
