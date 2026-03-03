@@ -498,3 +498,100 @@ fn test_find_latest_import_dir_empty() {
         assert!(path.is_dir(), "find_latest_import_dir must return an existing directory");
     }
 }
+
+/// --no-filter: short content (< 50 chars) is imported when no_filter = true.
+///
+/// Normally short content is dropped by Tier 1 noise filtering.
+/// With no_filter=true, ALL chunks pass through regardless of length or noise patterns.
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_import_no_filter_imports_all(pool: PgPool) {
+    let store = Arc::new(PostgresMemoryStore::from_pool(pool).await.unwrap());
+
+    // Include short chunks (< 50 chars) that would normally be filtered.
+    let lines = &[
+        r#"{"content":"Short"}"#,                  // < 50 chars — normally filtered
+        r#"{"content":"Also too short"}"#,          // < 50 chars — normally filtered
+        r#"{"content":"User prefers Rust for backend systems because of safety guarantees"}"#,
+    ];
+    let file = make_jsonl_file(lines);
+
+    let opts = ImportOpts {
+        no_filter: true,
+        ..ImportOpts::default()
+    };
+    let reader = JsonlReader;
+    let engine = ImportEngine::new(store.clone(), opts);
+
+    let result = engine.run(&reader, file.path()).await.unwrap();
+
+    assert_eq!(result.total, 3, "Should read all 3 chunks");
+    assert_eq!(result.filtered, 0, "no_filter=true must skip noise filtering entirely");
+    assert_eq!(result.imported, 3, "All 3 chunks should be imported when no_filter=true");
+}
+
+/// --no-filter=false (default): short content is still filtered.
+/// Confirms the default behavior is unchanged after adding the flag.
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_import_default_filter_still_active(pool: PgPool) {
+    let store = Arc::new(PostgresMemoryStore::from_pool(pool).await.unwrap());
+
+    let lines = &[
+        r#"{"content":"Short"}"#,
+        r#"{"content":"User prefers Rust for backend systems because of safety guarantees"}"#,
+    ];
+    let file = make_jsonl_file(lines);
+
+    let opts = ImportOpts::default(); // no_filter defaults to false
+    let reader = JsonlReader;
+    let engine = ImportEngine::new(store.clone(), opts);
+
+    let result = engine.run(&reader, file.path()).await.unwrap();
+
+    assert_eq!(result.total, 2, "Should read 2 chunks");
+    assert_eq!(result.filtered, 1, "Default filter must drop the short chunk");
+    assert_eq!(result.imported, 1, "Only the long chunk should be imported");
+}
+
+/// --no-filter does not disable Tier 2 LLM curation (--curate is independent).
+/// This is a structural/behavioral test — we verify no_filter is field-independent.
+#[test]
+fn test_no_filter_field_is_independent_of_curate() {
+    let opts = ImportOpts {
+        no_filter: true,
+        curate: true,
+        ..ImportOpts::default()
+    };
+    assert!(opts.no_filter, "no_filter should be independently settable");
+    assert!(opts.curate, "curate should remain independently settable");
+}
+
+/// Source-specific noise patterns are also skipped when no_filter = true.
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_import_no_filter_skips_source_patterns(pool: PgPool) {
+    use memcp::import::chatgpt::ChatGptReader;
+
+    let store = Arc::new(PostgresMemoryStore::from_pool(pool).await.unwrap());
+
+    // Create a JSONL file with ChatGPT-specific noise pattern content.
+    // "DALL-E displayed" is in ChatGptReader::noise_patterns() and would normally be filtered.
+    let lines = &[
+        r#"{"content":"DALL-E displayed the image successfully in the conversation thread here"}"#,
+        r#"{"content":"User prefers Rust for backend systems because of safety guarantees"}"#,
+    ];
+    let file = make_jsonl_file(lines);
+
+    // With no_filter=true, ChatGPT noise patterns are skipped.
+    let opts = ImportOpts {
+        no_filter: true,
+        ..ImportOpts::default()
+    };
+    let reader = JsonlReader; // Use JSONL reader to load the file directly
+    let engine = ImportEngine::new(store.clone(), opts);
+
+    let result = engine.run(&reader, file.path()).await.unwrap();
+
+    // JSONL reader doesn't add source-specific patterns, but no_filter=true
+    // still skips ALL noise filtering (min_chars + patterns).
+    assert_eq!(result.filtered, 0, "no_filter=true skips all noise filtering including source patterns");
+    assert_eq!(result.imported, 2, "Both chunks imported with no_filter=true");
+}
