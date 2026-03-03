@@ -18,6 +18,8 @@ use memcp::query_intelligence::openai::OpenAIQueryIntelligenceProvider;
 use memcp::content_filter::CompositeFilter;
 use memcp::server::MemoryService;
 use memcp::store::postgres::PostgresMemoryStore;
+use memcp::import::{ImportEngine, ImportOpts};
+use memcp::import::jsonl::JsonlReader;
 use rmcp::ServiceExt;
 
 #[derive(Parser)]
@@ -302,12 +304,63 @@ enum Commands {
         #[arg(long)]
         wait: bool,
     },
+    /// Import memories from external sources (OpenClaw, Claude Code, ChatGPT, JSONL, ...)
+    Import {
+        #[command(subcommand)]
+        action: ImportAction,
+    },
 }
 
 #[derive(Subcommand)]
 enum DaemonAction {
     /// Install daemon as a system service (launchd on macOS, systemd on Linux)
     Install,
+}
+
+#[derive(Subcommand)]
+enum ImportAction {
+    /// Import from JSONL file (round-trip format — works with `memcp export --format jsonl`)
+    Jsonl {
+        /// Path to .jsonl file
+        path: std::path::PathBuf,
+        /// Show what would be imported without writing to the database
+        #[arg(long)]
+        dry_run: bool,
+        /// Scope imported memories to this project (workspace)
+        #[arg(long)]
+        project: Option<String>,
+        /// Extra tags to add to all imported memories (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        tags: Option<Vec<String>>,
+        /// Skip embedding generation (imported memories get embedding_status=pending)
+        #[arg(long)]
+        skip_embeddings: bool,
+        /// Number of memories to insert per database transaction (default: 100)
+        #[arg(long, default_value = "100")]
+        batch_size: usize,
+        /// Only import memories created after this timestamp (ISO 8601, e.g. 2024-01-01T00:00:00Z)
+        #[arg(long)]
+        since: Option<String>,
+        /// Additional noise patterns to filter (comma-separated substrings)
+        #[arg(long, value_delimiter = ',')]
+        skip_pattern: Option<Vec<String>>,
+    },
+    /// Auto-detect importable sources on this machine
+    Discover,
+    /// Review what was filtered in the last import
+    Review {
+        /// Show results from the most recent import run
+        #[arg(long)]
+        last: bool,
+    },
+    /// Rescue filtered items from a previous import
+    Rescue {
+        /// Specific filtered item ID to rescue
+        id: Option<String>,
+        /// Rescue all filtered items from the last import
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -744,6 +797,64 @@ async fn main() -> Result<()> {
             } else {
                 let store = cli::connect_store(&config, cli.skip_migrate).await?;
                 cli::cmd_update(&store, &config, id, resolved, type_hint, source, tags, wait).await?;
+            }
+        }
+
+        Commands::Import { action } => {
+            match action {
+                ImportAction::Jsonl {
+                    path,
+                    dry_run,
+                    project,
+                    tags,
+                    skip_embeddings,
+                    batch_size,
+                    since,
+                    skip_pattern,
+                } => {
+                    let store = cli::connect_store(&config, cli.skip_migrate).await?;
+
+                    // Parse --since into DateTime if provided.
+                    let since_dt = if let Some(ref s) = since {
+                        Some(
+                            chrono::DateTime::parse_from_rfc3339(s)
+                                .map_err(|e| anyhow::anyhow!("Invalid --since timestamp '{}': {}", s, e))?
+                                .with_timezone(&chrono::Utc),
+                        )
+                    } else {
+                        None
+                    };
+
+                    let opts = ImportOpts {
+                        project,
+                        tags: tags.unwrap_or_default(),
+                        skip_embeddings,
+                        batch_size,
+                        since: since_dt,
+                        dry_run,
+                        curate: false,
+                        skip_patterns: skip_pattern.unwrap_or_default(),
+                    };
+
+                    let reader = JsonlReader;
+                    let engine = ImportEngine::new(store, opts);
+                    let result = engine.run(&reader, &path).await?;
+
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+
+                    if result.failed > 0 {
+                        std::process::exit(1);
+                    }
+                }
+                ImportAction::Discover => {
+                    todo!("memcp import discover — implemented in Plan 05")
+                }
+                ImportAction::Review { last: _ } => {
+                    todo!("memcp import review — implemented in Plan 05")
+                }
+                ImportAction::Rescue { id: _, all: _ } => {
+                    todo!("memcp import rescue — implemented in Plan 05")
+                }
             }
         }
 

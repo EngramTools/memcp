@@ -91,11 +91,13 @@ impl ImportReport {
 
 /// Return the import directory path for a given source.
 ///
-/// Format: `~/.memcp/imports/<source>-<timestamp>/`
-/// The timestamp ensures each import run gets its own directory.
+/// Format: `~/.memcp/imports/<source>-<timestamp>-<short-id>/`
+/// Both timestamp and a random short ID ensure uniqueness per run.
 pub fn import_dir(source: &str) -> PathBuf {
     let timestamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-    let dir_name = format!("{}-{}", source, timestamp);
+    // Use 6 random hex chars for uniqueness within the same second.
+    let short_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+    let dir_name = format!("{}-{}-{}", source, timestamp, short_id);
 
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
