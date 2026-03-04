@@ -554,7 +554,7 @@ Plans:
 - **Source**: Competitive landscape analysis — table-stakes for credibility
 - **Note**: Could be done pre-v1 for internal baseline. Public numbers published with open-source launch.
 - **Requirements:** [BENCH-01, BENCH-02, BENCH-03, BENCH-04, BENCH-05, BENCH-06, BENCH-07, BENCH-08]
-- **Plans:** 2 plans
+- **Plans:** 1/2 plans executed
 
 Requirements:
 - BENCH-01: LoCoMo dataset types (LoCoMoSample, Session, Turn, QaPair) with flexible category deserialization

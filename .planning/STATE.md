@@ -3,53 +3,48 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 08.11.1-01-PLAN.md
-last_updated: "2026-03-04T00:11:49.887Z"
+stopped_at: Completed 14.6-01-PLAN.md
+last_updated: "2026-03-04T02:02:51.586Z"
 progress:
   total_phases: 49
   completed_phases: 20
-  total_plans: 99
-  completed_plans: 63
-  percent: 67
+  total_plans: 101
+  completed_plans: 64
+  percent: 64
 ---
 
 # Project State
 
 ## Current Phase
-Phase 15-import-migration — All 5 plans complete
+Phase 09-documentation-qa-playbook — Ready to discuss
 
-Progress: [██████░░░░] 63/99 plans (64%)
+Progress: [█████████████░░░░░░░] 63/99 plans (64%)
 
 ## Active Context
-- Last completed: Phase 08.11.1-01 Bi-temporal search event_time wiring (2026-03-03)
-- event_time.unwrap_or(created_at) now used in temporal soft boost (server.rs step 12.5)
-- 71 unit tests passing; api_test failures are pre-existing (require Postgres)
-- FilteredItem persistence to filtered.jsonl during import pipeline noise filtering
-- memcp import review --last, memcp import rescue <id>, memcp import rescue --all wired
-- --remote flag routes import batch inserts via dispatch_remote to HTTP API
-- ImportConfig in config.rs with noise_patterns, batch_size, default_project
-- 11 import integration tests passing
-- Phase 15-04: ChatGptReader, ClaudeAiReader, MarkdownReader, ImportCurator all working
-- 81 import unit tests passing (in addition to 11 integration tests)
-- Tier 2 curation reuses SummarizationProvider (no new config)
-- Plan 03 Openclaw/ClaudeCode CLI match arms also wired in this plan
-- Plan 03 SUMMARY added: OpenClawReader (3830 SQLite chunks, updated_at INTEGER ms fix), ClaudeCodeReader (MEMORY.md section chunking), discover_all_sources
-- Last session: 2026-03-03
-- Stopped at: Phase 15-05 complete
+- Last completed: Phase 08.11.1 Bi-temporal search event_time wiring (2026-03-04)
+- Phase 08.12 (HTTP API) was already completed previously — skipped during auto-advance
+- Bi-temporal search story complete: schema+extraction (08.8) + retrieval ranking (08.11.1)
 
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** Persistent memory for AI agents via MCP + CLI
-**Current focus:** Phase 09 — Documentation
+**Current focus:** Phase 09 — Documentation & QA Playbook
 
 ## Session Continuity
-Last session: 2026-03-04T00:11:49.877Z
-Stopped at: Completed 08.11.1-01-PLAN.md
+Last session: 2026-03-04T02:02:51.581Z
+Stopped at: Completed 14.6-01-PLAN.md
 Resume file: None
 
 ## Accumulated Context
+
+### Phase 14.6-01 Decisions
+- Phase 14.6-01: F1 partial overlap test corrected: 'The capital is Paris' vs 'Paris' yields 0.4 (not > 0.5) — SQuAD math is correct; plan spec expectation was wrong; test updated with correct assertions
+- Phase 14.6-01: call_openai_with_retry, ANSWER_MODEL, OPENAI_CHAT_URL made pub(crate) so locomo/evaluate.rs reuses LongMemEval retry logic without duplication
+- Phase 14.6-01: JUDGE_MODEL switched to openai/gpt-4o-mini-2024-07-18; ANSWER_MODEL stays openai/gpt-4o-2024-08-06
+- Phase 14.6-01: HistoryEntry uses JSONL format (OpenOptions::append) — append never requires reading the full file
+- Phase 14.6-01: parse_locomo_date handles 3 formats: ISO 8601, long month ('March 15, 2023'), US slash (03/15/2023)
 
 ### Phase 08.11.1 Decisions
 - Phase 08.11.1-01: event_time.unwrap_or(created_at) is canonical bi-temporal selection — event_time takes strict precedence when present; a memory about "in 2019" stored today gets boosted for "2019 memories" queries
