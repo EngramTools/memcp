@@ -407,7 +407,7 @@ Plans:
 - **Status**: Not started
 - **Depends on**: Phase 08.11
 - **Origin**: Competitive analysis (2026-03-03) — Zep/Graphiti bi-temporal comparison revealed memcp has the schema but doesn't query against event_time
-- **Plans:** 1 plan
+- **Plans:** 1/1 plans complete
 
 Plans:
 - [ ] 08.11.1-01-PLAN.md — Wire event_time into temporal boost + unit test [Wave 1]

@@ -3,12 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-03T17:42:22.468Z"
+stopped_at: Completed 08.11.1-01-PLAN.md
+last_updated: "2026-03-04T00:11:49.887Z"
 progress:
-  total_phases: 43
-  completed_phases: 19
-  total_plans: 98
-  completed_plans: 62
+  total_phases: 49
+  completed_phases: 20
+  total_plans: 99
+  completed_plans: 63
+  percent: 67
 ---
 
 # Project State
@@ -16,10 +18,12 @@ progress:
 ## Current Phase
 Phase 15-import-migration — All 5 plans complete
 
-Progress: [█████████████░░░░░░░] 60/90 plans (67%)
+Progress: [██████░░░░] 63/99 plans (64%)
 
 ## Active Context
-- Last completed: Phase 15-05 Review/Rescue + Remote Import + ImportConfig (2026-03-03)
+- Last completed: Phase 08.11.1-01 Bi-temporal search event_time wiring (2026-03-03)
+- event_time.unwrap_or(created_at) now used in temporal soft boost (server.rs step 12.5)
+- 71 unit tests passing; api_test failures are pre-existing (require Postgres)
 - FilteredItem persistence to filtered.jsonl during import pipeline noise filtering
 - memcp import review --last, memcp import rescue <id>, memcp import rescue --all wired
 - --remote flag routes import batch inserts via dispatch_remote to HTTP API
@@ -41,11 +45,15 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 **Current focus:** Phase 09 — Documentation
 
 ## Session Continuity
-Last session: 2026-03-03
-Stopped at: Phase 15-05 complete (Review/Rescue + Remote Import + ImportConfig — Phase 15 fully complete)
+Last session: 2026-03-04T00:11:49.877Z
+Stopped at: Completed 08.11.1-01-PLAN.md
 Resume file: None
 
 ## Accumulated Context
+
+### Phase 08.11.1 Decisions
+- Phase 08.11.1-01: event_time.unwrap_or(created_at) is canonical bi-temporal selection — event_time takes strict precedence when present; a memory about "in 2019" stored today gets boosted for "2019 memories" queries
+- Phase 08.11.1-01: Unit tests for inline boost logic use a local bi_temporal_in_range() helper that replicates the pattern — sufficient when the logic is embedded in a handler and extraction would require a full refactor
 
 ### Phase 15-05 Decisions
 - Phase 15-05: FilteredItem appended to filtered.jsonl per-item (not batched) — simpler, atomicity not needed for audit log
