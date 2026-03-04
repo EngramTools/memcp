@@ -45,6 +45,8 @@ use memcp::intelligence::query_intelligence::openai::OpenAIQueryIntelligenceProv
 #[cfg(feature = "local-embed")]
 use memcp::intelligence::query_intelligence::QueryIntelligenceProvider;
 #[cfg(feature = "local-embed")]
+use memcp::config::SearchConfig;
+#[cfg(feature = "local-embed")]
 use memcp::store::postgres::PostgresMemoryStore;
 
 #[cfg(feature = "local-embed")]
@@ -109,6 +111,10 @@ struct Cli {
     /// QI model name for both expansion and reranking
     #[arg(long, default_value = "google/gemini-2.5-flash-lite")]
     qi_model: String,
+
+    /// Keep the benchmark schema after run (default: drop for clean ephemeral isolation)
+    #[arg(long)]
+    keep_schema: bool,
 }
 
 #[tokio::main]
@@ -193,9 +199,18 @@ async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
     // Create output directory
     std::fs::create_dir_all(&cli.output_dir)?;
 
-    // Initialize database
-    tracing::info!(database_url = %cli.database_url, "Connecting to database");
-    let store = Arc::new(PostgresMemoryStore::new(&cli.database_url, true).await?);
+    // Initialize database (isolated in benchmark schema)
+    tracing::info!(database_url = %cli.database_url, schema = "benchmark", "Connecting to database");
+    tracing::info!(schema = "benchmark", "Using isolated benchmark schema");
+    let store = Arc::new(
+        PostgresMemoryStore::new_with_schema(
+            &cli.database_url,
+            true,
+            &SearchConfig::default(),
+            Some("benchmark"),
+        )
+        .await?,
+    );
     tracing::info!("Database ready");
 
     // Initialize embedding provider and pipeline
@@ -345,6 +360,14 @@ async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
         }
     }
 
+    // Schema cleanup — drop benchmark schema unless --keep-schema is passed
+    if !cli.keep_schema {
+        store.drop_schema().await?;
+        tracing::info!("Benchmark schema dropped");
+    } else {
+        tracing::info!("Benchmark schema retained (--keep-schema)");
+    }
+
     Ok(())
 }
 
@@ -412,9 +435,18 @@ async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
     // Create output directory
     std::fs::create_dir_all(&cli.output_dir)?;
 
-    // Initialize database
-    tracing::info!(database_url = %cli.database_url, "Connecting to database");
-    let store = Arc::new(PostgresMemoryStore::new(&cli.database_url, true).await?);
+    // Initialize database (isolated in benchmark schema)
+    tracing::info!(database_url = %cli.database_url, schema = "benchmark", "Connecting to database");
+    tracing::info!(schema = "benchmark", "Using isolated benchmark schema");
+    let store = Arc::new(
+        PostgresMemoryStore::new_with_schema(
+            &cli.database_url,
+            true,
+            &SearchConfig::default(),
+            Some("benchmark"),
+        )
+        .await?,
+    );
     tracing::info!("Database ready");
 
     // Initialize embedding provider and pipeline
@@ -564,6 +596,14 @@ async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
                 threshold * 100.0
             );
         }
+    }
+
+    // Schema cleanup — drop benchmark schema unless --keep-schema is passed
+    if !cli.keep_schema {
+        store.drop_schema().await?;
+        tracing::info!("Benchmark schema dropped");
+    } else {
+        tracing::info!("Benchmark schema retained (--keep-schema)");
     }
 
     Ok(())
