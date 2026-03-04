@@ -1,14 +1,122 @@
 /// Benchmark reporting module for LongMemEval evaluation results.
 ///
 /// Generates per-category accuracy metrics, comparison tables across configurations,
-/// and JSON output for cross-run comparison.
+/// JSON output for cross-run comparison, and JSONL history append for score tracking.
 
 use std::collections::HashMap;
+use std::io::Write;
+use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::QuestionResult;
+
+// ─── Benchmark History (shared across LongMemEval + LoCoMo) ──────────────────
+
+/// A single entry in the benchmark history log.
+///
+/// Appended to a JSONL file after each benchmark run for score tracking over time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub timestamp: DateTime<Utc>,
+    /// Which benchmark was run: "longmemeval" or "locomo".
+    pub benchmark: String,
+    /// Name of the search/ingestion configuration used.
+    pub config_name: String,
+    /// Git SHA from GIT_SHA env var if available.
+    pub git_sha: Option<String>,
+    /// Primary score: accuracy for LongMemEval, F1 for LoCoMo.
+    pub overall_score: f64,
+    /// Task-averaged score (mean of per-category scores).
+    pub task_averaged_score: f64,
+    /// Total number of questions evaluated.
+    pub question_count: usize,
+    /// Per-category scores (category name → score).
+    pub per_category: HashMap<String, f64>,
+}
+
+/// Append a benchmark history entry to a JSONL file.
+///
+/// Uses append-only writes — never rewrites the full file. Creates the file if absent.
+/// Each entry is one JSON object on a single line (JSONL format).
+pub fn append_history(entry: &HistoryEntry, path: &Path) -> Result<(), anyhow::Error> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| anyhow::anyhow!("Failed to open history file {:?}: {}", path, e))?;
+
+    let line = serde_json::to_string(entry)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize history entry: {}", e))?;
+
+    writeln!(file, "{}", line)
+        .map_err(|e| anyhow::anyhow!("Failed to write history entry: {}", e))?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    use std::io::BufRead;
+    use tempfile::NamedTempFile;
+
+    fn make_entry(benchmark: &str, score: f64) -> HistoryEntry {
+        HistoryEntry {
+            timestamp: Utc::now(),
+            benchmark: benchmark.to_string(),
+            config_name: "hybrid".to_string(),
+            git_sha: None,
+            overall_score: score,
+            task_averaged_score: score,
+            question_count: 100,
+            per_category: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_append_history_creates_file() {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        // Remove the file so append_history creates it.
+        drop(tmp);
+
+        let entry = make_entry("longmemeval", 0.468);
+        append_history(&entry, &path).expect("should append");
+        assert!(path.exists(), "File should be created");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(!content.is_empty(), "File should not be empty");
+        let parsed: HistoryEntry = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(parsed.benchmark, "longmemeval");
+        assert!((parsed.overall_score - 0.468).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_append_history_multiple_entries() {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+
+        append_history(&make_entry("longmemeval", 0.468), &path).unwrap();
+        append_history(&make_entry("locomo", 0.432), &path).unwrap();
+
+        // File should have exactly 2 lines.
+        let file = std::fs::File::open(&path).unwrap();
+        let lines: Vec<String> = std::io::BufReader::new(file)
+            .lines()
+            .map(|l| l.unwrap())
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert_eq!(lines.len(), 2, "Should have 2 JSONL entries");
+
+        let first: HistoryEntry = serde_json::from_str(&lines[0]).unwrap();
+        let second: HistoryEntry = serde_json::from_str(&lines[1]).unwrap();
+        assert_eq!(first.benchmark, "longmemeval");
+        assert_eq!(second.benchmark, "locomo");
+    }
+}
 
 /// Per-category accuracy metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
