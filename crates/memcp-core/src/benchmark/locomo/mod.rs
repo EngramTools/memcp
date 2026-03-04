@@ -1,11 +1,13 @@
 /// LoCoMo benchmark module.
 ///
 /// Provides typed dataset structs, dataset loading, F1 scoring, dual-mode ingestion,
-/// and LLM answer generation for the LoCoMo benchmark.
+/// LLM answer generation, and the benchmark runner for the LoCoMo benchmark.
 pub mod dataset;
 pub mod evaluate;
 pub mod ingest;
+pub mod runner;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -118,6 +120,49 @@ pub struct LoCoMoResult {
     pub per_category: HashMap<String, LoCoMoCategoryStats>,
     pub question_count: usize,
     pub results: Vec<LoCoMoQuestionResult>,
+}
+
+// ─── Checkpoint State ─────────────────────────────────────────────────────────
+
+/// Checkpoint/resume state for a LoCoMo benchmark run.
+///
+/// Saved after each sample completes so interrupted runs can resume from the
+/// last completed sample (not from within a sample).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoCoMoState {
+    /// Name of the BenchmarkConfig being run.
+    pub config_name: String,
+    /// Ingestion mode string ("per-turn" or "per-session").
+    pub ingestion_mode: String,
+    /// Sample IDs that have fully completed (all QA pairs evaluated).
+    pub completed_sample_ids: Vec<String>,
+    /// All question results accumulated so far.
+    pub results: Vec<LoCoMoQuestionResult>,
+    /// When this run started.
+    pub started_at: DateTime<Utc>,
+}
+
+/// Save a LoCoMo checkpoint to disk.
+pub fn save_locomo_checkpoint(
+    state: &LoCoMoState,
+    path: &std::path::Path,
+) -> Result<(), anyhow::Error> {
+    let json = serde_json::to_string_pretty(state)?;
+    std::fs::write(path, json)?;
+    Ok(())
+}
+
+/// Load a LoCoMo checkpoint from disk. Returns None if the file does not exist.
+pub fn load_locomo_checkpoint(
+    path: &std::path::Path,
+) -> Result<Option<LoCoMoState>, anyhow::Error> {
+    if path.exists() {
+        let json = std::fs::read_to_string(path)?;
+        let state: LoCoMoState = serde_json::from_str(&json)?;
+        Ok(Some(state))
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
