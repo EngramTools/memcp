@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde_json;
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
-    Row,
+    Connection as _, Row,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -116,6 +116,10 @@ pub struct PostgresMemoryStore {
     embedding_dimension: Option<usize>,
     /// Idempotency configuration: dedup window, key TTL, max key length.
     idempotency_config: IdempotencyConfig,
+    /// Optional schema name for isolation (e.g. "benchmark").
+    /// When set, all pool connections use SET search_path TO {schema}, public.
+    /// When None, uses the default public schema.
+    schema: Option<String>,
 }
 
 impl PostgresMemoryStore {
@@ -125,7 +129,7 @@ impl PostgresMemoryStore {
     /// If run_migrations is true, automatically runs pending migrations on startup.
     /// Detects ParadeDB pg_search extension at startup and caches result.
     pub async fn new(database_url: &str, run_migrations: bool) -> Result<Self, MemcpError> {
-        Self::new_with_search_config(database_url, run_migrations, &SearchConfig::default()).await
+        Self::new_with_schema(database_url, run_migrations, &SearchConfig::default(), None).await
     }
 
     /// Create a new PostgresMemoryStore with an explicit SearchConfig.
@@ -136,14 +140,72 @@ impl PostgresMemoryStore {
         run_migrations: bool,
         search_config: &SearchConfig,
     ) -> Result<Self, MemcpError> {
-        let pool = PgPoolOptions::new()
-            .max_connections(10)         // good default for single-server MCP stdio
-            .min_connections(1)          // keep at least one warm connection
-            .idle_timeout(Duration::from_secs(300))    // 5 min idle cleanup
-            .max_lifetime(Duration::from_secs(1800))   // 30 min max connection age
-            .connect(database_url)
-            .await
-            .map_err(|e| MemcpError::Storage(format!("Failed to connect to database: {}", e)))?;
+        Self::new_with_schema(database_url, run_migrations, search_config, None).await
+    }
+
+    /// Create a new PostgresMemoryStore with optional schema isolation.
+    ///
+    /// When `schema` is `Some(name)`, all pool connections use `SET search_path TO {name}, public`
+    /// so that migrations and queries operate in the target schema rather than public.
+    /// `public` is kept in the search_path so extensions (pgvector, pg_trgm) remain accessible.
+    ///
+    /// When `schema` is `None`, behaves identically to the existing constructors (public schema).
+    ///
+    /// The schema name must be alphanumeric + underscore only to prevent SQL injection.
+    pub async fn new_with_schema(
+        database_url: &str,
+        run_migrations: bool,
+        search_config: &SearchConfig,
+        schema: Option<&str>,
+    ) -> Result<Self, MemcpError> {
+        // Validate schema name if provided
+        if let Some(name) = schema {
+            if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                return Err(MemcpError::Storage(format!(
+                    "Invalid schema name '{}': must be alphanumeric/underscore only",
+                    name
+                )));
+            }
+        }
+
+        // If schema requested, create it via a one-off connection before building the pool
+        if let Some(name) = schema {
+            let mut conn = sqlx::postgres::PgConnection::connect(database_url)
+                .await
+                .map_err(|e| MemcpError::Storage(format!("Failed to connect for schema creation: {}", e)))?;
+            sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", name))
+                .execute(&mut conn)
+                .await
+                .map_err(|e| MemcpError::Storage(format!("Failed to create schema '{}': {}", name, e)))?;
+            conn.close().await.ok();
+        }
+
+        // Build pool with optional search_path hook for schema isolation
+        let schema_owned: Option<String> = schema.map(|s| s.to_string());
+        let pool = {
+            let mut opts = PgPoolOptions::new()
+                .max_connections(10)         // good default for single-server MCP stdio
+                .min_connections(1)          // keep at least one warm connection
+                .idle_timeout(Duration::from_secs(300))    // 5 min idle cleanup
+                .max_lifetime(Duration::from_secs(1800));  // 30 min max connection age
+
+            if let Some(ref schema_name) = schema_owned {
+                let s = schema_name.clone();
+                opts = opts.after_connect(move |conn, _meta| {
+                    let schema = s.clone();
+                    Box::pin(async move {
+                        sqlx::query(&format!("SET search_path TO \"{}\", public", schema))
+                            .execute(&mut *conn)
+                            .await?;
+                        Ok(())
+                    })
+                });
+            }
+
+            opts.connect(database_url)
+                .await
+                .map_err(|e| MemcpError::Storage(format!("Failed to connect to database: {}", e)))?
+        };
 
         if run_migrations {
             sqlx::migrate!("./migrations")
@@ -178,7 +240,34 @@ impl PostgresMemoryStore {
             false
         };
 
-        Ok(PostgresMemoryStore { pool, paradedb_available, use_paradedb, embedding_dimension: None, idempotency_config: IdempotencyConfig::default() })
+        Ok(PostgresMemoryStore {
+            pool,
+            paradedb_available,
+            use_paradedb,
+            embedding_dimension: None,
+            idempotency_config: IdempotencyConfig::default(),
+            schema: schema_owned,
+        })
+    }
+
+    /// Drop the schema used by this store (CASCADE).
+    ///
+    /// Only valid when the store was created with a schema via `new_with_schema()`.
+    /// Returns an error if no schema was set.
+    /// Used by the benchmark binary to clean up the ephemeral benchmark schema after a run.
+    pub async fn drop_schema(&self) -> Result<(), MemcpError> {
+        if let Some(ref schema_name) = self.schema {
+            sqlx::query(&format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema_name))
+                .execute(&self.pool)
+                .await
+                .map_err(|e| MemcpError::Storage(format!(
+                    "Failed to drop schema '{}': {}", schema_name, e
+                )))?;
+            tracing::info!(schema = %schema_name, "Dropped benchmark schema");
+            Ok(())
+        } else {
+            Err(MemcpError::Storage("No schema set — cannot drop".to_string()))
+        }
     }
 
     /// Create a PostgresMemoryStore from an existing connection pool.
@@ -199,6 +288,7 @@ impl PostgresMemoryStore {
             use_paradedb,
             embedding_dimension: None,
             idempotency_config: IdempotencyConfig::default(),
+            schema: None,
         })
     }
 
@@ -219,6 +309,7 @@ impl PostgresMemoryStore {
             use_paradedb,
             embedding_dimension: None,
             idempotency_config,
+            schema: None,
         })
     }
 
