@@ -1314,13 +1314,16 @@ Callable from code_execution_20260120 sandboxes.")]
         scorer.rank(&mut scored_hits, &salience_inputs);
 
         // 12.5 Apply temporal soft boost if time range extracted
+        // Uses event_time (content-referenced time) when present, falling back to created_at.
+        // This means a memory stored today about "in 2019" correctly gets boosted when
+        // searching for "2019 memories" — the event time takes precedence over store time.
         if let Some(ref time_range) = qi_time_range {
             for hit in &mut scored_hits {
-                let created = hit.memory.created_at;
+                let t = hit.memory.event_time.unwrap_or(hit.memory.created_at);
                 let in_range = match (time_range.after, time_range.before) {
-                    (Some(after), Some(before)) => created >= after && created <= before,
-                    (Some(after), None) => created >= after,
-                    (None, Some(before)) => created <= before,
+                    (Some(after), Some(before)) => t >= after && t <= before,
+                    (Some(after), None) => t >= after,
+                    (None, Some(before)) => t <= before,
                     (None, None) => false,
                 };
                 if in_range {
