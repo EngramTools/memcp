@@ -570,13 +570,19 @@ Plans:
 - [ ] 14.6-01-PLAN.md — LoCoMo types, dataset loader, F1 scorer, ingestion, history append, judge model switch [Wave 1]
 - [ ] 14.6-02-PLAN.md — LoCoMo runner, CLI dispatch extension, CI workflow [Wave 2, depends on 01]
 
+## Phase 14.7: Benchmark Schema Isolation
+- **Goal**: Postgres schema isolation for benchmark runs. Benchmarks create and use a dedicated `benchmark` schema instead of operating on `public`, preventing accidental data loss and enabling clean per-run isolation. Schema is ephemeral by default (dropped after run), with `--keep-schema` for post-run inspection.
+- **Status**: Not planned
+- **Depends on**: Phase 14.6
+- **Note**: Uses Postgres `SET search_path` on connection pool — industry standard approach. No conflict with future Phase 12 multi-tenancy (RLS on public schema rows, orthogonal to schema isolation). Scope: benchmark binary only — tests stay on #[sqlx::test] ephemeral DBs.
+
 ## Phase 15: Import & Migration
 - **Goal**: Import memories from external AI tools (OpenClaw, Claude Code, ChatGPT, Claude.ai, markdown, JSONL) and export memcp memories in multiple formats. The onboarding moment — user runs `memcp import`, instantly has thousands of searchable memories from existing AI usage. Three-tier curation pipeline (rule-based noise filter → optional LLM triage → existing memcp hygiene). Embedding reuse from OpenClaw for zero-cost import. Round-trip export for anti-lock-in.
 - **Status**: DONE
 - **Depends on**: Phase 08.12 (HTTP API for `--remote` import), Phase 08.4 (chunking for markdown import)
 - **Design doc**: engram/.planning/memcp-import-design.md
 - **Requirements:** [IMP-01, IMP-02, IMP-03, IMP-04, IMP-05, IMP-06, IMP-07, IMP-08, IMP-09, IMP-10, IMP-11, IMP-12]
-- **Plans:** 5/5 plans complete
+- **Plans:** 1/1 plans complete
 
 Requirements:
 - IMP-01: `memcp import <source> [path]` CLI subcommand with 6 source readers (openclaw, claude-code, chatgpt, claude, markdown, jsonl)

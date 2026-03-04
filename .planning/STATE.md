@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 14.6-02-PLAN.md
-last_updated: "2026-03-04T02:18:41.126Z"
+stopped_at: Completed 14.7-01-PLAN.md
+last_updated: "2026-03-04T06:03:06.036Z"
 progress:
-  total_phases: 49
-  completed_phases: 21
-  total_plans: 101
-  completed_plans: 65
+  total_phases: 50
+  completed_phases: 22
+  total_plans: 102
+  completed_plans: 66
   percent: 64
 ---
 
@@ -21,7 +21,8 @@ Phase 09-documentation-qa-playbook — Ready to discuss
 Progress: [██████░░░░] 65/101 plans (64%)
 
 ## Active Context
-- Last completed: Phase 14.6-02 LoCoMo runner + benchmark CLI dispatch (2026-03-04)
+- Last completed: Phase 14.7-01 Benchmark schema isolation (2026-03-04)
+- Phase 14.7 complete: PostgresMemoryStore schema isolation + benchmark schema lifecycle
 - Phase 14.6 complete: LoCoMo foundation (Plan 01) + runner/CLI/CI (Plan 02)
 - Bi-temporal search story complete: schema+extraction (08.8) + retrieval ranking (08.11.1)
 
@@ -33,11 +34,17 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 **Current focus:** Phase 09 — Documentation & QA Playbook
 
 ## Session Continuity
-Last session: 2026-03-04T02:13:34.690Z
-Stopped at: Completed 14.6-02-PLAN.md
+Last session: 2026-03-04T06:03:06.030Z
+Stopped at: Completed 14.7-01-PLAN.md
 Resume file: None
 
 ## Accumulated Context
+
+### Phase 14.7-01 Decisions
+- Phase 14.7-01: Schema created via one-off PgConnection before pool to avoid chicken-and-egg; pool uses after_connect hook for all connections
+- Phase 14.7-01: search_path includes public so pgvector/pg_trgm extensions remain accessible
+- Phase 14.7-01: Schema name validated to alphanumeric+underscore only — no parameterized DDL in sqlx
+- Phase 14.7-01: drop_schema() returns error if no schema set (explicit error beats silent no-op)
 
 ### Phase 14.6-02 Decisions
 - Phase 14.6-02: LoCoMo runner checkpoints at sample granularity — atomic per conversation, avoids partial-sample resume
