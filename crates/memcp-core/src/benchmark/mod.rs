@@ -11,6 +11,7 @@
 pub mod dataset;
 pub mod evaluate;
 pub mod ingest;
+pub mod locomo;
 pub mod prompts;
 pub mod report;
 pub mod runner;

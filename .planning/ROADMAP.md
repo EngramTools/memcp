@@ -549,10 +549,26 @@ Plans:
 
 ### Phase 14.6: Standardized Benchmarking (LongMemEval + LoCoMo)
 - **Goal**: Run memcp against LongMemEval and LoCoMo benchmarks. Publish scores. Every serious competitor publishes these — memcp is invisible without them. Extend existing Phase 06.3 benchmark harness with standard benchmark dataset runners. CI integration for regression.
-- **Status**: In progress (LongMemEval run underway)
+- **Status**: In progress
 - **Depends on**: Phase 12 (for public-facing numbers), but can run internally anytime
 - **Source**: Competitive landscape analysis — table-stakes for credibility
 - **Note**: Could be done pre-v1 for internal baseline. Public numbers published with open-source launch.
+- **Requirements:** [BENCH-01, BENCH-02, BENCH-03, BENCH-04, BENCH-05, BENCH-06, BENCH-07, BENCH-08]
+- **Plans:** 2 plans
+
+Requirements:
+- BENCH-01: LoCoMo dataset types (LoCoMoSample, Session, Turn, QaPair) with flexible category deserialization
+- BENCH-02: LoCoMo dataset loader (locomo10.json parser)
+- BENCH-03: SQuAD-style F1 scoring (token-level precision/recall/F1 with normalization)
+- BENCH-04: LoCoMo runner with per-sample isolation (truncate, ingest conversation, evaluate all QA pairs)
+- BENCH-05: Dual ingestion modes (per-turn and per-session) for LoCoMo conversations
+- BENCH-06: Benchmark history tracking (JSONL append after each run with timestamp, scores, git SHA)
+- BENCH-07: CLI --benchmark flag dispatching to LongMemEval or LoCoMo runners
+- BENCH-08: CI workflow_dispatch for manual benchmark triggers
+
+Plans:
+- [ ] 14.6-01-PLAN.md — LoCoMo types, dataset loader, F1 scorer, ingestion, history append, judge model switch [Wave 1]
+- [ ] 14.6-02-PLAN.md — LoCoMo runner, CLI dispatch extension, CI workflow [Wave 2, depends on 01]
 
 ## Phase 15: Import & Migration
 - **Goal**: Import memories from external AI tools (OpenClaw, Claude Code, ChatGPT, Claude.ai, markdown, JSONL) and export memcp memories in multiple formats. The onboarding moment — user runs `memcp import`, instantly has thousands of searchable memories from existing AI usage. Three-tier curation pipeline (rule-based noise filter → optional LLM triage → existing memcp hygiene). Embedding reuse from OpenClaw for zero-cost import. Round-trip export for anti-lock-in.

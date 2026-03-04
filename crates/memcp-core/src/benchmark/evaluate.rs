@@ -11,9 +11,9 @@ use crate::store::Memory;
 
 use super::prompts;
 
-const OPENAI_CHAT_URL: &str = "https://api.openai.com/v1/chat/completions";
-const JUDGE_MODEL: &str = "gpt-4o-2024-08-06";
-const ANSWER_MODEL: &str = "gpt-4o-2024-08-06";
+pub(crate) const OPENAI_CHAT_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
+const JUDGE_MODEL: &str = "openai/gpt-4o-mini-2024-07-18";
+pub(crate) const ANSWER_MODEL: &str = "openai/gpt-4o-2024-08-06";
 const MAX_RETRIES: u32 = 5;
 
 /// Generate an answer from retrieved memories using GPT-4o.
@@ -65,7 +65,7 @@ pub async fn judge_answer(
 }
 
 /// Call OpenAI API with exponential backoff retry on rate limits (429) and server errors (5xx).
-async fn call_openai_with_retry(
+pub(crate) async fn call_openai_with_retry(
     client: &Client,
     api_key: &str,
     body: &serde_json::Value,
