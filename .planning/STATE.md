@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 14.6-01-PLAN.md
-last_updated: "2026-03-04T02:02:51.586Z"
+stopped_at: Completed 14.6-02-PLAN.md
+last_updated: "2026-03-04T02:13:34.704Z"
 progress:
   total_phases: 49
-  completed_phases: 20
+  completed_phases: 21
   total_plans: 101
-  completed_plans: 64
+  completed_plans: 65
   percent: 64
 ---
 
@@ -18,11 +18,11 @@ progress:
 ## Current Phase
 Phase 09-documentation-qa-playbook — Ready to discuss
 
-Progress: [█████████████░░░░░░░] 63/99 plans (64%)
+Progress: [██████░░░░] 65/101 plans (64%)
 
 ## Active Context
-- Last completed: Phase 08.11.1 Bi-temporal search event_time wiring (2026-03-04)
-- Phase 08.12 (HTTP API) was already completed previously — skipped during auto-advance
+- Last completed: Phase 14.6-02 LoCoMo runner + benchmark CLI dispatch (2026-03-04)
+- Phase 14.6 complete: LoCoMo foundation (Plan 01) + runner/CLI/CI (Plan 02)
 - Bi-temporal search story complete: schema+extraction (08.8) + retrieval ranking (08.11.1)
 
 ## Project Reference
@@ -33,11 +33,18 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 **Current focus:** Phase 09 — Documentation & QA Playbook
 
 ## Session Continuity
-Last session: 2026-03-04T02:02:51.581Z
-Stopped at: Completed 14.6-01-PLAN.md
+Last session: 2026-03-04T02:13:34.690Z
+Stopped at: Completed 14.6-02-PLAN.md
 Resume file: None
 
 ## Accumulated Context
+
+### Phase 14.6-02 Decisions
+- Phase 14.6-02: LoCoMo runner checkpoints at sample granularity — atomic per conversation, avoids partial-sample resume
+- Phase 14.6-02: Adversarial scoring (category 5) uses phrase-matching not LLM judge — 12 abstention phrases, consistent with semantics
+- Phase 14.6-02: benchmark.yml uses workflow_dispatch only — no push/PR triggers; benchmark costs are explicit and manual
+- Phase 14.6-02: LoCoMo report generates both overall_f1 and task_averaged_f1 — official metric is task_averaged (mean of per-category means)
+- Phase 14.6-02: truncate_all() retries 5x with exponential backoff on deadlock — embedding worker can hold locks during flush
 
 ### Phase 14.6-01 Decisions
 - Phase 14.6-01: F1 partial overlap test corrected: 'The capital is Paris' vs 'Paris' yields 0.4 (not > 0.5) — SQuAD math is correct; plan spec expectation was wrong; test updated with correct assertions
