@@ -393,7 +393,7 @@ Plans:
 
 ## Phase 08.11: Warm Recall & Session-Aware Ranking
 - **Goal**: Session-aware ranking enhancements for `memcp recall`. Tag-affinity boosting (`--boost-tags`) lets callers pass context tags (channel, agent, topic) that give a soft ranking bonus. Session topic accumulation tracks recalled memory tags and uses accumulated context as implicit bias for future recalls. Decoupled from plugin — these are memcp-side primitives usable by any caller.
-- **Status**: Not started
+- **Status**: DONE
 - **Depends on**: Phase 08.9
 - **Origin**: engram/.planning/memcp-knowledge-layer-vision.md (Phase 2 — Warm Recall, lines 113-124)
 - **Plans:** 2/2 plans complete
@@ -402,9 +402,19 @@ Plans:
 - [ ] 08.11-01-PLAN.md — Config extension (5 RecallConfig fields) + migration 019 (session_tags) + store methods + tag boost helpers + RecalledMemory extension [Wave 1]
 - [ ] 08.11-02-PLAN.md — Wire boost into RecallEngine (both paths) + CLI --boost-tags + MCP boost_tags param + session tag accumulation [Wave 2, depends on 01]
 
+## Phase 08.11.1: Bi-Temporal Search (event_time wiring)
+- **Goal**: Wire `event_time` into temporal search boost. One-line fix in server.rs: prefer `event_time` over `created_at` when present in temporal range matching. Completes the bi-temporal search story started in Phase 08.8 (which added the schema + extraction but never wired it into retrieval). `let t = hit.memory.event_time.unwrap_or(hit.memory.created_at);`
+- **Status**: Not started
+- **Depends on**: Phase 08.11
+- **Origin**: Competitive analysis (2026-03-03) — Zep/Graphiti bi-temporal comparison revealed memcp has the schema but doesn't query against event_time
+- **Plans:** 1 plan
+
+Plans:
+- [ ] 08.11.1-01-PLAN.md — Wire event_time into temporal boost + unit test [Wave 1]
+
 ## Phase 08.12: HTTP API (Remote Daemon Mode)
 - **Goal**: Extend the existing axum health server (port 9090) with API routes for core memcp operations. Add `--remote <url>` / `MEMCP_URL` env var to the CLI so it can route through HTTP instead of direct Postgres. Enables the OpenClaw plugin to call memcp over the network without Postgres credentials or a memcp binary in the OpenClaw container.
-- **Status**: Not started
+- **Status**: DONE
 - **Depends on**: Phase 08.10
 - **Origin**: engram Phase 3 Docker architecture — plugin needs to reach memcp from a separate container without shared Postgres credentials
 - **Requirements:** [HTTP-01, HTTP-02, HTTP-03, HTTP-04, HTTP-05, HTTP-06, HTTP-07]
@@ -500,15 +510,53 @@ Plans:
 - **Status**: REMOVED — claw-control IS the dashboard. API endpoints will be added as needed by claw-control integration (engram Phase 4).
 - **Note**: memcp does NOT need its own admin UI or dedicated API surface. claw-control calls memcp CLI/MCP directly.
 
-## Phase 14: Memory Boosting
-- **Goal**: Competitor-informed improvements (from hindsight/jarvis research in engram-analysis.md)
+## Phase 14: Memory Boosting (Competitor-Informed)
+- **Goal**: Retrieval and evolution improvements informed by competitive landscape analysis (engram/.planning/competitive-landscape.md). Focuses on the highest-impact ideas from code review of 10+ competitor codebases.
 - **Status**: Not planned
 - **Depends on**: Phase 12
 - **Note**: PRIVATE — stays in private repo, never enters public memcp fork
+- **Origin**: Competitive landscape research (2026-03-03) — Viren Mohindra's "State of Agent Memory 2026", SimpleMem, A-Mem, mcp-memory-service, Mem0
+
+### Phase 14.1: Multi-Query Retrieval
+- **Goal**: Decompose a search query into 1-4 targeted sub-queries, each hitting the hybrid search pipeline in parallel, then merge results. Modeled after SimpleMem's intent-aware retrieval planning — rated "the best retrieval strategy in the survey" by code review. Directly improves recall for complex/multi-faceted queries.
+- **Status**: Not planned
+- **Depends on**: Phase 14
+- **Source**: SimpleMem (arXiv:2601.02553)
+
+### Phase 14.2: Type-Specific Retention Periods
+- **Goal**: Make salience decay vary by memory type. Architecture decisions get longer retention (365 days), error observations get shorter (30 days), ephemeral context decays fastest. Uses existing `expires_at` column + `type_hint` to set retention at store time. Configurable retention schedule in memcp.toml.
+- **Status**: Not planned
+- **Depends on**: Phase 14
+- **Source**: mcp-memory-service (doobidoo)
+
+### Phase 14.3: Retroactive Neighbor Enrichment
+- **Goal**: When a new memory is stored, retrieve the 5 nearest existing memories and use an LLM to update their tags and context to reflect emerging patterns. New information doesn't just add to the store — it changes how old memories are represented. Addresses the "no feedback loop" gap. Makes the memory store compound over time.
+- **Status**: Not planned
+- **Depends on**: Phase 14.1
+- **Source**: A-Mem (NeurIPS 2025, arXiv:2502.12110, Zetzelkasten-inspired)
+
+### Phase 14.4: Creative Association Discovery
+- **Goal**: New query mode that searches the 0.3-0.7 cosine similarity "sweet spot" between memory pairs. Above 0.7 = redundant (already known to be related). Below 0.3 = noise. The sweet spot finds genuinely unexpected connections. Exposed as `memcp discover` CLI command and MCP tool.
+- **Status**: Not planned
+- **Depends on**: Phase 14
+- **Source**: mcp-memory-service ("dream-inspired" consolidation)
+
+### Phase 14.5: UUID Hallucination Prevention
+- **Goal**: Replace real UUIDs with integer indices before passing memory IDs to LLMs. Prevents a class of errors where models generate plausible-looking but invalid UUIDs. Transform layer in MCP tool responses and search result formatting.
+- **Status**: Not planned
+- **Depends on**: Phase 14
+- **Source**: Mem0 (discovered during code review)
+
+### Phase 14.6: Standardized Benchmarking (LongMemEval + LoCoMo)
+- **Goal**: Run memcp against LongMemEval and LoCoMo benchmarks. Publish scores. Every serious competitor publishes these — memcp is invisible without them. Extend existing Phase 06.3 benchmark harness with standard benchmark dataset runners. CI integration for regression.
+- **Status**: In progress (LongMemEval run underway)
+- **Depends on**: Phase 12 (for public-facing numbers), but can run internally anytime
+- **Source**: Competitive landscape analysis — table-stakes for credibility
+- **Note**: Could be done pre-v1 for internal baseline. Public numbers published with open-source launch.
 
 ## Phase 15: Import & Migration
 - **Goal**: Import memories from external AI tools (OpenClaw, Claude Code, ChatGPT, Claude.ai, markdown, JSONL) and export memcp memories in multiple formats. The onboarding moment — user runs `memcp import`, instantly has thousands of searchable memories from existing AI usage. Three-tier curation pipeline (rule-based noise filter → optional LLM triage → existing memcp hygiene). Embedding reuse from OpenClaw for zero-cost import. Round-trip export for anti-lock-in.
-- **Status**: Planning complete
+- **Status**: DONE
 - **Depends on**: Phase 08.12 (HTTP API for `--remote` import), Phase 08.4 (chunking for markdown import)
 - **Design doc**: engram/.planning/memcp-import-design.md
 - **Requirements:** [IMP-01, IMP-02, IMP-03, IMP-04, IMP-05, IMP-06, IMP-07, IMP-08, IMP-09, IMP-10, IMP-11, IMP-12]
@@ -529,9 +577,8 @@ Requirements:
 - IMP-12: `[import]` config section in memcp.toml for noise_patterns, batch_size, default_project
 
 Plans:
-- [ ] 15-01-PLAN.md — Core import infrastructure: ImportSource trait, ImportEngine pipeline, noise filter, dedup, batch insert, checkpoint, progress bar, JSONL reader [Wave 1]
-- [ ] 15-02-PLAN.md — Export pipeline: JSONL/CSV/Markdown formatters, ExportEngine, CLI wiring, round-trip test [Wave 1]
-- [ ] 15-03-PLAN.md — OpenClaw reader (SQLite + embedding reuse) + Claude Code reader (MEMORY.md + history.jsonl) + Discovery command [Wave 2, depends on 01]
-- [ ] 15-04-PLAN.md — ChatGPT + Claude.ai ZIP readers + Markdown reader + Tier 2 LLM triage (--curate) [Wave 2, depends on 01]
-- [ ] 15-05-PLAN.md — Review/rescue commands + --remote import + ImportConfig + integration tests [Wave 3, depends on 03+04]
-
+- [x] 15-01-PLAN.md — Core import infrastructure: ImportSource trait, ImportEngine pipeline, noise filter, dedup, batch insert, checkpoint, progress bar, JSONL reader [Wave 1]
+- [x] 15-02-PLAN.md — Export pipeline: JSONL/CSV/Markdown formatters, ExportEngine, CLI wiring, round-trip test [Wave 1]
+- [x] 15-03-PLAN.md — OpenClaw reader (SQLite + embedding reuse) + Claude Code reader (MEMORY.md + history.jsonl) + Discovery command [Wave 2, depends on 01]
+- [x] 15-04-PLAN.md — ChatGPT + Claude.ai ZIP readers + Markdown reader + Tier 2 LLM triage (--curate) [Wave 2, depends on 01]
+- [x] 15-05-PLAN.md — Review/rescue commands + --remote import + ImportConfig + integration tests [Wave 3, depends on 03+04]
