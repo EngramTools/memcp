@@ -2,7 +2,6 @@
 ///
 /// Parses `locomo10.json` into typed `LoCoMoSample` structs.
 /// The file is a JSON array at the top level.
-
 use std::io::BufReader;
 use std::path::Path;
 
