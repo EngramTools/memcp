@@ -1,0 +1,143 @@
+name: Benchmark
+
+# Manual-trigger only — benchmarks are expensive (LLM API calls + DB).
+# Do not run on push/PR to keep CI costs predictable.
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark:
+        description: "Which benchmark to run"
+        required: true
+        type: choice
+        options:
+          - longmemeval
+          - locomo
+        default: longmemeval
+      config:
+        description: "Search configuration"
+        required: true
+        type: choice
+        options:
+          - hybrid
+          - vector-only
+          - hybrid+qi
+          - all
+        default: hybrid
+      ingestion_mode:
+        description: "Ingestion mode (only applies to locomo)"
+        required: false
+        type: choice
+        options:
+          - per-turn
+          - per-session
+        default: per-turn
+      subset:
+        description: "Limit to first N samples/questions (leave empty for full run)"
+        required: false
+        type: string
+        default: ""
+
+env:
+  CARGO_TERM_COLOR: always
+  DATABASE_URL: postgres://memcp:memcp@localhost:5432/memcp
+
+jobs:
+  benchmark:
+    name: "${{ inputs.benchmark }} (${{ inputs.config }})"
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: memcp
+          POSTGRES_PASSWORD: memcp
+          POSTGRES_DB: memcp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memcp"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: benchmark-${{ runner.os }}
+
+      - name: Build benchmark binary
+        run: cargo build --release --features local-embed --bin benchmark
+
+      - name: Prepare data directory
+        run: mkdir -p data/longmemeval data/locomo data/results
+
+      # Download LoCoMo dataset only when running the locomo benchmark.
+      # The locomo10.json file is not committed to the repo (too large).
+      - name: Download LoCoMo dataset
+        if: inputs.benchmark == 'locomo'
+        run: |
+          echo "LoCoMo dataset must be placed at data/locomo/locomo10.json"
+          echo "Download from: https://github.com/google-research/locomo"
+          echo "Or mount via artifact from a previous run."
+          # Fail clearly if the file is not present — no silent empty runs.
+          test -f data/locomo/locomo10.json || {
+            echo "ERROR: data/locomo/locomo10.json not found."
+            echo "Upload it as a GitHub secret or artifact before running this workflow."
+            exit 1
+          }
+
+      - name: Build subset flag
+        id: subset_flag
+        run: |
+          if [ -n "${{ inputs.subset }}" ]; then
+            echo "flag=--subset ${{ inputs.subset }}" >> $GITHUB_OUTPUT
+          else
+            echo "flag=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run LongMemEval benchmark
+        if: inputs.benchmark == 'longmemeval'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          QI_API_KEY: ${{ secrets.QI_API_KEY }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          ./target/release/benchmark \
+            --benchmark longmemeval \
+            --config "${{ inputs.config }}" \
+            --output-dir data/results \
+            --history-file data/benchmark_history.jsonl \
+            ${{ steps.subset_flag.outputs.flag }}
+
+      - name: Run LoCoMo benchmark
+        if: inputs.benchmark == 'locomo'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          QI_API_KEY: ${{ secrets.QI_API_KEY }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          ./target/release/benchmark \
+            --benchmark locomo \
+            --config "${{ inputs.config }}" \
+            --ingestion-mode "${{ inputs.ingestion_mode }}" \
+            --output-dir data/results \
+            --history-file data/benchmark_history.jsonl \
+            ${{ steps.subset_flag.outputs.flag }}
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "benchmark-results-${{ inputs.benchmark }}-${{ inputs.config }}-${{ github.run_id }}"
+          path: |
+            data/results/
+            data/benchmark_history.jsonl
+          retention-days: 90

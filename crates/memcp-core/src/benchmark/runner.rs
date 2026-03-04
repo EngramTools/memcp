@@ -4,15 +4,16 @@
 /// Supports checkpoint/resume so interrupted runs can continue from where they left off.
 /// Config matrix enables comparison of search weight configurations.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Client;
 
 use crate::embedding::pipeline::EmbeddingPipeline;
 use crate::embedding::EmbeddingProvider;
+use crate::intelligence::query_intelligence::{QueryIntelligenceProvider, RankedCandidate};
 use crate::store::postgres::PostgresMemoryStore;
 
 use super::dataset::LongMemEvalQuestion;
@@ -39,6 +40,7 @@ pub async fn run_benchmark(
     openai_api_key: &str,
     checkpoint_path: &std::path::Path,
     resume_state: Option<BenchmarkState>,
+    qi_provider: Option<Arc<dyn QueryIntelligenceProvider>>,
 ) -> Result<Vec<QuestionResult>, anyhow::Error> {
     let client = Client::new();
 
@@ -74,7 +76,8 @@ pub async fn run_benchmark(
 
         let start = Instant::now();
 
-        // Step 1: Clean slate — truncate all memories for database isolation per question
+        // Step 1: Drain any in-flight embeddings, then clean slate for database isolation
+        pipeline.flush().await;
         store.truncate_all().await?;
 
         // Step 2: Ingest haystack sessions as memories with temporal timestamps
@@ -99,9 +102,50 @@ pub async fn run_benchmark(
             None
         };
 
+        // Step 3a: QI expansion — rewrite query + extract date filters (fail-open)
+        let mut search_query = question.question.clone();
+        let mut created_after = None;
+        let mut created_before = None;
+
+        if config.qi_expansion {
+            if let Some(ref provider) = qi_provider {
+                let timeout = Duration::from_secs(2);
+                match tokio::time::timeout(timeout, provider.expand(&question.question)).await {
+                    Ok(Ok(expanded)) => {
+                        if let Some(best) = expanded.variants.into_iter().next() {
+                            tracing::debug!(
+                                question_id = %question.question_id,
+                                original = %question.question,
+                                expanded = %best,
+                                "QI expansion rewrote query"
+                            );
+                            search_query = best;
+                        }
+                        if let Some(tr) = expanded.time_range {
+                            created_after = tr.after;
+                            created_before = tr.before;
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(
+                            question_id = %question.question_id,
+                            error = %e,
+                            "QI expansion failed — using original query"
+                        );
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            question_id = %question.question_id,
+                            "QI expansion timed out — using original query"
+                        );
+                    }
+                }
+            }
+        }
+
         // Embed the question for vector search leg; fall back to BM25-only if embedding fails
         let query_embedding = if vector_k.is_some() {
-            match embedding_provider.embed(&question.question).await {
+            match embedding_provider.embed(&search_query).await {
                 Ok(vec) => Some(pgvector::Vector::from(vec)),
                 Err(e) => {
                     tracing::warn!(
@@ -116,13 +160,13 @@ pub async fn run_benchmark(
             None
         };
 
-        let hits = store
+        let mut hits = store
             .hybrid_search(
-                &question.question,
+                &search_query,
                 query_embedding.as_ref(),
                 20,    // fetch 20 candidates from fused results
-                None,  // no date filters for benchmark
-                None,
+                created_after,
+                created_before,
                 None,  // no tag filters
                 bm25_k,
                 vector_k,
@@ -132,6 +176,51 @@ pub async fn run_benchmark(
                 None,  // no workspace filter for benchmark
             )
             .await?;
+
+        // Step 3b: QI reranking — LLM reorders the 20 candidates (fail-open)
+        if config.qi_reranking {
+            if let Some(ref provider) = qi_provider {
+                let candidates: Vec<RankedCandidate> = hits.iter().enumerate().map(|(i, h)| {
+                    RankedCandidate {
+                        id: h.memory.id.to_string(),
+                        content: h.memory.content.chars().take(500).collect(),
+                        current_rank: i + 1,
+                    }
+                }).collect();
+
+                let timeout = Duration::from_secs(3);
+                match tokio::time::timeout(timeout, provider.rerank(&search_query, &candidates)).await {
+                    Ok(Ok(ranked)) => {
+                        // Build id → position map from LLM ranking
+                        let rank_map: HashMap<String, usize> = ranked.iter()
+                            .map(|r| (r.id.clone(), r.llm_rank))
+                            .collect();
+                        // Sort hits by LLM rank; unranked items go to the end
+                        hits.sort_by_key(|h| {
+                            *rank_map.get(&h.memory.id.to_string()).unwrap_or(&usize::MAX)
+                        });
+                        tracing::debug!(
+                            question_id = %question.question_id,
+                            "QI reranking reordered {} hits",
+                            ranked.len()
+                        );
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(
+                            question_id = %question.question_id,
+                            error = %e,
+                            "QI reranking failed — using original order"
+                        );
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            question_id = %question.question_id,
+                            "QI reranking timed out — using original order"
+                        );
+                    }
+                }
+            }
+        }
 
         // Take top 10 memories for answer generation (fits context window)
         let memories: Vec<_> = hits.into_iter().take(10).map(|h| h.memory).collect();

@@ -231,12 +231,23 @@ impl PostgresMemoryStore {
 
     /// Truncate all benchmark-relevant tables: memories, memory_embeddings, memory_salience, memory_consolidations.
     /// Uses TRUNCATE ... CASCADE for speed. Benchmark-only — not exposed via MCP.
+    /// Retries up to 5 times on deadlock (embedding worker may hold locks).
     pub async fn truncate_all(&self) -> Result<(), MemcpError> {
-        sqlx::query("TRUNCATE memories, memory_embeddings, memory_salience, memory_consolidations CASCADE")
-            .execute(&self.pool)
-            .await
-            .map_err(|e| MemcpError::Storage(format!("Failed to truncate tables: {}", e)))?;
-        Ok(())
+        for attempt in 0..5u32 {
+            match sqlx::query("TRUNCATE memories, memory_embeddings, memory_salience, memory_consolidations CASCADE")
+                .execute(&self.pool)
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) if e.to_string().contains("deadlock") && attempt < 4 => {
+                    let delay = std::time::Duration::from_millis(200 * 2u64.pow(attempt));
+                    tracing::warn!(attempt = attempt + 1, delay_ms = delay.as_millis(), "Truncate deadlock, retrying");
+                    tokio::time::sleep(delay).await;
+                }
+                Err(e) => return Err(MemcpError::Storage(format!("Failed to truncate tables: {}", e))),
+            }
+        }
+        unreachable!()
     }
 
     /// Detect whether the ParadeDB pg_search extension is installed on this PostgreSQL instance.

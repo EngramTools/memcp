@@ -5,6 +5,16 @@ database_url = "postgres://memcp:memcp@localhost:5433/memcp"
 log_level = "info"
 # log_file = "/var/log/memcp.log"  # Uncomment to enable file logging
 
+[query_intelligence]
+expansion_enabled = true
+reranking_enabled = true
+expansion_provider = "openai"
+reranking_provider = "openai"
+openai_base_url = "https://openrouter.ai/api/v1"
+# openai_api_key = "<OPENROUTER_API_KEY>"  # Set via env: MEMCP_QUERY_INTELLIGENCE__OPENAI_API_KEY
+expansion_openai_model = "google/gemini-2.5-flash-lite"
+reranking_openai_model = "google/gemini-2.5-flash-lite"
+
 [auto_store]
 enabled = true
 watch_paths = [

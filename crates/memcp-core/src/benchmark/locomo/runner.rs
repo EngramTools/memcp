@@ -76,6 +76,7 @@ fn score_adversarial(hypothesis: &str) -> f64 {
 /// 5. Save checkpoint after each sample (atomic per conversation)
 ///
 /// Returns Vec of LoCoMoQuestionResult for all QA pairs processed.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_locomo_benchmark(
     samples: &[LoCoMoSample],
     config: &BenchmarkConfig,
