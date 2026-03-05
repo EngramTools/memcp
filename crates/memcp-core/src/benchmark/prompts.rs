@@ -35,8 +35,13 @@ pub fn build_answer_prompt(
          Today's date: {question_date}\n\n\
          Conversation memories in chronological order:\n{context}\n\n\
          Question: {question}\n\n\
-         Answer the question based ONLY on the information in the memories above. \
-         If the information is not available in the memories, say \"I don't have that information in my memory.\" \
+         Instructions:\n\
+         1. Carefully read ALL memories above — the answer may require combining facts from multiple conversations.\n\
+         2. For counting questions (\"how many\"), scan every memory and list each matching item before giving a total.\n\
+         3. For calculations (costs, time, distances), extract the specific numbers from the memories and show your arithmetic.\n\
+         4. For date/duration questions, identify the specific dates and calculate step by step.\n\
+         5. If the question asks about something never discussed in any memory, say \"I don't have that information in my memory.\" \
+         But if the memories contain partial or indirect evidence, attempt an answer rather than abstaining.\n\n\
          Be concise and direct."
     )
 }

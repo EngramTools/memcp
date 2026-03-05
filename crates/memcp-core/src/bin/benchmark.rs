@@ -109,7 +109,7 @@ struct Cli {
     qi_base_url: String,
 
     /// QI model name for both expansion and reranking
-    #[arg(long, default_value = "google/gemini-2.5-flash-lite")]
+    #[arg(long, default_value = "google/gemini-2.5-flash")]
     qi_model: String,
 
     /// Keep the benchmark schema after run (default: drop for clean ephemeral isolation)
@@ -159,6 +159,7 @@ async fn run() -> Result<(), anyhow::Error> {
 /// Run the LongMemEval benchmark (existing pipeline, unchanged behavior).
 #[cfg(feature = "local-embed")]
 async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
+    let run_ts = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
     let dataset_path = cli.dataset.clone().unwrap_or_else(|| {
         PathBuf::from("data/longmemeval/longmemeval_s_cleaned.json")
     });
@@ -196,12 +197,29 @@ async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
     }
     println!();
 
-    // Create output directory
-    std::fs::create_dir_all(&cli.output_dir)?;
+    // Create timestamped output directory: {output_dir}/longmemeval/{YYYYMMDD-HHMMSS}/
+    let run_dir = cli.output_dir.join("longmemeval").join(&run_ts);
+    std::fs::create_dir_all(&run_dir)?;
+    // Checkpoints live in a fixed location (not timestamped) so --resume can find them
+    let checkpoint_dir = cli.output_dir.join("longmemeval").join("checkpoints");
+    std::fs::create_dir_all(&checkpoint_dir)?;
+
+    // Clean slate: drop benchmark schema before run (skip if resuming)
+    if !cli.resume {
+        tracing::info!("Dropping benchmark schema for clean run");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&cli.database_url)
+            .await?;
+        sqlx::query("DROP SCHEMA IF EXISTS benchmark CASCADE")
+            .execute(&pool)
+            .await?;
+        pool.close().await;
+        tracing::info!("Benchmark schema dropped");
+    }
 
     // Initialize database (isolated in benchmark schema)
     tracing::info!(database_url = %cli.database_url, schema = "benchmark", "Connecting to database");
-    tracing::info!(schema = "benchmark", "Using isolated benchmark schema");
     let store = Arc::new(
         PostgresMemoryStore::new_with_schema(
             &cli.database_url,
@@ -270,9 +288,8 @@ async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
     for config in &configs_to_run {
         println!("--- Running config: {} ---", config.name);
 
-        let checkpoint_path = cli
-            .output_dir
-            .join(format!("longmemeval_{}_checkpoint.json", config.name));
+        let checkpoint_path = checkpoint_dir
+            .join(format!("{}_checkpoint.json", config.name));
 
         let resume_state = if cli.resume {
             match load_checkpoint(&checkpoint_path) {
@@ -314,9 +331,9 @@ async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
         report::print_report(&report);
         println!();
 
-        let report_path = cli
-            .output_dir
-            .join(format!("longmemeval_{}_report.json", config.name));
+        // Save report with config name + metric type in the timestamped directory
+        let report_path = run_dir
+            .join(format!("{}_accuracy_report.json", config.name));
         report::save_report(&report, &report_path)?;
         tracing::info!(path = %report_path.display(), "Report saved");
 
@@ -374,6 +391,7 @@ async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
 /// Run the LoCoMo benchmark.
 #[cfg(feature = "local-embed")]
 async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
+    let run_ts = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
     let dataset_path = cli
         .dataset
         .clone()
@@ -432,12 +450,29 @@ async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
     }
     println!();
 
-    // Create output directory
-    std::fs::create_dir_all(&cli.output_dir)?;
+    // Create timestamped output directory: {output_dir}/locomo/{YYYYMMDD-HHMMSS}/
+    let run_dir = cli.output_dir.join("locomo").join(&run_ts);
+    std::fs::create_dir_all(&run_dir)?;
+    // Checkpoints live in a fixed location (not timestamped) so --resume can find them
+    let checkpoint_dir = cli.output_dir.join("locomo").join("checkpoints");
+    std::fs::create_dir_all(&checkpoint_dir)?;
+
+    // Clean slate: drop benchmark schema before run (skip if resuming)
+    if !cli.resume {
+        tracing::info!("Dropping benchmark schema for clean run");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&cli.database_url)
+            .await?;
+        sqlx::query("DROP SCHEMA IF EXISTS benchmark CASCADE")
+            .execute(&pool)
+            .await?;
+        pool.close().await;
+        tracing::info!("Benchmark schema dropped");
+    }
 
     // Initialize database (isolated in benchmark schema)
     tracing::info!(database_url = %cli.database_url, schema = "benchmark", "Connecting to database");
-    tracing::info!(schema = "benchmark", "Using isolated benchmark schema");
     let store = Arc::new(
         PostgresMemoryStore::new_with_schema(
             &cli.database_url,
@@ -506,9 +541,8 @@ async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
     for config in &configs_to_run {
         println!("--- Running config: {} ---", config.name);
 
-        let checkpoint_path = cli
-            .output_dir
-            .join(format!("locomo_{}_checkpoint.json", config.name));
+        let checkpoint_path = checkpoint_dir
+            .join(format!("{}_checkpoint.json", config.name));
 
         let resume_state = if cli.resume {
             match load_locomo_checkpoint(&checkpoint_path) {
@@ -552,10 +586,9 @@ async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
         print_locomo_report(&locomo_report);
         println!();
 
-        // Save JSON report
-        let report_path = cli
-            .output_dir
-            .join(format!("locomo_{}_report.json", config.name));
+        // Save report with config name + metric type in the timestamped directory
+        let report_path = run_dir
+            .join(format!("{}_f1_report.json", config.name));
         let json = serde_json::to_string_pretty(&locomo_report)?;
         std::fs::write(&report_path, json)?;
         tracing::info!(path = %report_path.display(), "LoCoMo report saved");

@@ -14,7 +14,9 @@ use reqwest::Client;
 use crate::embedding::pipeline::EmbeddingPipeline;
 use crate::embedding::EmbeddingProvider;
 use crate::intelligence::query_intelligence::{QueryIntelligenceProvider, RankedCandidate};
+use crate::search::HybridRawHit;
 use crate::store::postgres::PostgresMemoryStore;
+use crate::store::{ListFilter, Memory, MemoryStore};
 
 use super::dataset::LongMemEvalQuestion;
 use super::{evaluate, BenchmarkConfig, BenchmarkState, QuestionResult};
@@ -103,7 +105,7 @@ pub async fn run_benchmark(
         };
 
         // Step 3a: QI expansion — rewrite query + extract date filters (fail-open)
-        let mut search_query = question.question.clone();
+        let mut search_variants = vec![question.question.clone()];
         let mut created_after = None;
         let mut created_before = None;
 
@@ -112,14 +114,15 @@ pub async fn run_benchmark(
                 let timeout = Duration::from_secs(10);
                 match tokio::time::timeout(timeout, provider.expand(&question.question)).await {
                     Ok(Ok(expanded)) => {
-                        if let Some(best) = expanded.variants.into_iter().next() {
+                        if !expanded.variants.is_empty() {
                             tracing::debug!(
                                 question_id = %question.question_id,
                                 original = %question.question,
-                                expanded = %best,
-                                "QI expansion rewrote query"
+                                variants = ?expanded.variants,
+                                "QI expansion produced {} variants",
+                                expanded.variants.len()
                             );
-                            search_query = best;
+                            search_variants = expanded.variants;
                         }
                         if let Some(tr) = expanded.time_range {
                             created_after = tr.after;
@@ -143,39 +146,64 @@ pub async fn run_benchmark(
             }
         }
 
-        // Embed the question for vector search leg; fall back to BM25-only if embedding fails
-        let query_embedding = if vector_k.is_some() {
-            match embedding_provider.embed(&search_query).await {
-                Ok(vec) => Some(pgvector::Vector::from(vec)),
-                Err(e) => {
-                    tracing::warn!(
-                        question_id = %question.question_id,
-                        error = %e,
-                        "Failed to embed question — falling back to BM25-only"
-                    );
-                    None
+        // Multi-query search: run hybrid_search for each variant, merge by best score
+        let mut merged: HashMap<String, HybridRawHit> = HashMap::new();
+
+        for variant in &search_variants {
+            // Embed this variant for the vector search leg
+            let query_embedding = if vector_k.is_some() {
+                match embedding_provider.embed(variant).await {
+                    Ok(vec) => Some(pgvector::Vector::from(vec)),
+                    Err(e) => {
+                        tracing::warn!(
+                            question_id = %question.question_id,
+                            error = %e,
+                            "Failed to embed variant — falling back to BM25-only for this variant"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            let variant_hits = store
+                .hybrid_search(
+                    variant,
+                    query_embedding.as_ref(),
+                    20,    // fetch 20 candidates per variant
+                    created_after,
+                    created_before,
+                    None,  // no tag filters
+                    bm25_k,
+                    vector_k,
+                    symbolic_k,
+                    None,  // no source filter for benchmark
+                    None,  // no audience filter for benchmark
+                    None,  // no project filter for benchmark
+                )
+                .await?;
+
+            // Merge: keep the hit with the highest rrf_score per memory ID
+            for hit in variant_hits {
+                let id = hit.memory.id.clone();
+                match merged.get(&id) {
+                    Some(existing) if existing.rrf_score >= hit.rrf_score => {}
+                    _ => { merged.insert(id, hit); }
                 }
             }
-        } else {
-            None
-        };
+        }
 
-        let mut hits = store
-            .hybrid_search(
-                &search_query,
-                query_embedding.as_ref(),
-                50,    // fetch 50 candidates (multi_session needs hits across many sessions)
-                created_after,
-                created_before,
-                None,  // no tag filters
-                bm25_k,
-                vector_k,
-                symbolic_k,
-                None,  // no source filter for benchmark
-                None,  // no audience filter for benchmark
-                None,  // no project filter for benchmark
-            )
-            .await?;
+        // Collect merged hits sorted by rrf_score descending
+        let mut hits: Vec<HybridRawHit> = merged.into_values().collect();
+        hits.sort_by(|a, b| b.rrf_score.partial_cmp(&a.rrf_score).unwrap_or(std::cmp::Ordering::Equal));
+
+        tracing::debug!(
+            question_id = %question.question_id,
+            variants = search_variants.len(),
+            merged_hits = hits.len(),
+            "Multi-query search merged results"
+        );
 
         // Step 3b: QI reranking — LLM reorders the 20 candidates (fail-open)
         if config.qi_reranking {
@@ -189,7 +217,7 @@ pub async fn run_benchmark(
                 }).collect();
 
                 let timeout = Duration::from_secs(15);
-                match tokio::time::timeout(timeout, provider.rerank(&search_query, &candidates)).await {
+                match tokio::time::timeout(timeout, provider.rerank(&question.question, &candidates)).await {
                     Ok(Ok(ranked)) => {
                         // Build id → position map from LLM ranking
                         let rank_map: HashMap<String, usize> = ranked.iter()
@@ -222,8 +250,9 @@ pub async fn run_benchmark(
             }
         }
 
-        // Take top 15 memories for answer generation (fits gpt-4o context easily)
-        let memories: Vec<_> = hits.into_iter().take(15).map(|h| h.memory).collect();
+        // Session expansion: extract sessions from top hits, fetch full session turns
+        let top_hits: Vec<_> = hits.into_iter().take(10).collect();
+        let memories = expand_sessions(&top_hits, &store).await?;
         let retrieved_count = memories.len();
 
         // Step 4: Generate answer from retrieved memories via GPT-4o
@@ -292,4 +321,79 @@ pub fn load_checkpoint(path: &std::path::Path) -> Result<Option<BenchmarkState>,
     } else {
         Ok(None)
     }
+}
+
+/// Expand top search hits into full session contexts.
+///
+/// Extracts unique session IDs from the top hits (via the `source` field, format
+/// "benchmark:session-{id}"), picks the top 5 sessions by hit count (tiebreak by best
+/// rrf_score), fetches all turns for those sessions via `store.list()`, deduplicates
+/// with already-retrieved memories, and returns everything sorted chronologically.
+async fn expand_sessions(
+    top_hits: &[HybridRawHit],
+    store: &PostgresMemoryStore,
+) -> Result<Vec<Memory>, anyhow::Error> {
+    // Track session stats: count of hits and best score per session
+    let mut session_stats: HashMap<String, (usize, f64)> = HashMap::new();
+    let mut hit_ids: HashSet<String> = HashSet::new();
+
+    for hit in top_hits {
+        hit_ids.insert(hit.memory.id.clone());
+        let source = &hit.memory.source;
+        if source.starts_with("benchmark:session-") {
+            let entry = session_stats.entry(source.clone()).or_insert((0, 0.0));
+            entry.0 += 1;
+            if hit.rrf_score > entry.1 {
+                entry.1 = hit.rrf_score;
+            }
+        }
+    }
+
+    // Sort sessions by hit count desc, then by best score desc; take top 5
+    let mut sessions: Vec<(String, usize, f64)> = session_stats
+        .into_iter()
+        .map(|(source, (count, score))| (source, count, score))
+        .collect();
+    sessions.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    sessions.truncate(5);
+
+    // Fetch all turns for selected sessions
+    let mut all_memories: Vec<Memory> = Vec::new();
+
+    // Start with the original top hits
+    for hit in top_hits {
+        all_memories.push(hit.memory.clone());
+    }
+
+    // Fetch full session turns and add any not already present
+    for (source, _, _) in &sessions {
+        let result = store
+            .list(ListFilter {
+                source: Some(source.clone()),
+                limit: 100,
+                ..Default::default()
+            })
+            .await?;
+
+        for mem in result.memories {
+            if !hit_ids.contains(&mem.id) {
+                hit_ids.insert(mem.id.clone());
+                all_memories.push(mem);
+            }
+        }
+    }
+
+    // Sort chronologically by created_at for coherent context
+    all_memories.sort_by_key(|m| m.created_at);
+
+    tracing::debug!(
+        sessions = sessions.len(),
+        total_memories = all_memories.len(),
+        "Session expansion complete"
+    );
+
+    Ok(all_memories)
 }

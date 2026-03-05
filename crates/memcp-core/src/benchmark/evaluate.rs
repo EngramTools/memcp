@@ -13,7 +13,7 @@ use super::prompts;
 
 pub(crate) const OPENAI_CHAT_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 const JUDGE_MODEL: &str = "openai/gpt-4o-mini-2024-07-18";
-pub(crate) const ANSWER_MODEL: &str = "openai/gpt-4o-2024-08-06";
+pub(crate) const ANSWER_MODEL: &str = "google/gemini-2.5-flash";
 const MAX_RETRIES: u32 = 5;
 
 /// Generate an answer from retrieved memories using GPT-4o.
@@ -29,7 +29,7 @@ pub async fn generate_answer(
     let body = json!({
         "model": ANSWER_MODEL,
         "temperature": 0,
-        "max_tokens": 256,
+        "max_tokens": 512,
         "messages": [{"role": "user", "content": prompt}]
     });
 
