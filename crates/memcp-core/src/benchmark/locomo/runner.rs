@@ -21,6 +21,7 @@ use crate::benchmark::{BenchmarkConfig, default_configs};
 use crate::embedding::pipeline::EmbeddingPipeline;
 use crate::embedding::EmbeddingProvider;
 use crate::intelligence::query_intelligence::{QueryIntelligenceProvider, RankedCandidate};
+use crate::search::HybridRawHit;
 use crate::store::postgres::PostgresMemoryStore;
 
 use super::evaluate::{f1_score, generate_locomo_answer};
@@ -157,22 +158,22 @@ pub async fn run_locomo_benchmark(
         for qa in &sample.qa {
             let qa_start = Instant::now();
 
-            // Step 3a: QI expansion (fail-open)
-            let mut search_query = qa.question.clone();
+            // Step 3a: QI expansion — multi-query with original preserved (fail-open)
+            let mut search_variants = vec![qa.question.clone()];
 
             if config.qi_expansion {
                 if let Some(ref provider) = qi_provider {
                     let timeout = Duration::from_secs(2);
                     match tokio::time::timeout(timeout, provider.expand(&qa.question)).await {
                         Ok(Ok(expanded)) => {
-                            if let Some(best) = expanded.variants.into_iter().next() {
-                                tracing::debug!(
-                                    sample_id = %sample.sample_id,
-                                    original = %qa.question,
-                                    expanded = %best,
-                                    "QI expansion rewrote query"
-                                );
-                                search_query = best;
+                            if !expanded.variants.is_empty() {
+                                let mut variants = vec![qa.question.clone()];
+                                for v in expanded.variants {
+                                    if v != qa.question {
+                                        variants.push(v);
+                                    }
+                                }
+                                search_variants = variants;
                             }
                         }
                         Ok(Err(e)) => {
@@ -192,40 +193,54 @@ pub async fn run_locomo_benchmark(
                 }
             }
 
-            // Embed query for vector search leg
-            let query_embedding = if vector_k.is_some() {
-                match embedding_provider.embed(&search_query).await {
-                    Ok(vec) => Some(pgvector::Vector::from(vec)),
-                    Err(e) => {
-                        tracing::warn!(
-                            sample_id = %sample.sample_id,
-                            error = %e,
-                            "Failed to embed question — falling back to BM25-only"
-                        );
-                        None
+            // Multi-query search: run hybrid_search per variant, merge by best score
+            let mut merged: HashMap<String, HybridRawHit> = HashMap::new();
+
+            for variant in &search_variants {
+                let query_embedding = if vector_k.is_some() {
+                    match embedding_provider.embed(variant).await {
+                        Ok(vec) => Some(pgvector::Vector::from(vec)),
+                        Err(e) => {
+                            tracing::warn!(
+                                sample_id = %sample.sample_id,
+                                error = %e,
+                                "Failed to embed variant — falling back to BM25-only"
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let variant_hits = store
+                    .hybrid_search(
+                        variant,
+                        query_embedding.as_ref(),
+                        20,
+                        None, // no date filters for LoCoMo
+                        None,
+                        None,
+                        bm25_k,
+                        vector_k,
+                        symbolic_k,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await?;
+
+                for hit in variant_hits {
+                    let id = hit.memory.id.clone();
+                    match merged.get(&id) {
+                        Some(existing) if existing.rrf_score >= hit.rrf_score => {}
+                        _ => { merged.insert(id, hit); }
                     }
                 }
-            } else {
-                None
-            };
+            }
 
-            // Step 3b: Hybrid search
-            let mut hits = store
-                .hybrid_search(
-                    &search_query,
-                    query_embedding.as_ref(),
-                    20,   // fetch 20 candidates
-                    None, // no date filters for LoCoMo
-                    None,
-                    None,   // no tag filters
-                    bm25_k,
-                    vector_k,
-                    symbolic_k,
-                    None, // no source filter
-                    None, // no audience filter
-                    None, // no project filter
-                )
-                .await?;
+            let mut hits: Vec<HybridRawHit> = merged.into_values().collect();
+            hits.sort_by(|a, b| b.rrf_score.partial_cmp(&a.rrf_score).unwrap_or(std::cmp::Ordering::Equal));
 
             // Step 3c: QI reranking (fail-open)
             if config.qi_reranking {
@@ -240,7 +255,7 @@ pub async fn run_locomo_benchmark(
                     let timeout = Duration::from_secs(3);
                     match tokio::time::timeout(
                         timeout,
-                        provider.rerank(&search_query, &candidates),
+                        provider.rerank(&qa.question, &candidates),
                     )
                     .await
                     {
@@ -273,6 +288,8 @@ pub async fn run_locomo_benchmark(
             }
 
             // Step 3d: Take top 10 memories for answer generation
+            // Note: LoCoMo uses "locomo-benchmark" source (not per-session), so session
+            // expansion doesn't apply here — all turns share one source per sample.
             let memories: Vec<_> = hits.into_iter().take(10).map(|h| h.memory).collect();
 
             // Step 3e: Generate hypothesis
