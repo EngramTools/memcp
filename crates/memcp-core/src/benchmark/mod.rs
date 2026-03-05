@@ -71,6 +71,10 @@ pub struct QuestionResult {
     pub ground_truth: String,
     pub retrieved_count: usize,
     pub latency_ms: u64,
+    /// How many of the evidence (answer) sessions were found in retrieved memories.
+    pub evidence_sessions_found: usize,
+    /// Total number of evidence sessions for this question.
+    pub evidence_sessions_total: usize,
 }
 
 /// Checkpoint state for resumable benchmark runs.

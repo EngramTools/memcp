@@ -138,6 +138,11 @@ pub struct BenchmarkReport {
     pub total_correct: usize,
     pub mean_latency_ms: u64,
     pub p95_latency_ms: u64,
+    /// Retrieval recall: fraction of evidence sessions found in retrieved memories.
+    /// This measures memcp's search quality independently of the LLM answer model.
+    pub retrieval_recall: f64,
+    /// Per-category retrieval recall.
+    pub category_retrieval_recall: HashMap<String, f64>,
 }
 
 /// Map a raw question_type string to its normalized category name.
@@ -167,6 +172,11 @@ pub fn generate_report(config_name: &str, results: &[QuestionResult]) -> Benchma
     let mut total_correct = 0usize;
     let mut latencies: Vec<u64> = Vec::with_capacity(results.len());
 
+    // Retrieval recall tracking: (found, total) per category and overall
+    let mut total_evidence_found = 0usize;
+    let mut total_evidence_total = 0usize;
+    let mut category_evidence: HashMap<String, (usize, usize)> = HashMap::new();
+
     for r in results {
         let cat = map_category(&r.question_type, r.is_abstention);
         let entry = category_map.entry(cat.to_string()).or_insert((0, 0));
@@ -176,6 +186,13 @@ pub fn generate_report(config_name: &str, results: &[QuestionResult]) -> Benchma
             total_correct += 1;
         }
         latencies.push(r.latency_ms);
+
+        // Accumulate retrieval recall
+        total_evidence_found += r.evidence_sessions_found;
+        total_evidence_total += r.evidence_sessions_total;
+        let ev = category_evidence.entry(cat.to_string()).or_insert((0, 0));
+        ev.0 += r.evidence_sessions_found;
+        ev.1 += r.evidence_sessions_total;
     }
 
     // Build CategoryMetrics map
@@ -221,6 +238,21 @@ pub fn generate_report(config_name: &str, results: &[QuestionResult]) -> Benchma
         latencies[idx.min(latencies.len() - 1)]
     };
 
+    // Compute retrieval recall
+    let retrieval_recall = if total_evidence_total > 0 {
+        total_evidence_found as f64 / total_evidence_total as f64
+    } else {
+        0.0
+    };
+
+    let category_retrieval_recall: HashMap<String, f64> = category_evidence
+        .into_iter()
+        .map(|(cat, (found, total))| {
+            let recall = if total > 0 { found as f64 / total as f64 } else { 0.0 };
+            (cat, recall)
+        })
+        .collect();
+
     BenchmarkReport {
         config_name: config_name.to_string(),
         timestamp: Utc::now(),
@@ -231,6 +263,8 @@ pub fn generate_report(config_name: &str, results: &[QuestionResult]) -> Benchma
         total_correct,
         mean_latency_ms,
         p95_latency_ms,
+        retrieval_recall,
+        category_retrieval_recall,
     }
 }
 
@@ -275,6 +309,15 @@ pub fn print_report(report: &BenchmarkReport) {
                 m.total,
                 m.accuracy * 100.0
             );
+        }
+    }
+
+    println!();
+    println!("Retrieval Recall (memcp search quality): {:.1}%", report.retrieval_recall * 100.0);
+    println!("Per-Category Retrieval Recall:");
+    for cat in &ordered_categories {
+        if let Some(recall) = report.category_retrieval_recall.get(*cat) {
+            println!("  {:<25}  {:.1}%", format!("{}:", cat), recall * 100.0);
         }
     }
 

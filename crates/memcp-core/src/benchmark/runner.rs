@@ -115,14 +115,24 @@ pub async fn run_benchmark(
                 match tokio::time::timeout(timeout, provider.expand(&question.question)).await {
                     Ok(Ok(expanded)) => {
                         if !expanded.variants.is_empty() {
+                            // Always keep the original question as a search variant
+                            // alongside QI expansions — if QI produces creative
+                            // rewrites that miss the actual vocabulary in sessions,
+                            // the original query acts as a safety net.
+                            let mut variants = vec![question.question.clone()];
+                            for v in expanded.variants {
+                                if v != question.question {
+                                    variants.push(v);
+                                }
+                            }
                             tracing::debug!(
                                 question_id = %question.question_id,
                                 original = %question.question,
-                                variants = ?expanded.variants,
-                                "QI expansion produced {} variants",
-                                expanded.variants.len()
+                                variants = ?variants,
+                                "QI expansion produced {} variants (including original)",
+                                variants.len()
                             );
-                            search_variants = expanded.variants;
+                            search_variants = variants;
                         }
                         if let Some(tr) = expanded.time_range {
                             created_after = tr.after;
@@ -255,6 +265,14 @@ pub async fn run_benchmark(
         let memories = expand_sessions(&top_hits, &store).await?;
         let retrieved_count = memories.len();
 
+        // Retrieval recall: how many evidence sessions appear in retrieved memories?
+        // This isolates memcp's search quality from the LLM's reasoning ability.
+        let retrieved_sources: HashSet<&str> = memories.iter().map(|m| m.source.as_str()).collect();
+        let evidence_sessions_total = question.answer_session_ids.len();
+        let evidence_sessions_found = question.answer_session_ids.iter()
+            .filter(|id| retrieved_sources.contains(format!("benchmark:session-{}", id).as_str()))
+            .count();
+
         // Step 4: Generate answer from retrieved memories via GPT-4o
         let hypothesis = evaluate::generate_answer(
             &client,
@@ -288,6 +306,8 @@ pub async fn run_benchmark(
             ground_truth: question.answer_text(),
             retrieved_count,
             latency_ms,
+            evidence_sessions_found,
+            evidence_sessions_total,
         };
 
         // Update checkpoint state
