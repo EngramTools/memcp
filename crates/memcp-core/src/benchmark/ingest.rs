@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use chrono::{NaiveDate, TimeZone, Utc};
+use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
 
 use crate::embedding::pipeline::EmbeddingPipeline;
 use crate::embedding::{build_embedding_text, EmbeddingJob};
@@ -93,12 +93,19 @@ pub async fn ingest_question(
     Ok(turn_count)
 }
 
-/// Parse a date string like "2023-05-15" into a DateTime<Utc>.
+/// Parse a session date string into a DateTime<Utc>.
 ///
-/// Uses noon UTC as the default time within the day to avoid timezone edge cases.
+/// Supports two formats:
+/// - `"2023/05/20 (Sat) 02:21"` — actual LongMemEval dataset format (preserves time)
+/// - `"2023-05-15"` — fallback for test fixtures (uses noon UTC)
 fn parse_session_date(date_str: &str) -> Option<chrono::DateTime<Utc>> {
+    // Primary: actual dataset format with day-of-week and time
+    if let Ok(dt) = NaiveDateTime::parse_from_str(date_str, "%Y/%m/%d (%a) %H:%M") {
+        return Some(Utc.from_utc_datetime(&dt));
+    }
+    // Fallback: simple date format for test fixtures
     NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
         .ok()
-        .and_then(|d| d.and_hms_opt(12, 0, 0)) // noon UTC as default time
+        .and_then(|d| d.and_hms_opt(12, 0, 0))
         .map(|dt| Utc.from_utc_datetime(&dt))
 }

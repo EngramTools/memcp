@@ -109,7 +109,7 @@ pub async fn run_benchmark(
 
         if config.qi_expansion {
             if let Some(ref provider) = qi_provider {
-                let timeout = Duration::from_secs(2);
+                let timeout = Duration::from_secs(10);
                 match tokio::time::timeout(timeout, provider.expand(&question.question)).await {
                     Ok(Ok(expanded)) => {
                         if let Some(best) = expanded.variants.into_iter().next() {
@@ -164,7 +164,7 @@ pub async fn run_benchmark(
             .hybrid_search(
                 &search_query,
                 query_embedding.as_ref(),
-                20,    // fetch 20 candidates from fused results
+                50,    // fetch 50 candidates (multi_session needs hits across many sessions)
                 created_after,
                 created_before,
                 None,  // no tag filters
@@ -188,7 +188,7 @@ pub async fn run_benchmark(
                     }
                 }).collect();
 
-                let timeout = Duration::from_secs(3);
+                let timeout = Duration::from_secs(15);
                 match tokio::time::timeout(timeout, provider.rerank(&search_query, &candidates)).await {
                     Ok(Ok(ranked)) => {
                         // Build id → position map from LLM ranking
@@ -222,8 +222,8 @@ pub async fn run_benchmark(
             }
         }
 
-        // Take top 10 memories for answer generation (fits context window)
-        let memories: Vec<_> = hits.into_iter().take(10).map(|h| h.memory).collect();
+        // Take top 15 memories for answer generation (fits gpt-4o context easily)
+        let memories: Vec<_> = hits.into_iter().take(15).map(|h| h.memory).collect();
         let retrieved_count = memories.len();
 
         // Step 4: Generate answer from retrieved memories via GPT-4o

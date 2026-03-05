@@ -12,14 +12,18 @@ pub fn build_answer_prompt(
     question_date: &str,
     retrieved_memories: &[Memory],
 ) -> String {
-    let context = retrieved_memories
+    // Sort memories chronologically for temporal reasoning accuracy
+    let mut sorted_memories: Vec<&Memory> = retrieved_memories.iter().collect();
+    sorted_memories.sort_by_key(|m| m.created_at);
+
+    let context = sorted_memories
         .iter()
         .enumerate()
         .map(|(i, m)| {
             format!(
                 "[Memory {}] (created: {})\n{}",
                 i + 1,
-                m.created_at.format("%Y-%m-%d"),
+                m.created_at.format("%Y-%m-%d %H:%M"),
                 m.content
             )
         })
@@ -29,7 +33,7 @@ pub fn build_answer_prompt(
     format!(
         "You are a helpful assistant with access to a user's conversation history stored as memories.\n\n\
          Today's date: {question_date}\n\n\
-         Relevant memories:\n{context}\n\n\
+         Conversation memories in chronological order:\n{context}\n\n\
          Question: {question}\n\n\
          Answer the question based ONLY on the information in the memories above. \
          If the information is not available in the memories, say \"I don't have that information in my memory.\" \
