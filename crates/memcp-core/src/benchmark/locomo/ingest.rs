@@ -70,7 +70,7 @@ async fn ingest_per_turn(
                 total_chunks: None,
                 event_time: None,
                 event_time_precision: None,
-                workspace: None,
+                project: None,
             };
 
             let stored = store.store(memory).await?;
@@ -126,7 +126,7 @@ async fn ingest_per_session(
             total_chunks: None,
             event_time: None,
             event_time_precision: None,
-            workspace: None,
+            project: None,
         };
 
         let stored = store.store(memory).await?;

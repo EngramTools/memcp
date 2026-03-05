@@ -161,7 +161,7 @@ async fn execute_curation(
                         total_chunks: None,
                         event_time: None,
                         event_time_precision: None,
-                        workspace: None,
+                        project: None,
                     };
 
                     match store.store(new_memory).await {

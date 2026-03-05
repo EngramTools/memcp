@@ -94,7 +94,7 @@ pub async fn search_handler(
             Some(40.0), // symbolic_k
             req.source.as_ref().map(|v| v.as_slice()),
             req.audience.as_deref(),
-            req.workspace.as_deref(),
+            req.project.as_deref(),
         )
         .await
     {
@@ -261,9 +261,9 @@ fn format_memory_json(memory: &crate::store::Memory) -> serde_json::Value {
             map.insert("event_time_precision".to_string(), json!(etp));
         }
     }
-    if let Some(ref ws) = memory.workspace {
+    if let Some(ref ws) = memory.project {
         if let serde_json::Value::Object(ref mut map) = obj {
-            map.insert("workspace".to_string(), json!(ws));
+            map.insert("project".to_string(), json!(ws));
         }
     }
     obj

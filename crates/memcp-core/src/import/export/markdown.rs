@@ -74,8 +74,8 @@ pub fn write_markdown(
                 meta_parts.push(format!("tags: {}", tags_str));
             }
             meta_parts.push(format!("created: {}", mem.created_at.format("%Y-%m-%d")));
-            if let Some(ref workspace) = mem.workspace {
-                meta_parts.push(format!("workspace: {}", workspace));
+            if let Some(ref project) = mem.project {
+                meta_parts.push(format!("project: {}", project));
             }
 
             if opts.include_state {
@@ -118,7 +118,7 @@ mod tests {
             actor: None,
             actor_type: "agent".to_string(),
             audience: "global".to_string(),
-            workspace: None,
+            project: None,
             event_time: None,
             event_time_precision: None,
             stability: Some(2.5),

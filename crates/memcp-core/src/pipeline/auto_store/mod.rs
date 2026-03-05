@@ -60,7 +60,7 @@ impl AutoStoreWorker {
         content_filter: Option<Arc<dyn ContentFilter>>,
         summarization_provider: Option<Arc<dyn SummarizationProvider>>,
         embedding_router: Option<Arc<EmbeddingRouter>>,
-        workspace: Option<String>,
+        project: Option<String>,
         birth_year: Option<u32>,
     ) -> JoinHandle<()> {
         let parser = create_parser(&config.format);
@@ -117,7 +117,7 @@ impl AutoStoreWorker {
                 summarization_provider,
                 chunking_config,
                 embedding_router,
-                workspace,
+                project,
                 birth_year,
             )
             .await;
@@ -148,7 +148,7 @@ async fn run_worker(
     summarization_provider: Option<Arc<dyn SummarizationProvider>>,
     chunking_config: ChunkingConfig,
     embedding_router: Option<Arc<EmbeddingRouter>>,
-    workspace: Option<String>,
+    project: Option<String>,
     birth_year: Option<u32>,
 ) {
     // Channel for watch events
@@ -301,7 +301,7 @@ async fn run_worker(
             total_chunks: None,
             event_time,
             event_time_precision,
-            workspace: workspace.clone(),
+            project: project.clone(),
         };
 
         match store.store(create).await {
@@ -414,7 +414,7 @@ async fn run_worker(
                             total_chunks: Some(chunk_output.total as i32),
                             event_time: memory.event_time,
                             event_time_precision: memory.event_time_precision.clone(),
-                            workspace: workspace.clone(),
+                            project: project.clone(),
                         };
 
                         match store.store(chunk_create).await {

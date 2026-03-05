@@ -64,9 +64,9 @@ pub struct Memory {
     pub event_time: Option<DateTime<Utc>>,
     /// Precision of event_time: "decade", "year", "month", "day"
     pub event_time_precision: Option<String>,
-    /// Workspace scope. None means global (visible in all workspaces).
-    /// Workspace-scoped searches return both workspace-scoped AND global (None) memories.
-    pub workspace: Option<String>,
+    /// Project scope. None means global (visible in all projects).
+    /// Project-scoped searches return both project-scoped AND global (None) memories.
+    pub project: Option<String>,
 }
 
 /// Input type for creating a new memory.
@@ -117,9 +117,9 @@ pub struct CreateMemory {
     /// Precision of event_time: "decade", "year", "month", "day"
     #[serde(default)]
     pub event_time_precision: Option<String>,
-    /// Workspace scope for this memory. None means global (no workspace isolation).
+    /// Project scope for this memory. None means global (no project isolation).
     #[serde(default)]
-    pub workspace: Option<String>,
+    pub project: Option<String>,
 }
 
 fn default_type_hint() -> String {
@@ -176,9 +176,9 @@ pub struct ListFilter {
     pub actor: Option<String>,
     /// Filter by audience (exact match, optional)
     pub audience: Option<String>,
-    /// Filter by workspace — returns workspace-scoped AND global (NULL workspace) memories.
-    /// None means no workspace filter (return all regardless of workspace).
-    pub workspace: Option<String>,
+    /// Filter by project — returns project-scoped AND global (NULL project) memories.
+    /// None means no project filter (return all regardless of project).
+    pub project: Option<String>,
 }
 
 impl Default for ListFilter {
@@ -194,7 +194,7 @@ impl Default for ListFilter {
             cursor: None,
             actor: None,
             audience: None,
-            workspace: None,
+            project: None,
         }
     }
 }

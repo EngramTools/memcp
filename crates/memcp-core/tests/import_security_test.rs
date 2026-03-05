@@ -174,7 +174,7 @@ fn test_injection_pattern_no_content_modification() {
         actor: None,
         embedding: None,
         embedding_model: None,
-        workspace: None,
+        project: None,
     };
 
     flag_injection(&mut chunk);
@@ -203,7 +203,7 @@ fn test_multiple_injection_patterns_single_tag() {
         actor: None,
         embedding: None,
         embedding_model: None,
-        workspace: None,
+        project: None,
     };
 
     flag_injection(&mut chunk);
@@ -231,7 +231,7 @@ fn test_injection_flag_is_idempotent() {
         actor: None,
         embedding: None,
         embedding_model: None,
-        workspace: None,
+        project: None,
     };
 
     flag_injection(&mut chunk);

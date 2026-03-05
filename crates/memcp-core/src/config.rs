@@ -910,24 +910,24 @@ impl Default for UserConfig {
     }
 }
 
-/// Configuration for workspace scoping.
+/// Configuration for project scoping.
 ///
-/// Workspaces isolate memories by project or context. NULL workspace = global (always visible).
-/// Activation precedence: CLI flag (--workspace) > env var (MEMCP_WORKSPACE) > this config default.
+/// Projects isolate memories by codebase or context. NULL project = global (always visible).
+/// Activation precedence: CLI flag (--project) > env var (MEMCP_PROJECT) > this config default.
 /// Nested env var overrides use double underscores:
-///   MEMCP_WORKSPACE__DEFAULT_WORKSPACE=myproject
+///   MEMCP_PROJECT__DEFAULT_PROJECT=myproject
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceConfig {
-    /// Default workspace applied when no CLI flag or env var is set.
-    /// NULL (None) means global — all memories are stored without workspace scoping.
+pub struct ProjectConfig {
+    /// Default project applied when no CLI flag or env var is set.
+    /// NULL (None) means global — all memories are stored without project scoping.
     #[serde(default)]
-    pub default_workspace: Option<String>,
+    pub default_project: Option<String>,
 }
 
-impl Default for WorkspaceConfig {
+impl Default for ProjectConfig {
     fn default() -> Self {
-        WorkspaceConfig {
-            default_workspace: None,
+        ProjectConfig {
+            default_project: None,
         }
     }
 }
@@ -1488,7 +1488,7 @@ pub struct ImportConfig {
     /// CLI --batch-size flag overrides this value.
     pub batch_size: usize,
 
-    /// Default project/workspace for imported memories (default: none).
+    /// Default project for imported memories (default: none).
     /// CLI --project flag overrides this value.
     pub default_project: Option<String>,
 }
@@ -1623,10 +1623,10 @@ pub struct Config {
     #[serde(default)]
     pub user: UserConfig,
 
-    /// Workspace scoping configuration.
-    /// Existing configs without [workspace] section still work (serde default applied).
-    #[serde(default)]
-    pub workspace: WorkspaceConfig,
+    /// Project scoping configuration.
+    /// Existing configs with [workspace] section still work (serde alias applied).
+    #[serde(default, alias = "workspace")]
+    pub project: ProjectConfig,
 
     /// Temporal event time extraction configuration.
     /// Existing configs without [temporal] section still work (serde default applied).
@@ -1675,7 +1675,7 @@ impl Default for Config {
             resource_limits: ResourceLimitsConfig::default(),
             curation: CurationConfig::default(),
             user: UserConfig::default(),
-            workspace: WorkspaceConfig::default(),
+            project: ProjectConfig::default(),
             temporal: TemporalConfig::default(),
             import: ImportConfig::default(),
         }

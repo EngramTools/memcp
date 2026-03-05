@@ -83,15 +83,15 @@ pub async fn batch_insert_memories(
             "pending"
         };
 
-        // Map opts.project to workspace column.
-        let workspace = opts.project.clone().or_else(|| chunk.workspace.clone());
+        // Map opts.project to project column.
+        let project_scope = opts.project.clone().or_else(|| chunk.project.clone());
 
         let rows_affected = sqlx::query(
             "INSERT INTO memories (
                 id, content, type_hint, source, tags, created_at, updated_at,
                 access_count, embedding_status, actor, actor_type, audience,
                 content_hash, parent_id, chunk_index, total_chunks,
-                event_time, event_time_precision, workspace
+                event_time, event_time_precision, project
              ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, 0, $8, $9, 'agent', 'global',
                 $10, NULL, NULL, NULL, NULL, NULL, $11
@@ -108,7 +108,7 @@ pub async fn batch_insert_memories(
         .bind(embedding_status)
         .bind(&chunk.actor)
         .bind(content_hash)
-        .bind(&workspace)
+        .bind(&project_scope)
         .execute(&mut *tx)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to insert memory: {}", e))?

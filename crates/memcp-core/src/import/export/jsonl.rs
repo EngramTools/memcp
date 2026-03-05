@@ -46,7 +46,7 @@ pub fn write_jsonl(
             "actor": mem.actor,
             "actor_type": mem.actor_type,
             "audience": mem.audience,
-            "workspace": mem.workspace,
+            "project": mem.project,
             "event_time": mem.event_time.map(|t| t.to_rfc3339()),
             "event_time_precision": mem.event_time_precision,
         });
@@ -93,7 +93,7 @@ mod tests {
             actor: None,
             actor_type: "agent".to_string(),
             audience: "global".to_string(),
-            workspace: None,
+            project: None,
             event_time: None,
             event_time_precision: None,
             stability: Some(2.5),

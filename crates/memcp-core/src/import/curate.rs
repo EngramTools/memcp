@@ -283,7 +283,7 @@ mod tests {
                 actor: None,
                 embedding: None,
                 embedding_model: None,
-                workspace: None,
+                project: None,
             },
         ];
         let prompt = build_classification_prompt(&chunks);

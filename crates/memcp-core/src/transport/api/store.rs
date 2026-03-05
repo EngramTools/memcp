@@ -93,7 +93,7 @@ pub async fn store_handler(
         total_chunks: None,
         event_time,
         event_time_precision,
-        workspace: req.workspace,
+        project: req.project,
     };
 
     let memory = match store.store(input).await {
@@ -178,9 +178,9 @@ fn format_memory_json(memory: &Memory) -> serde_json::Value {
             map.insert("event_time_precision".to_string(), json!(etp));
         }
     }
-    if let Some(ref ws) = memory.workspace {
+    if let Some(ref ws) = memory.project {
         if let serde_json::Value::Object(ref mut map) = obj {
-            map.insert("workspace".to_string(), json!(ws));
+            map.insert("project".to_string(), json!(ws));
         }
     }
     obj

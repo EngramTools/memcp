@@ -223,7 +223,7 @@ pub async fn run_locomo_benchmark(
                     symbolic_k,
                     None, // no source filter
                     None, // no audience filter
-                    None, // no workspace filter
+                    None, // no project filter
                 )
                 .await?;
 

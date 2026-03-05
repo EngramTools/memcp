@@ -2,7 +2,7 @@
 //!
 //! Query parameters mirror `ExportOpts`:
 //!   format           — "jsonl" (default), "csv", "markdown"
-//!   project          — filter by workspace/project
+//!   project          — filter by project scope
 //!   tag              — can be repeated; memories must have ALL specified tags
 //!   since            — ISO 8601 timestamp filter
 //!   include_embeddings — "true" to include embedding vectors

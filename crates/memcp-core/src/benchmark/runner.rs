@@ -173,7 +173,7 @@ pub async fn run_benchmark(
                 symbolic_k,
                 None,  // no source filter for benchmark
                 None,  // no audience filter for benchmark
-                None,  // no workspace filter for benchmark
+                None,  // no project filter for benchmark
             )
             .await?;
 

@@ -192,7 +192,7 @@ impl ImportSource for ChatGptReader {
                     actor: None,
                     embedding: None,
                     embedding_model: None,
-                    workspace: opts.project.clone(),
+                    project: opts.project.clone(),
                 });
             } else {
                 // Default: chunk long conversations into <=2048-char pieces.
@@ -212,7 +212,7 @@ impl ImportSource for ChatGptReader {
                         actor: None,
                         embedding: None,
                         embedding_model: None,
-                        workspace: opts.project.clone(),
+                        project: opts.project.clone(),
                     });
                 }
             }

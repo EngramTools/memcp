@@ -85,7 +85,7 @@ async fn store_with_real_embedding(
             total_chunks: None,
             event_time: None,
             event_time_precision: None,
-            workspace: None,
+            project: None,
         })
         .await
         .expect("Failed to store golden memory");
@@ -178,7 +178,7 @@ async fn test_golden_search_quality(pool: PgPool) {
                 Some(40.0),
                 None,
                 None,
-                None, // workspace
+                None, // project
             )
             .await
             .expect("hybrid_search failed");
@@ -300,7 +300,7 @@ async fn test_golden_no_false_negatives(pool: PgPool) {
             Some(40.0),
             None,
             None,
-            None, // workspace
+            None, // project
         )
         .await
         .expect("hybrid_search failed");
@@ -387,7 +387,7 @@ async fn test_golden_cross_category_isolation(pool: PgPool) {
             Some(40.0),
             None,
             None,
-            None, // workspace
+            None, // project
         )
         .await
         .expect("hybrid_search failed");

@@ -118,7 +118,7 @@ fn format_memory_json(memory: &Memory, verbose: bool) -> serde_json::Value {
             "audience": memory.audience,
             "event_time": memory.event_time.map(|t| t.to_rfc3339()),
             "event_time_precision": memory.event_time_precision,
-            "workspace": memory.workspace,
+            "project": memory.project,
         })
     } else {
         let mut obj = json!({
@@ -143,9 +143,9 @@ fn format_memory_json(memory: &Memory, verbose: bool) -> serde_json::Value {
                 map.insert("event_time_precision".to_string(), json!(etp));
             }
         }
-        if let Some(ref ws) = memory.workspace {
+        if let Some(ref ws) = memory.project {
             if let serde_json::Value::Object(ref mut map) = obj {
-                map.insert("workspace".to_string(), json!(ws));
+                map.insert("project".to_string(), json!(ws));
             }
         }
         obj
@@ -194,13 +194,14 @@ fn parse_datetime(s: &str) -> Result<DateTime<Utc>> {
     ))
 }
 
-/// Resolve workspace with CLI flag > MEMCP_WORKSPACE env var > config default_workspace precedence.
+/// Resolve project with CLI flag > MEMCP_PROJECT env var (with MEMCP_WORKSPACE fallback) > config default_project precedence.
 ///
-/// Returns the first non-empty workspace from the chain, or None if all are absent/empty.
-pub fn resolve_workspace(cli_flag: Option<String>, config: &Config) -> Option<String> {
+/// Returns the first non-empty project from the chain, or None if all are absent/empty.
+pub fn resolve_project(cli_flag: Option<String>, config: &Config) -> Option<String> {
     cli_flag
+        .or_else(|| std::env::var("MEMCP_PROJECT").ok().filter(|s| !s.is_empty()))
         .or_else(|| std::env::var("MEMCP_WORKSPACE").ok().filter(|s| !s.is_empty()))
-        .or_else(|| config.workspace.default_workspace.clone())
+        .or_else(|| config.project.default_project.clone())
 }
 
 /// Resolve content from a positional arg or --stdin flag.
@@ -329,7 +330,7 @@ pub async fn cmd_store(
     audience: String,
     idempotency_key: Option<String>,
     wait: bool,
-    workspace: Option<String>,
+    project: Option<String>,
 ) -> Result<()> {
     let content = content.ok_or_else(|| anyhow::anyhow!(
         "Content is required — provide as argument or use --stdin"
@@ -375,7 +376,7 @@ pub async fn cmd_store(
         total_chunks: None,
         event_time,
         event_time_precision,
-        workspace,
+        project,
     };
 
     let memory = store
@@ -584,7 +585,7 @@ pub async fn cmd_search(
     cursor: Option<String>,
     fields: Option<String>,
     min_salience: Option<f64>,
-    workspace: Option<String>,
+    project: Option<String>,
 ) -> Result<()> {
     let ca = created_after.as_deref().map(parse_datetime).transpose()?;
     let cb = created_before.as_deref().map(parse_datetime).transpose()?;
@@ -646,7 +647,7 @@ pub async fn cmd_search(
                         Some(40.0), // symbolic_k
                         source.as_deref(),
                         audience.as_deref(),
-                        workspace.as_deref(),
+                        project.as_deref(),
                     )
                     .await
                     .map_err(|e| anyhow::anyhow!("{}", e))?
@@ -667,7 +668,7 @@ pub async fn cmd_search(
                         Some(40.0),
                         source.as_deref(),
                         audience.as_deref(),
-                        workspace.as_deref(),
+                        project.as_deref(),
                     )
                     .await
                     .map_err(|e| anyhow::anyhow!("{}", e))?
@@ -699,7 +700,7 @@ pub async fn cmd_search(
                 Some(40.0), // symbolic_k default
                 source.as_deref(),
                 audience.as_deref(),
-                workspace.as_deref(),
+                project.as_deref(),
             )
             .await
             .map_err(|e| anyhow::anyhow!("{}", e))?
@@ -992,7 +993,7 @@ pub async fn cmd_recent(
         cursor: None,
         actor,
         audience: None,
-        workspace: None,
+        project: None,
     };
 
     let result = store
@@ -1051,7 +1052,7 @@ pub async fn cmd_list(
     actor: Option<String>,
     audience: Option<String>,
     verbose: bool,
-    workspace: Option<String>,
+    project: Option<String>,
 ) -> Result<()> {
     let filter = ListFilter {
         type_hint,
@@ -1064,7 +1065,7 @@ pub async fn cmd_list(
         cursor,
         actor,
         audience,
-        workspace,
+        project,
     };
 
     let result = store
@@ -1454,7 +1455,7 @@ pub async fn cmd_recall(
     query: &str,
     session_id: Option<String>,
     reset: bool,
-    workspace: Option<String>,
+    project: Option<String>,
     first: bool,
     limit: Option<usize>,
     boost_tags: &[String],
@@ -1474,7 +1475,7 @@ pub async fn cmd_recall(
 
     let mut result = if query.is_empty() {
         // Query-less path — no embedding needed; ranked by salience + recency.
-        engine.recall_queryless(session_id, reset, workspace.as_deref(), first, limit, boost_tags).await
+        engine.recall_queryless(session_id, reset, project.as_deref(), first, limit, boost_tags).await
             .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?
     } else {
         // Query-based path — embed via daemon for vector similarity.
@@ -1487,7 +1488,7 @@ pub async fn cmd_recall(
             }
         };
 
-        let r = engine.recall(&query_embedding, session_id, reset, workspace.as_deref(), boost_tags).await
+        let r = engine.recall(&query_embedding, session_id, reset, project.as_deref(), boost_tags).await
             .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?;
         r
     };
@@ -1495,7 +1496,7 @@ pub async fn cmd_recall(
     // For query-based path with first=true, fetch project summary separately.
     // (recall_queryless already handles this internally via the first parameter.)
     if !query.is_empty() && first && result.summary.is_none() {
-        result.summary = match store.fetch_project_summary(workspace.as_deref()).await {
+        result.summary = match store.fetch_project_summary(project.as_deref()).await {
             Ok(Some((id, content))) => Some(crate::recall::RecalledMemory {
                 memory_id: id,
                 content,

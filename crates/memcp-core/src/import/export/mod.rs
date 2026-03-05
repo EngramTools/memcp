@@ -56,7 +56,7 @@ pub struct ExportOpts {
     pub format: ExportFormat,
     /// Output file path. None means write to stdout.
     pub output: Option<PathBuf>,
-    /// Filter by project/workspace (NULL for global memories).
+    /// Filter by project (NULL for global memories).
     pub project: Option<String>,
     /// Filter by tags — memories must have ALL specified tags.
     pub tags: Option<Vec<String>>,
@@ -99,7 +99,7 @@ pub struct ExportableMemory {
     pub actor: Option<String>,
     pub actor_type: String,
     pub audience: String,
-    pub workspace: Option<String>,
+    pub project: Option<String>,
     pub event_time: Option<DateTime<Utc>>,
     pub event_time_precision: Option<String>,
 
@@ -200,7 +200,7 @@ impl ExportEngine {
         let mut params_since: Option<DateTime<Utc>> = None;
 
         if opts.project.is_some() {
-            conditions.push(format!("m.workspace = ${}", param_idx));
+            conditions.push(format!("m.project = ${}", param_idx));
             params_project = opts.project.clone();
             param_idx += 1;
         }
@@ -232,7 +232,7 @@ impl ExportEngine {
                 SELECT
                     m.id, m.content, m.type_hint, m.source, m.tags,
                     m.created_at, m.actor, m.actor_type, m.audience,
-                    m.workspace, m.event_time, m.event_time_precision,
+                    m.project, m.event_time, m.event_time_precision,
                     ms.stability, ms.difficulty, ms.reinforcement_count, ms.last_reinforced_at,
                     me.embedding::text AS embedding_text, me.model_name AS embedding_model
                 FROM memories m
@@ -249,7 +249,7 @@ impl ExportEngine {
                 SELECT
                     m.id, m.content, m.type_hint, m.source, m.tags,
                     m.created_at, m.actor, m.actor_type, m.audience,
-                    m.workspace, m.event_time, m.event_time_precision,
+                    m.project, m.event_time, m.event_time_precision,
                     ms.stability, ms.difficulty, ms.reinforcement_count, ms.last_reinforced_at
                 FROM memories m
                 LEFT JOIN memory_salience ms ON m.id = ms.memory_id
@@ -322,7 +322,7 @@ impl ExportEngine {
             let actor: Option<String> = row.try_get("actor")?;
             let actor_type: String = row.try_get("actor_type")?;
             let audience: String = row.try_get("audience")?;
-            let workspace: Option<String> = row.try_get("workspace")?;
+            let project: Option<String> = row.try_get("project")?;
             let event_time: Option<DateTime<Utc>> = row.try_get("event_time")?;
             let event_time_precision: Option<String> = row.try_get("event_time_precision")?;
             let stability: Option<f64> = row.try_get("stability")?;
@@ -340,7 +340,7 @@ impl ExportEngine {
                 actor,
                 actor_type,
                 audience,
-                workspace,
+                project,
                 event_time,
                 event_time_precision,
                 stability,
@@ -403,7 +403,7 @@ impl ExportEngine {
             let actor: Option<String> = row.try_get("actor")?;
             let actor_type: String = row.try_get("actor_type")?;
             let audience: String = row.try_get("audience")?;
-            let workspace: Option<String> = row.try_get("workspace")?;
+            let project: Option<String> = row.try_get("project")?;
             let event_time: Option<DateTime<Utc>> = row.try_get("event_time")?;
             let event_time_precision: Option<String> = row.try_get("event_time_precision")?;
             let stability: Option<f64> = row.try_get("stability")?;
@@ -431,7 +431,7 @@ impl ExportEngine {
                 actor,
                 actor_type,
                 audience,
-                workspace,
+                project,
                 event_time,
                 event_time_precision,
                 stability,

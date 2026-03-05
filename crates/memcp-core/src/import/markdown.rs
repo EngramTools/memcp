@@ -122,7 +122,7 @@ impl ImportSource for MarkdownReader {
                         actor: None,
                         embedding: None,
                         embedding_model: None,
-                        workspace: opts.project.clone(),
+                        project: opts.project.clone(),
                     });
                 }
             }

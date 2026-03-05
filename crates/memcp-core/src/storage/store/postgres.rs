@@ -590,7 +590,7 @@ fn row_to_memory(row: &PgRow) -> Result<Memory, MemcpError> {
         total_chunks: row.try_get("total_chunks").unwrap_or(None),
         event_time: row.try_get("event_time").unwrap_or(None),
         event_time_precision: row.try_get("event_time_precision").unwrap_or(None),
-        workspace: row.try_get("workspace").unwrap_or(None),
+        project: row.try_get("project").unwrap_or(None),
     })
 }
 
@@ -615,7 +615,7 @@ impl MemoryStore for PostgresMemoryStore {
                  m.extracted_entities, m.extracted_facts, m.extraction_status, \
                  m.is_consolidated_original, m.consolidated_into, m.actor, m.actor_type, m.audience, \
                  m.parent_id, m.chunk_index, m.total_chunks, \
-                 m.event_time, m.event_time_precision, m.workspace \
+                 m.event_time, m.event_time_precision, m.project \
                  FROM idempotency_keys ik \
                  JOIN memories m ON m.id = ik.memory_id \
                  WHERE ik.key = $1 AND ik.expires_at > NOW() AND m.deleted_at IS NULL",
@@ -641,7 +641,7 @@ impl MemoryStore for PostgresMemoryStore {
                  extracted_entities, extracted_facts, extraction_status, \
                  is_consolidated_original, consolidated_into, actor, actor_type, audience, \
                  parent_id, chunk_index, total_chunks, \
-                 event_time, event_time_precision, workspace \
+                 event_time, event_time_precision, project \
                  FROM memories \
                  WHERE content_hash = $1 AND deleted_at IS NULL \
                    AND created_at > NOW() - ($2 || ' seconds')::interval \
@@ -672,7 +672,7 @@ impl MemoryStore for PostgresMemoryStore {
             .map(|t| serde_json::json!(t));
 
         sqlx::query(
-            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks, event_time, event_time_precision, workspace) \
+            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks, event_time, event_time_precision, project) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
         )
         .bind(&id)
@@ -691,7 +691,7 @@ impl MemoryStore for PostgresMemoryStore {
         .bind(&input.total_chunks)
         .bind(&input.event_time)
         .bind(&input.event_time_precision)
-        .bind(&input.workspace)
+        .bind(&input.project)
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to insert memory: {}", e)))?;
@@ -743,7 +743,7 @@ impl MemoryStore for PostgresMemoryStore {
             total_chunks: input.total_chunks,
             event_time: input.event_time,
             event_time_precision: input.event_time_precision,
-            workspace: input.workspace,
+            project: input.project,
         })
     }
 
@@ -752,7 +752,7 @@ impl MemoryStore for PostgresMemoryStore {
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
-             event_time, event_time_precision, workspace \
+             event_time, event_time_precision, project \
              FROM memories WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(id)
@@ -840,7 +840,7 @@ impl MemoryStore for PostgresMemoryStore {
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
-             event_time, event_time_precision, workspace \
+             event_time, event_time_precision, project \
              FROM memories WHERE id = $1",
         )
         .bind(id)
@@ -919,9 +919,9 @@ impl MemoryStore for PostgresMemoryStore {
             conditions.push(format!("audience = ${}", param_idx));
             param_idx += 1;
         }
-        if filter.workspace.is_some() {
-            // Workspace-scoped: return memories from this workspace OR global (NULL workspace).
-            conditions.push(format!("(workspace = ${} OR workspace IS NULL)", param_idx));
+        if filter.project.is_some() {
+            // Project-scoped: return memories from this project OR global (NULL project).
+            conditions.push(format!("(project = ${} OR project IS NULL)", param_idx));
             param_idx += 1;
         }
 
@@ -935,7 +935,7 @@ impl MemoryStore for PostgresMemoryStore {
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
-             event_time, event_time_precision, workspace \
+             event_time, event_time_precision, project \
              FROM memories {} ORDER BY created_at DESC, id ASC LIMIT ${}",
             where_clause, param_idx
         );
@@ -970,8 +970,8 @@ impl MemoryStore for PostgresMemoryStore {
         if let Some(ref audience) = filter.audience {
             q = q.bind(audience);
         }
-        if let Some(ref workspace) = filter.workspace {
-            q = q.bind(workspace);
+        if let Some(ref project) = filter.project {
+            q = q.bind(project);
         }
         // Fetch one extra to determine if there are more pages
         q = q.bind(limit + 1);
@@ -1236,7 +1236,7 @@ impl PostgresMemoryStore {
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
-             event_time, event_time_precision, workspace \
+             event_time, event_time_precision, project \
              FROM memories WHERE embedding_status IN ('pending', 'failed') AND deleted_at IS NULL \
              ORDER BY created_at ASC LIMIT $1",
         )
@@ -1679,7 +1679,7 @@ impl PostgresMemoryStore {
                     m.is_consolidated_original, m.consolidated_into, \
                     m.actor, m.actor_type, m.audience, \
                     m.parent_id, m.chunk_index, m.total_chunks, \
-                    m.event_time, m.event_time_precision, m.workspace, \
+                    m.event_time, m.event_time_precision, m.project, \
                     (1 - (me.embedding <=> $1)) AS similarity \
              FROM memories m \
              JOIN memory_embeddings me ON me.memory_id = m.id \
@@ -1803,7 +1803,7 @@ impl PostgresMemoryStore {
              last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
-             event_time, event_time_precision, workspace \
+             event_time, event_time_precision, project \
              FROM memories WHERE id = ANY($1) AND deleted_at IS NULL",
         )
         .bind(ids)
@@ -1844,7 +1844,7 @@ impl PostgresMemoryStore {
         symbolic_k: Option<f64>,
         source: Option<&[String]>,
         audience: Option<&str>,
-        workspace: Option<&str>,
+        project: Option<&str>,
     ) -> Result<Vec<crate::search::HybridRawHit>, MemcpError> {
         // 40 candidates per leg — research recommendation balancing recall vs cost
         let candidate_limit = 40i64;
@@ -1937,12 +1937,12 @@ impl PostgresMemoryStore {
             hits.retain(|hit| hit.memory.audience == aud);
         }
 
-        // Post-filter fused results by workspace: keep workspace-scoped AND global (NULL) memories.
-        // None workspace means no filter — return all.
-        if let Some(ws) = workspace {
+        // Post-filter fused results by project: keep project-scoped AND global (NULL) memories.
+        // None project means no filter — return all.
+        if let Some(ws) = project {
             hits.retain(|hit| {
-                hit.memory.workspace.as_deref() == Some(ws)
-                    || hit.memory.workspace.is_none()
+                hit.memory.project.as_deref() == Some(ws)
+                    || hit.memory.project.is_none()
             });
         }
 
@@ -2052,7 +2052,7 @@ impl PostgresMemoryStore {
         symbolic_k: Option<f64>,
         source: Option<&[String]>,
         audience: Option<&str>,
-        workspace: Option<&str>,
+        project: Option<&str>,
     ) -> Result<Vec<crate::search::HybridRawHit>, MemcpError> {
         let candidate_limit = 40i64;
 
@@ -2135,11 +2135,11 @@ impl PostgresMemoryStore {
             hits.retain(|hit| hit.memory.audience == aud);
         }
 
-        // Post-filter by workspace: keep workspace-scoped AND global (NULL workspace) memories.
-        if let Some(ws) = workspace {
+        // Post-filter by project: keep project-scoped AND global (NULL project) memories.
+        if let Some(ws) = project {
             hits.retain(|hit| {
-                hit.memory.workspace.as_deref() == Some(ws)
-                    || hit.memory.workspace.is_none()
+                hit.memory.project.as_deref() == Some(ws)
+                    || hit.memory.project.is_none()
             });
         }
 
@@ -2170,7 +2170,7 @@ impl PostgresMemoryStore {
         symbolic_k: Option<f64>,
         source: Option<&[String]>,
         audience: Option<&str>,
-        workspace: Option<&str>,
+        project: Option<&str>,
     ) -> Result<SearchResult, MemcpError> {
         // Decode cursor if provided — get (last_score, last_id) position
         let cursor_position: Option<(f64, String)> = if let Some(ref c) = cursor {
@@ -2200,7 +2200,7 @@ impl PostgresMemoryStore {
             symbolic_k,
             source,
             audience,
-            workspace,
+            project,
         ).await?;
 
         // Sort by rrf_score DESC for stable ordering, then by id ASC for tie-breaking
@@ -2898,7 +2898,7 @@ impl PostgresMemoryStore {
         min_relevance: f64,
         max_memories: usize,
         extraction_enabled: bool,
-        workspace: Option<&str>,
+        project: Option<&str>,
     ) -> Result<Vec<(String, String, f32, Option<serde_json::Value>)>, MemcpError> {
         // Serialize embedding to pgvector literal format: '[0.1,0.2,...]'
         let emb_str = format!(
@@ -2911,9 +2911,9 @@ impl PostgresMemoryStore {
         );
         let limit = max_memories as i64;
 
-        // Build optional workspace filter clause. When workspace is Some, add
-        // AND (m.workspace = $5 OR m.workspace IS NULL) — returns both scoped and global memories.
-        let workspace_clause = if workspace.is_some() { " AND (m.workspace = $5 OR m.workspace IS NULL)" } else { "" };
+        // Build optional project filter clause. When project is Some, add
+        // AND (m.project = $5 OR m.project IS NULL) — returns both scoped and global memories.
+        let project_clause = if project.is_some() { " AND (m.project = $5 OR m.project IS NULL)" } else { "" };
 
         if extraction_enabled {
             // Extraction-on tier: query against extracted_facts.
@@ -2937,7 +2937,7 @@ impl PostgresMemoryStore {
                       AND sr.memory_id IS NULL
                       AND m.extracted_facts IS NOT NULL
                       AND jsonb_array_length(m.extracted_facts) > 0
-                      AND (1.0 - (me.embedding <=> $1::vector)) >= $3{workspace_clause}
+                      AND (1.0 - (me.embedding <=> $1::vector)) >= $3{project_clause}
                     ORDER BY m.id, (1.0 - (me.embedding <=> $1::vector)) DESC
                 ) sub
                 ORDER BY relevance DESC, stability DESC
@@ -2948,7 +2948,7 @@ impl PostgresMemoryStore {
                 .bind(session_id)
                 .bind(min_relevance)
                 .bind(limit);
-            if let Some(ws) = workspace {
+            if let Some(ws) = project {
                 q = q.bind(ws);
             }
             let rows = q
@@ -2987,7 +2987,7 @@ impl PostgresMemoryStore {
                   AND m.embedding_status = 'complete'
                   AND sr.memory_id IS NULL
                   AND (m.type_hint IN ('fact', 'summary') OR m.source = 'assistant')
-                  AND (1.0 - (me.embedding <=> $1::vector)) >= $3{workspace_clause}
+                  AND (1.0 - (me.embedding <=> $1::vector)) >= $3{project_clause}
                 ORDER BY relevance DESC, stability DESC
                 LIMIT $4
             ");
@@ -2996,7 +2996,7 @@ impl PostgresMemoryStore {
                 .bind(session_id)
                 .bind(min_relevance)
                 .bind(limit);
-            if let Some(ws) = workspace {
+            if let Some(ws) = project {
                 q = q.bind(ws);
             }
             let rows = q
@@ -3038,7 +3038,7 @@ impl PostgresMemoryStore {
         min_relevance: f64,
         max_memories: usize,
         extraction_enabled: bool,
-        workspace: Option<&str>,
+        project: Option<&str>,
     ) -> Result<Vec<(String, String, f32, Option<serde_json::Value>)>, MemcpError> {
         if tier_embeddings.is_empty() {
             // No embeddings available — return empty (caller should fall back or warn)
@@ -3048,7 +3048,7 @@ impl PostgresMemoryStore {
         if tier_embeddings.len() == 1 {
             // Single tier — delegate directly to recall_candidates
             let embedding = tier_embeddings.values().next().unwrap();
-            return self.recall_candidates(embedding, session_id, min_relevance, max_memories, extraction_enabled, workspace).await;
+            return self.recall_candidates(embedding, session_id, min_relevance, max_memories, extraction_enabled, project).await;
         }
 
         // Multi-tier: query each tier separately and merge by best relevance.
@@ -3057,7 +3057,7 @@ impl PostgresMemoryStore {
 
         for embedding in tier_embeddings.values() {
             let tier_results = self.recall_candidates(
-                embedding, session_id, min_relevance, max_memories, extraction_enabled, workspace
+                embedding, session_id, min_relevance, max_memories, extraction_enabled, project
             ).await?;
 
             for (memory_id, content, relevance, tags) in tier_results {
@@ -3095,11 +3095,11 @@ impl PostgresMemoryStore {
         &self,
         session_id: &str,
         overfetch_limit: usize,
-        workspace: Option<&str>,
+        project: Option<&str>,
     ) -> Result<Vec<QuerylessCandidate>, MemcpError> {
         let limit = overfetch_limit as i64;
-        let workspace_clause = if workspace.is_some() {
-            " AND (m.workspace = $3 OR m.workspace IS NULL)"
+        let project_clause = if project.is_some() {
+            " AND (m.project = $3 OR m.project IS NULL)"
         } else {
             ""
         };
@@ -3120,7 +3120,7 @@ impl PostgresMemoryStore {
               AND m.embedding_status = 'complete'
               AND sr.memory_id IS NULL
               AND (m.tags IS NULL OR NOT (m.tags @> '[\"project-summary\"]'::jsonb))
-              {workspace_clause}
+              {project_clause}
             ORDER BY COALESCE(ms.stability, 1.0) DESC, m.updated_at DESC
             LIMIT $2
         ");
@@ -3128,7 +3128,7 @@ impl PostgresMemoryStore {
         let mut q = sqlx::query(&sql)
             .bind(session_id)
             .bind(limit);
-        if let Some(ws) = workspace {
+        if let Some(ws) = project {
             q = q.bind(ws);
         }
 
@@ -3162,17 +3162,17 @@ impl PostgresMemoryStore {
         Ok(results)
     }
 
-    /// Fetch the most recent memory tagged `project-summary` for the given workspace scope.
+    /// Fetch the most recent memory tagged `project-summary` for the given project scope.
     ///
     /// Returns `(memory_id, content)` or `None` if no project-summary memory exists.
     /// Does NOT require `embedding_status = 'complete'` — summaries may not be embedded
     /// yet but are still valid pinned context.
     pub async fn fetch_project_summary(
         &self,
-        workspace: Option<&str>,
+        project: Option<&str>,
     ) -> Result<Option<(String, String)>, MemcpError> {
-        let workspace_clause = if workspace.is_some() {
-            " AND (m.workspace = $1 OR m.workspace IS NULL)"
+        let project_clause = if project.is_some() {
+            " AND (m.project = $1 OR m.project IS NULL)"
         } else {
             ""
         };
@@ -3182,13 +3182,13 @@ impl PostgresMemoryStore {
             FROM memories m
             WHERE m.deleted_at IS NULL
               AND m.tags @> '[\"project-summary\"]'::jsonb
-              {workspace_clause}
+              {project_clause}
             ORDER BY m.updated_at DESC
             LIMIT 1
         ");
 
         let mut q = sqlx::query(&sql);
-        if let Some(ws) = workspace {
+        if let Some(ws) = project {
             q = q.bind(ws);
         }
 
@@ -3434,7 +3434,7 @@ impl PostgresMemoryStore {
              m.extracted_entities, m.extracted_facts, m.extraction_status, \
              m.is_consolidated_original, m.consolidated_into, \
              m.actor, m.actor_type, m.audience, m.parent_id, m.chunk_index, m.total_chunks, \
-             m.event_time, m.event_time_precision, m.workspace, \
+             m.event_time, m.event_time_precision, m.project, \
              COALESCE(s.stability, 1.0) as sal_stability, \
              COALESCE(s.difficulty, 5.0) as sal_difficulty, \
              COALESCE(s.reinforcement_count, 0) as sal_reinforcement_count, \
@@ -3453,7 +3453,7 @@ impl PostgresMemoryStore {
              m.extracted_entities, m.extracted_facts, m.extraction_status, \
              m.is_consolidated_original, m.consolidated_into, \
              m.actor, m.actor_type, m.audience, m.parent_id, m.chunk_index, m.total_chunks, \
-             m.event_time, m.event_time_precision, m.workspace, \
+             m.event_time, m.event_time_precision, m.project, \
              COALESCE(s.stability, 1.0) as sal_stability, \
              COALESCE(s.difficulty, 5.0) as sal_difficulty, \
              COALESCE(s.reinforcement_count, 0) as sal_reinforcement_count, \
@@ -3874,7 +3874,7 @@ impl PostgresMemoryStore {
              extracted_entities, extracted_facts, extraction_status, \
              is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
-             event_time, event_time_precision, workspace \
+             event_time, event_time_precision, project \
              FROM memories WHERE parent_id = $1 AND deleted_at IS NULL \
              ORDER BY chunk_index ASC",
         )

@@ -299,7 +299,7 @@ impl ImportSource for OpenClawReader {
                     actor: Some(agent_name),
                     embedding,
                     embedding_model,
-                    workspace: None,
+                    project: None,
                 });
             }
 

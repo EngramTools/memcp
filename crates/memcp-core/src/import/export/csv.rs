@@ -46,7 +46,7 @@ pub fn write_csv(
         "actor",
         "actor_type",
         "audience",
-        "workspace",
+        "project",
     ];
     if opts.include_state {
         headers.push("stability");
@@ -80,7 +80,7 @@ pub fn write_csv(
             csv_escape(mem.actor.as_deref().unwrap_or("")),
             csv_escape(&mem.actor_type),
             csv_escape(&mem.audience),
-            csv_escape(mem.workspace.as_deref().unwrap_or("")),
+            csv_escape(mem.project.as_deref().unwrap_or("")),
         ];
 
         if opts.include_state {
@@ -114,7 +114,7 @@ mod tests {
             actor: None,
             actor_type: "agent".to_string(),
             audience: "global".to_string(),
-            workspace: None,
+            project: None,
             event_time: None,
             event_time_precision: None,
             stability: Some(2.5),

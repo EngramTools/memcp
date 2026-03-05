@@ -102,9 +102,9 @@ enum Commands {
         /// with embedding_status and embedding_dimension.
         #[arg(long)]
         wait: bool,
-        /// Workspace scope. Overrides MEMCP_WORKSPACE env var and config default_workspace.
-        #[arg(long)]
-        workspace: Option<String>,
+        /// Project scope. Overrides MEMCP_PROJECT env var and config default_project.
+        #[arg(long, alias = "project")]
+        project: Option<String>,
     },
     /// Search memories by keyword + metadata matching with salience ranking
     Search {
@@ -141,9 +141,9 @@ enum Commands {
         /// Minimum salience threshold (0.0-1.0). Excludes results below this score.
         #[arg(long)]
         min_salience: Option<f64>,
-        /// Workspace scope — returns memories from this workspace plus global (null-workspace) memories.
-        #[arg(long)]
-        workspace: Option<String>,
+        /// Project scope — returns memories from this project plus global (null-project) memories.
+        #[arg(long, alias = "project")]
+        project: Option<String>,
     },
     /// List memories with optional filters and pagination
     List {
@@ -169,9 +169,9 @@ enum Commands {
         audience: Option<String>,
         #[arg(long)]
         verbose: bool,
-        /// Workspace scope — returns memories from this workspace plus global (null-workspace) memories.
-        #[arg(long)]
-        workspace: Option<String>,
+        /// Project scope — returns memories from this project plus global (null-project) memories.
+        #[arg(long, alias = "project")]
+        project: Option<String>,
     },
     /// Retrieve a memory by ID
     Get { id: String },
@@ -257,9 +257,9 @@ enum Commands {
         /// Clear session recall history before recalling (for context compaction)
         #[arg(long)]
         reset: bool,
-        /// Workspace scope — returns memories from this workspace plus global (null-workspace) memories.
-        #[arg(long)]
-        workspace: Option<String>,
+        /// Project scope — returns memories from this project plus global (null-project) memories.
+        #[arg(long, alias = "project")]
+        project: Option<String>,
         /// Session start — injects current datetime, preamble, and recalled memories.
         /// Without this flag, recall returns only memories (no preamble, saves tokens).
         #[arg(long)]
@@ -327,7 +327,7 @@ enum Commands {
         /// Output file path (default: stdout)
         #[arg(long)]
         output: Option<std::path::PathBuf>,
-        /// Filter by project/workspace
+        /// Filter by project
         #[arg(long)]
         project: Option<String>,
         /// Filter by tags (comma-separated) — memories must have ALL specified tags
@@ -360,7 +360,7 @@ enum ImportAction {
         /// Show what would be imported without writing to the database
         #[arg(long)]
         dry_run: bool,
-        /// Scope imported memories to this project (workspace)
+        /// Scope imported memories to this project
         #[arg(long)]
         project: Option<String>,
         /// Extra tags to add to all imported memories (comma-separated)
@@ -392,7 +392,7 @@ enum ImportAction {
         /// Show what would be imported without writing to the database
         #[arg(long)]
         dry_run: bool,
-        /// Scope imported memories to this project (workspace)
+        /// Scope imported memories to this project
         #[arg(long)]
         project: Option<String>,
         /// Extra tags to add to all imported memories (comma-separated)
@@ -424,7 +424,7 @@ enum ImportAction {
         /// Show what would be imported without writing to the database
         #[arg(long)]
         dry_run: bool,
-        /// Scope imported memories to this project (workspace)
+        /// Scope imported memories to this project
         #[arg(long)]
         project: Option<String>,
         /// Extra tags to add to all imported memories (comma-separated)
@@ -844,7 +844,7 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        Commands::Store { content, stdin, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, workspace } => {
+        Commands::Store { content, stdin, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, project } => {
             let resolved = cli::resolve_content_arg(content, stdin)?;
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
@@ -857,18 +857,18 @@ async fn main() -> Result<()> {
                     "audience": audience,
                     "idempotency_key": idempotency_key,
                     "wait": wait,
-                    "workspace": workspace,
+                    "project": project,
                 });
                 let result = cli::dispatch_remote(remote_url, "store", body).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 let store = cli::connect_store(&config, cli.skip_migrate).await?;
-                let workspace = cli::resolve_workspace(workspace, &config);
-                cli::cmd_store(&store, &config, resolved, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, workspace).await?;
+                let project = cli::resolve_project(project, &config);
+                cli::cmd_store(&store, &config, resolved, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, project).await?;
             }
         }
 
-        Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience, workspace } => {
+        Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience, project } => {
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
                     "query": query,
@@ -877,7 +877,7 @@ async fn main() -> Result<()> {
                     "source": source,
                     "type_hint": type_hint,
                     "audience": audience,
-                    "workspace": workspace,
+                    "project": project,
                     "min_salience": min_salience,
                     "fields": fields,
                     "cursor": cursor,
@@ -886,8 +886,8 @@ async fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 let store = cli::connect_store(&config, cli.skip_migrate).await?;
-                let workspace = cli::resolve_workspace(workspace, &config);
-                cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience, workspace).await?;
+                let project = cli::resolve_project(project, &config);
+                cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience, project).await?;
             }
         }
 
@@ -896,10 +896,10 @@ async fn main() -> Result<()> {
             cli::cmd_recent(&store, since, source, actor, limit, verbose).await?;
         }
 
-        Commands::List { type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose, workspace } => {
+        Commands::List { type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose, project } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
-            let workspace = cli::resolve_workspace(workspace, &config);
-            cli::cmd_list(&store, type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose, workspace).await?;
+            let project = cli::resolve_project(project, &config);
+            cli::cmd_list(&store, type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose, project).await?;
         }
 
         Commands::Get { id } => {
@@ -953,14 +953,14 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Recall { query, session_id, reset, workspace, first, limit, boost_tags } => {
+        Commands::Recall { query, session_id, reset, project, first, limit, boost_tags } => {
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
                     "query": query.as_deref().unwrap_or(""),
                     "session_id": session_id,
                     "first": first,
                     "reset": reset,
-                    "workspace": workspace,
+                    "project": project,
                     "limit": limit,
                     "boost_tags": boost_tags,
                 });
@@ -968,9 +968,9 @@ async fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 let store = cli::connect_store(&config, cli.skip_migrate).await?;
-                let workspace = cli::resolve_workspace(workspace, &config);
+                let project = cli::resolve_project(project, &config);
                 let query_str = query.unwrap_or_default();
-                cli::cmd_recall(&store, &config, &query_str, session_id, reset, workspace, first, limit, &boost_tags).await?;
+                cli::cmd_recall(&store, &config, &query_str, session_id, reset, project, first, limit, &boost_tags).await?;
             }
         }
 
@@ -1453,7 +1453,7 @@ async fn main() -> Result<()> {
                                 actor: None,
                                 embedding: None,
                                 embedding_model: None,
-                                workspace: None,
+                                project: None,
                             }
                         })
                         .collect();
@@ -1487,7 +1487,7 @@ async fn main() -> Result<()> {
                                 "type_hint": chunk.type_hint.as_deref().unwrap_or("fact"),
                                 "source": chunk.source,
                                 "tags": tags,
-                                "workspace": opts.project.as_deref(),
+                                "project": opts.project.as_deref(),
                             });
                             match cli::dispatch_remote(remote_url, "store", body).await {
                                 Ok(_) => count += 1,
@@ -1705,7 +1705,7 @@ async fn main() -> Result<()> {
                     content_filter.clone(),
                     None, // Summarization only in daemon mode
                     None, // No router in serve mode (single-tier)
-                    None, // workspace: None (global auto-store in serve mode)
+                    None, // project: None (global auto-store in serve mode)
                     None, // birth_year: None (no birth year hint in serve mode)
                 );
                 tracing::info!("Auto-store sidecar spawned");

@@ -60,7 +60,7 @@ impl ClaudeCodeReader {
             .max(1) // At least 1 if the file has any content
     }
 
-    /// Extract workspace/project name from a Claude Code project directory slug.
+    /// Extract project name from a Claude Code project directory slug.
     ///
     /// Claude Code encodes project paths as slugs like `-Users-foo-myproject`.
     /// We reverse this to get a human-readable project name.
@@ -77,7 +77,7 @@ impl ClaudeCodeReader {
     ///
     /// Each header + following content becomes one ImportChunk. If a section
     /// is very long (>2048 chars), it's further split using chunk_content().
-    fn split_into_sections(content: &str, source_path: &str, workspace: Option<&str>) -> Vec<ImportChunk> {
+    fn split_into_sections(content: &str, source_path: &str, project: Option<&str>) -> Vec<ImportChunk> {
         let mut chunks = Vec::new();
         let mut current_header: Option<String> = None;
         let mut current_lines: Vec<&str> = Vec::new();
@@ -85,7 +85,7 @@ impl ClaudeCodeReader {
         let flush_section = |header: &Option<String>,
                               lines: &[&str],
                               chunks: &mut Vec<ImportChunk>,
-                              workspace: Option<&str>| {
+                              project: Option<&str>| {
             let body = lines.join("\n").trim().to_string();
             if body.is_empty() {
                 return;
@@ -125,7 +125,7 @@ impl ClaudeCodeReader {
                     actor: None,
                     embedding: None,
                     embedding_model: None,
-                    workspace: workspace.map(|w| w.to_string()),
+                    project: project.map(|w| w.to_string()),
                 });
             }
         };
@@ -133,7 +133,7 @@ impl ClaudeCodeReader {
         for line in content.lines() {
             if line.starts_with("## ") || line.starts_with("# ") {
                 // Flush the previous section.
-                flush_section(&current_header, &current_lines, &mut chunks, workspace);
+                flush_section(&current_header, &current_lines, &mut chunks, project);
                 current_header = Some(line.to_string());
                 current_lines = Vec::new();
             } else {
@@ -142,7 +142,7 @@ impl ClaudeCodeReader {
         }
 
         // Flush the last section.
-        flush_section(&current_header, &current_lines, &mut chunks, workspace);
+        flush_section(&current_header, &current_lines, &mut chunks, project);
 
         // Tag with source path for traceability.
         for chunk in &mut chunks {
@@ -153,7 +153,7 @@ impl ClaudeCodeReader {
     }
 
     /// Read a MEMORY.md file and return ImportChunks.
-    fn read_memory_md(path: &Path, workspace: Option<&str>) -> Result<Vec<ImportChunk>> {
+    fn read_memory_md(path: &Path, project: Option<&str>) -> Result<Vec<ImportChunk>> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read MEMORY.md at {:?}", path))?;
 
@@ -162,7 +162,7 @@ impl ClaudeCodeReader {
         }
 
         let source_path = path.to_string_lossy();
-        Ok(Self::split_into_sections(&content, &source_path, workspace))
+        Ok(Self::split_into_sections(&content, &source_path, project))
     }
 
     /// Read history.jsonl file and return ImportChunks for assistant messages.
@@ -225,7 +225,7 @@ impl ClaudeCodeReader {
                 actor: None,
                 embedding: None,
                 embedding_model: None,
-                workspace: None,
+                project: None,
             });
         }
 
@@ -367,8 +367,8 @@ impl ImportSource for ClaudeCodeReader {
                 || path.file_name().map(|f| f == "MEMORY.md").unwrap_or(false)
             {
                 // Single MEMORY.md file.
-                let workspace = extract_workspace_from_path(&path);
-                let file_chunks = ClaudeCodeReader::read_memory_md(&path, workspace.as_deref())?;
+                let project = extract_project_from_path(&path);
+                let file_chunks = ClaudeCodeReader::read_memory_md(&path, project.as_deref())?;
                 all_chunks.extend(file_chunks);
             } else if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
                 // Explicit history.jsonl file.
@@ -406,8 +406,8 @@ fn collect_memory_files(
         if path.is_dir() {
             collect_memory_files(&path, chunks, include_history)?;
         } else if path.file_name().map(|f| f == "MEMORY.md").unwrap_or(false) {
-            let workspace = extract_workspace_from_path(&path);
-            match ClaudeCodeReader::read_memory_md(&path, workspace.as_deref()) {
+            let project = extract_project_from_path(&path);
+            match ClaudeCodeReader::read_memory_md(&path, project.as_deref()) {
                 Ok(file_chunks) => chunks.extend(file_chunks),
                 Err(e) => warn!("Failed to read {:?}: {}", path, e),
             }
@@ -424,10 +424,10 @@ fn collect_memory_files(
     Ok(())
 }
 
-/// Try to determine a workspace name from a MEMORY.md file path.
+/// Try to determine a project name from a MEMORY.md file path.
 ///
 /// `~/.claude/projects/-Users-foo-myproject/memory/MEMORY.md` → "myproject"
-fn extract_workspace_from_path(path: &Path) -> Option<String> {
+fn extract_project_from_path(path: &Path) -> Option<String> {
     // Walk up looking for the projects directory.
     let mut current = path.parent()?;
     loop {
@@ -494,9 +494,9 @@ mod tests {
     }
 
     #[test]
-    fn test_split_workspace_tag() {
+    fn test_split_project_tag() {
         let chunks = ClaudeCodeReader::split_into_sections("# Test\nContent", "test.md", Some("myproject"));
-        assert_eq!(chunks[0].workspace, Some("myproject".to_string()));
+        assert_eq!(chunks[0].project, Some("myproject".to_string()));
     }
 
     #[tokio::test]

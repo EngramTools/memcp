@@ -19,8 +19,9 @@ pub struct RecallRequest {
     /// When true, clears session recall history before querying.
     #[serde(default)]
     pub reset: bool,
-    /// Workspace scope. Returns workspace-scoped + global memories.
-    pub workspace: Option<String>,
+    /// Project scope. Returns project-scoped + global memories.
+    #[serde(alias = "workspace")]
+    pub project: Option<String>,
     /// Max memories to return (overrides config.recall.max_memories for queryless path).
     pub limit: Option<usize>,
     /// Tag affinity boost: memories sharing these tags get a relevance bonus.
@@ -45,8 +46,9 @@ pub struct SearchRequest {
     pub type_hint: Option<String>,
     /// Filter by audience scope.
     pub audience: Option<String>,
-    /// Workspace scope filter.
-    pub workspace: Option<String>,
+    /// Project scope filter.
+    #[serde(alias = "workspace")]
+    pub project: Option<String>,
     /// Minimum composite salience score (0.0–1.0).
     pub min_salience: Option<f64>,
     /// Field projection: only return these fields in each result object.
@@ -84,8 +86,9 @@ pub struct StoreRequest {
     /// When true, blocks until embedding completes before responding.
     #[serde(default)]
     pub wait: bool,
-    /// Workspace scope for this memory.
-    pub workspace: Option<String>,
+    /// Project scope for this memory.
+    #[serde(alias = "workspace")]
+    pub project: Option<String>,
 }
 
 fn default_type_hint() -> String { "fact".to_string() }

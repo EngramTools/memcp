@@ -49,7 +49,7 @@ pub struct ImportChunk {
     pub actor: Option<String>,
     pub embedding: Option<Vec<f32>>,
     pub embedding_model: Option<String>,
-    pub workspace: Option<String>,
+    pub project: Option<String>,
 }
 
 /// Options controlling import behavior.
@@ -437,8 +437,8 @@ impl ImportEngine {
                         "type_hint": chunk.type_hint.as_deref().unwrap_or("fact"),
                         "source": chunk.source,
                         "tags": tags,
-                        "workspace": self.opts.project.as_deref()
-                            .or(chunk.workspace.as_deref()),
+                        "project": self.opts.project.as_deref()
+                            .or(chunk.project.as_deref()),
                     });
 
                     match crate::cli::dispatch_remote(remote_url, "store", body).await {

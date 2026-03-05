@@ -129,7 +129,7 @@ impl RecallEngine {
     /// - `query_embedding`: Vector embedding of the user's query (required).
     /// - `session_id`: Optional session identifier. Auto-generated if None.
     /// - `reset`: If true, clears session recall history before querying.
-    /// - `workspace`: Optional workspace scope. When Some, returns workspace-scoped + global memories.
+    /// - `project`: Optional project scope. When Some, returns project-scoped + global memories.
     /// - `boost_tags`: Explicit boost tags for tag-affinity ranking. Memories sharing these tags
     ///   receive a soft relevance bonus. Prefix matching: "channel:" boosts all "channel:*" tags.
     ///   Pass `&[]` to skip explicit boost (backward compatible).
@@ -142,7 +142,7 @@ impl RecallEngine {
         query_embedding: &[f32],
         session_id: Option<String>,
         reset: bool,
-        workspace: Option<&str>,
+        project: Option<&str>,
         boost_tags: &[String],
     ) -> Result<RecallResult, MemcpError> {
         // a. Resolve session_id: generate if not provided.
@@ -173,7 +173,7 @@ impl RecallEngine {
                 self.config.min_relevance,
                 self.config.max_memories,
                 self.extraction_enabled,
-                workspace,
+                project,
             )
             .await?;
 
@@ -267,7 +267,7 @@ impl RecallEngine {
     /// # Arguments
     /// - `session_id`: Optional session identifier. Auto-generated if None.
     /// - `reset`: If true, clears session recall history before querying.
-    /// - `workspace`: Optional workspace scope.
+    /// - `project`: Optional project scope.
     /// - `first`: When true, fetches and pins the most recent `project-summary` tagged
     ///   memory in the `summary` field. Summary is NOT counted toward `count` and NOT
     ///   added to session_recalls (so it reappears on subsequent first-session calls).
@@ -281,7 +281,7 @@ impl RecallEngine {
         &self,
         session_id: Option<String>,
         reset: bool,
-        workspace: Option<&str>,
+        project: Option<&str>,
         first: bool,
         max_memories_override: Option<usize>,
         boost_tags: &[String],
@@ -300,7 +300,7 @@ impl RecallEngine {
         // d. Fetch project summary (only when first=true).
         //    Not added to session_recalls — pinned summary always reappears.
         let summary = if first {
-            match self.store.fetch_project_summary(workspace).await? {
+            match self.store.fetch_project_summary(project).await? {
                 Some((id, content)) => Some(RecalledMemory {
                     memory_id: id,
                     content,
@@ -326,7 +326,7 @@ impl RecallEngine {
         let overfetch = max_memories * 3;
         let candidates = self
             .store
-            .recall_candidates_queryless(&session_id, overfetch, workspace)
+            .recall_candidates_queryless(&session_id, overfetch, project)
             .await?;
 
         // g. Build ScoredHit + SalienceInput vectors for salience scoring.
@@ -359,7 +359,7 @@ impl RecallEngine {
                 total_chunks: None,
                 event_time: None,
                 event_time_precision: None,
-                workspace: workspace.map(String::from),
+                project: project.map(String::from),
             };
 
             hits.push(ScoredHit {

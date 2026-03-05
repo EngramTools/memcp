@@ -68,7 +68,7 @@ pub async fn ingest_question(
                 total_chunks: None,
                 event_time: None,
                 event_time_precision: None,
-                workspace: None,
+                project: None,
             };
 
             let stored = store.store(memory).await?;

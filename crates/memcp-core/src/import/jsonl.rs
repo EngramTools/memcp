@@ -24,7 +24,7 @@ struct JsonlMemoryLine {
     tags: Option<Vec<String>>,
     created_at: Option<String>,
     actor: Option<String>,
-    workspace: Option<String>,
+    project: Option<String>,
     // Embedding fields for zero-cost reuse (round-trip with --include-embeddings).
     embedding: Option<Vec<f32>>,
     embedding_model: Option<String>,
@@ -113,7 +113,7 @@ impl ImportSource for JsonlReader {
                 actor: parsed.actor,
                 embedding: parsed.embedding,
                 embedding_model: parsed.embedding_model,
-                workspace: parsed.workspace,
+                project: parsed.project,
             };
 
             chunks.push(chunk);

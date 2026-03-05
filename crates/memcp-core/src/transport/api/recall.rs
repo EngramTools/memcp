@@ -54,7 +54,7 @@ pub async fn recall_handler(
             .recall_queryless(
                 req.session_id,
                 req.reset,
-                req.workspace.as_deref(),
+                req.project.as_deref(),
                 req.first,
                 req.limit,
                 &req.boost_tags,
@@ -83,7 +83,7 @@ pub async fn recall_handler(
         };
 
         match engine
-            .recall(&query_embedding, req.session_id, req.reset, req.workspace.as_deref(), &req.boost_tags)
+            .recall(&query_embedding, req.session_id, req.reset, req.project.as_deref(), &req.boost_tags)
             .await
         {
             Ok(r) => r,
@@ -97,7 +97,7 @@ pub async fn recall_handler(
     // For query-based path with first=true, fetch project summary separately.
     // (recall_queryless already handles this internally via the first parameter.)
     if !is_queryless && req.first && result.summary.is_none() {
-        result.summary = match store.fetch_project_summary(req.workspace.as_deref()).await {
+        result.summary = match store.fetch_project_summary(req.project.as_deref()).await {
             Ok(Some((id, content))) => Some(crate::recall::RecalledMemory {
                 memory_id: id,
                 content,

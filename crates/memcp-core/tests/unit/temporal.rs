@@ -34,7 +34,7 @@ fn make_memory(created_at: DateTime<Utc>, event_time: Option<DateTime<Utc>>) -> 
         total_chunks: None,
         event_time,
         event_time_precision: None,
-        workspace: None,
+        project: None,
     }
 }
 
