@@ -15,10 +15,14 @@ use std::collections::HashMap;
 // ─── Dataset Types ────────────────────────────────────────────────────────────
 
 /// A single LoCoMo sample: one long conversation with associated QA pairs.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+///
+/// The real `locomo10.json` stores `conversation` as a dict with keys like
+/// `speaker_a`, `speaker_b`, `session_1`, `session_1_date_time`, etc.
+/// The custom deserializer flattens this into `Vec<Session>`.
+#[derive(Debug, Clone, Serialize)]
 pub struct LoCoMoSample {
     pub sample_id: String,
-    /// The conversation sessions.
+    /// The conversation sessions (flattened from the dict format).
     pub conversation: Vec<Session>,
     /// QA pairs to evaluate against the conversation.
     pub qa: Vec<QaPair>,
@@ -29,7 +33,7 @@ pub struct LoCoMoSample {
 pub struct Session {
     pub date: String,
     pub speakers: Vec<String>,
-    /// Dialog turns — also accepted as "turns" for flexibility.
+    /// Dialog turns.
     #[serde(alias = "turns")]
     pub dialog: Vec<Turn>,
 }
@@ -38,22 +42,43 @@ pub struct Session {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Turn {
     pub speaker: String,
-    pub dialog_id: usize,
-    #[serde(alias = "text")]
+    /// Dialog ID — string like "D1:3" in the real dataset.
+    #[serde(alias = "dialog_id")]
+    pub dia_id: String,
     pub text: String,
+}
+
+/// Deserialize an optional value that may be a string, number, or missing into a String.
+fn deserialize_optional_string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<Value>::deserialize(deserializer)?;
+    match v {
+        Some(Value::String(s)) => Ok(s),
+        Some(Value::Number(n)) => Ok(n.to_string()),
+        Some(other) => Ok(other.to_string()),
+        None => Ok(String::new()),
+    }
 }
 
 /// A QA pair with flexible category deserialization (u8 or string in the wild).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QaPair {
     pub question: String,
+    /// Answer text. Optional because category 5 (adversarial) uses `adversarial_answer` instead.
+    /// Deserialized flexibly — the dataset sometimes uses integers (e.g. `2022`).
+    #[serde(default, deserialize_with = "deserialize_optional_string_or_number")]
     pub answer: String,
+    /// Adversarial answer — present only on category 5 questions (the "trick" answer).
+    #[serde(default)]
+    pub adversarial_answer: Option<String>,
     /// Category: 1=single_hop, 2=multi_hop, 3=temporal, 4=commonsense, 5=adversarial.
     /// Stored as `Value` to handle both integer and string serializations.
     pub category: Value,
-    /// dialog_ids of turns containing the answer evidence.
+    /// Evidence references (e.g. "D1:3" meaning dialog 1, turn 3).
     #[serde(default)]
-    pub evidence: Vec<usize>,
+    pub evidence: Vec<Value>,
 }
 
 impl QaPair {
@@ -76,6 +101,92 @@ pub fn category_label(cat: u8) -> &'static str {
         4 => "commonsense",
         5 => "adversarial",
         _ => "unknown",
+    }
+}
+
+// ─── Custom Deserialization ──────────────────────────────────────────────────
+
+/// Raw JSON shape for a LoCoMo sample as it appears in `locomo10.json`.
+///
+/// `conversation` is a dict with:
+///   - `speaker_a`, `speaker_b`: speaker names
+///   - `session_N_date_time`: date string for session N
+///   - `session_N`: list of turn objects `{speaker, dia_id, text, ...}`
+#[derive(Deserialize)]
+struct RawLoCoMoSample {
+    sample_id: String,
+    conversation: HashMap<String, Value>,
+    qa: Vec<QaPair>,
+}
+
+impl<'de> Deserialize<'de> for LoCoMoSample {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawLoCoMoSample::deserialize(deserializer)?;
+
+        let speaker_a = raw
+            .conversation
+            .get("speaker_a")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Speaker A")
+            .to_string();
+        let speaker_b = raw
+            .conversation
+            .get("speaker_b")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Speaker B")
+            .to_string();
+        let speakers = vec![speaker_a, speaker_b];
+
+        // Collect session numbers by scanning for `session_N` keys (not `session_N_date_time`).
+        let mut session_nums: Vec<usize> = Vec::new();
+        for key in raw.conversation.keys() {
+            if let Some(rest) = key.strip_prefix("session_") {
+                if !rest.contains("date_time") {
+                    if let Ok(n) = rest.parse::<usize>() {
+                        session_nums.push(n);
+                    }
+                }
+            }
+        }
+        session_nums.sort();
+
+        let mut sessions = Vec::with_capacity(session_nums.len());
+        for n in session_nums {
+            let date_key = format!("session_{}_date_time", n);
+            let session_key = format!("session_{}", n);
+
+            let date = raw
+                .conversation
+                .get(&date_key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let turns_value = raw
+                .conversation
+                .get(&session_key)
+                .cloned()
+                .unwrap_or(Value::Array(vec![]));
+
+            let turns: Vec<Turn> = serde_json::from_value(turns_value).map_err(|e| {
+                serde::de::Error::custom(format!("failed to parse session_{} turns: {}", n, e))
+            })?;
+
+            sessions.push(Session {
+                date,
+                speakers: speakers.clone(),
+                dialog: turns,
+            });
+        }
+
+        Ok(LoCoMoSample {
+            sample_id: raw.sample_id,
+            conversation: sessions,
+            qa: raw.qa,
+        })
     }
 }
 
@@ -185,7 +296,8 @@ mod tests {
             question: "Q".into(),
             answer: "A".into(),
             category: json!(3u8),
-            evidence: vec![],
+            evidence: vec![json!("D1:3")],
+            adversarial_answer: None,
         };
         assert_eq!(qa.category_u8(), 3);
     }
@@ -196,39 +308,76 @@ mod tests {
             question: "Q".into(),
             answer: "A".into(),
             category: json!("2"),
-            evidence: vec![],
+            evidence: vec![json!("D1:0")],
+            adversarial_answer: None,
         };
         assert_eq!(qa.category_u8(), 2);
     }
 
     #[test]
-    fn test_locomo_sample_deserialize() {
+    fn test_locomo_sample_deserialize_real_format() {
         let json_str = r#"{
             "sample_id": "s001",
-            "conversation": [
-                {
-                    "date": "March 15, 2023",
-                    "speakers": ["Alice", "Bob"],
-                    "dialog": [
-                        {"speaker": "Alice", "dialog_id": 0, "text": "Hello Bob!"},
-                        {"speaker": "Bob", "dialog_id": 1, "text": "Hi Alice!"}
-                    ]
-                }
-            ],
+            "conversation": {
+                "speaker_a": "Alice",
+                "speaker_b": "Bob",
+                "session_1_date_time": "1:56 pm on 8 May, 2023",
+                "session_1": [
+                    {"speaker": "Alice", "dia_id": "D1:1", "text": "Hello Bob!"},
+                    {"speaker": "Bob", "dia_id": "D1:2", "text": "Hi Alice!"}
+                ],
+                "session_2_date_time": "3:00 pm on 15 May, 2023",
+                "session_2": [
+                    {"speaker": "Alice", "dia_id": "D2:1", "text": "How are you?"}
+                ]
+            },
             "qa": [
                 {
-                    "question": "What did Alice say?",
+                    "question": "What did Alice say first?",
                     "answer": "Hello Bob",
                     "category": 1,
-                    "evidence": [0]
+                    "evidence": ["D1:1"]
                 }
             ]
         }"#;
         let sample: LoCoMoSample = serde_json::from_str(json_str).expect("should deserialize");
         assert_eq!(sample.sample_id, "s001");
-        assert_eq!(sample.conversation.len(), 1);
+        assert_eq!(sample.conversation.len(), 2);
+        assert_eq!(sample.conversation[0].date, "1:56 pm on 8 May, 2023");
+        assert_eq!(sample.conversation[0].speakers, vec!["Alice", "Bob"]);
         assert_eq!(sample.conversation[0].dialog.len(), 2);
+        assert_eq!(sample.conversation[0].dialog[0].dia_id, "D1:1");
+        assert_eq!(sample.conversation[1].dialog.len(), 1);
         assert_eq!(sample.qa.len(), 1);
         assert_eq!(sample.qa[0].category_u8(), 1);
+    }
+
+    #[test]
+    fn test_locomo_sample_real_dataset_first_record() {
+        // Minimal reproduction of the real locomo10.json structure
+        let json_str = r#"{
+            "sample_id": "test_real",
+            "conversation": {
+                "speaker_a": "Caroline",
+                "speaker_b": "Melanie",
+                "session_1_date_time": "1:56 pm on 8 May, 2023",
+                "session_1": [
+                    {"speaker": "Caroline", "dia_id": "D1:1", "text": "Hey Mel!"},
+                    {"speaker": "Melanie", "dia_id": "D1:2", "text": "Hi Caroline!"},
+                    {"speaker": "Caroline", "dia_id": "D1:3", "text": "Went to LGBTQ group yesterday."}
+                ]
+            },
+            "qa": [
+                {
+                    "question": "When did Caroline go to the LGBTQ support group?",
+                    "answer": "7 May 2023",
+                    "evidence": ["D1:3"],
+                    "category": 2
+                }
+            ]
+        }"#;
+        let sample: LoCoMoSample = serde_json::from_str(json_str).expect("should deserialize");
+        assert_eq!(sample.conversation.len(), 1);
+        assert_eq!(sample.conversation[0].dialog[2].dia_id, "D1:3");
     }
 }
