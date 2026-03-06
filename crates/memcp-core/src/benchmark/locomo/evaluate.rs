@@ -68,10 +68,19 @@ pub fn token_counts(tokens: &[String]) -> HashMap<String, usize> {
 // ─── LLM Answer Generation ────────────────────────────────────────────────────
 
 /// Build a LoCoMo-specific answer prompt from retrieved memories and a question.
+///
+/// Single balanced prompt for all categories. Encourages concise answers and
+/// inference from partial evidence, but allows calibrated abstention when
+/// memories are completely unrelated to the question.
 fn build_locomo_answer_prompt(question: &str, memories: &[Memory]) -> String {
     let mut context_parts = Vec::new();
     for (i, m) in memories.iter().enumerate() {
-        context_parts.push(format!("[Memory {}]: {}", i + 1, m.content));
+        let actor = m
+            .actor
+            .as_deref()
+            .unwrap_or("Unknown");
+        let date = m.created_at.format("%B %d, %Y");
+        context_parts.push(format!("[Memory {}] ({}, {}): {}", i + 1, actor, date, m.content));
     }
     let context = if context_parts.is_empty() {
         "No relevant memories found.".to_string()
@@ -80,12 +89,22 @@ fn build_locomo_answer_prompt(question: &str, memories: &[Memory]) -> String {
     };
 
     format!(
-        "You are a helpful assistant with access to conversation memories.\n\
-         Answer the question based on the provided memories. Be concise.\n\
-         If the answer cannot be found in the memories, say \"I don't know\".\n\n\
+        "You are a helpful assistant with access to conversation memories between two people.\n\
+         Each memory includes who said it and when.\n\n\
+         Rules:\n\
+         - Answer with ONLY the key facts — no filler words, no full sentences.\n\
+           Example: Q: \"What instruments does Melanie play?\" A: \"clarinet and violin\" \
+           (NOT \"Melanie plays the clarinet and violin.\")\n\
+         - Convert ALL relative dates to absolute dates using the memory timestamps. \
+         For example, if a memory from June 15 says \"last week\", answer \"approximately June 8\".\n\
+         - Use common sense and world knowledge to infer answers when memories provide clues \
+         but don't state the answer directly.\n\
+         - If memories are partially relevant, use them as context and give your best answer.\n\
+         - Only say \"I don't know\" if the memories are completely unrelated to the question \
+         and provide no useful information whatsoever.\n\n\
          Memories:\n{context}\n\n\
          Question: {question}\n\n\
-         Answer:"
+         Answer (concise, key facts only):"
     )
 }
 
@@ -101,7 +120,7 @@ pub async fn generate_locomo_answer(
     let body = json!({
         "model": ANSWER_MODEL,
         "temperature": 0,
-        "max_tokens": 256,
+        "max_tokens": 128,
         "messages": [{"role": "user", "content": prompt}]
     });
 

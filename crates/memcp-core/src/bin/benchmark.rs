@@ -39,6 +39,8 @@ use memcp::benchmark::default_configs;
 #[cfg(feature = "local-embed")]
 use memcp::embedding::local::LocalEmbeddingProvider;
 #[cfg(feature = "local-embed")]
+use memcp::embedding::openai::OpenAIEmbeddingProvider;
+#[cfg(feature = "local-embed")]
 use memcp::embedding::pipeline::EmbeddingPipeline;
 #[cfg(feature = "local-embed")]
 use memcp::intelligence::query_intelligence::openai::OpenAIQueryIntelligenceProvider;
@@ -115,6 +117,61 @@ struct Cli {
     /// Keep the benchmark schema after run (default: drop for clean ephemeral isolation)
     #[arg(long)]
     keep_schema: bool,
+
+    /// Embedding provider: "local" (BGE-Small, default) or "openai" (API-based, e.g. Gemini)
+    #[arg(long, default_value = "local")]
+    embedding_provider: String,
+
+    /// Embedding model name (default depends on provider)
+    #[arg(long)]
+    embedding_model: Option<String>,
+
+    /// Embedding API base URL (for openai provider). Defaults to OpenAI.
+    /// For Gemini: https://generativelanguage.googleapis.com/v1beta/openai
+    #[arg(long)]
+    embedding_base_url: Option<String>,
+
+    /// Embedding API key (for openai provider). Falls back to OPENAI_API_KEY if not set.
+    #[arg(long, env = "GOOGLE_EMBEDDING_API_KEY")]
+    embedding_api_key: Option<String>,
+
+    /// Embedding vector dimension override (auto-detected from model if omitted)
+    #[arg(long)]
+    embedding_dimension: Option<usize>,
+}
+
+/// Build an embedding provider from CLI args.
+///
+/// Supports "local" (fastembed, defaults to BGE-Small) and "openai" (any OpenAI-compatible
+/// API including Google Gemini).
+#[cfg(feature = "local-embed")]
+async fn build_embedding_provider(
+    cli: &Cli,
+) -> Result<Arc<dyn memcp::embedding::EmbeddingProvider + Send + Sync>, anyhow::Error> {
+    match cli.embedding_provider.as_str() {
+        "openai" => {
+            let api_key = cli
+                .embedding_api_key
+                .clone()
+                .unwrap_or_else(|| cli.openai_api_key.clone());
+            let provider = OpenAIEmbeddingProvider::new(
+                api_key,
+                cli.embedding_model.clone(),
+                cli.embedding_dimension,
+                cli.embedding_base_url.clone(),
+            )
+            .map_err(|e| anyhow::anyhow!("Failed to create embedding provider: {}", e))?;
+            Ok(Arc::new(provider))
+        }
+        "local" | _ => {
+            let model = cli
+                .embedding_model
+                .as_deref()
+                .unwrap_or("BGESmallENV15");
+            let provider = LocalEmbeddingProvider::new(".fastembed_cache", model).await?;
+            Ok(Arc::new(provider))
+        }
+    }
 }
 
 #[tokio::main]
@@ -232,9 +289,14 @@ async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
     tracing::info!("Database ready");
 
     // Initialize embedding provider and pipeline
-    tracing::info!("Initializing local embedding provider");
     let embedding_provider: Arc<dyn memcp::embedding::EmbeddingProvider + Send + Sync> =
-        Arc::new(LocalEmbeddingProvider::new(".fastembed_cache", "AllMiniLML6V2").await?);
+        build_embedding_provider(cli).await?;
+    tracing::info!(
+        provider = %cli.embedding_provider,
+        model = %embedding_provider.model_name(),
+        dim = embedding_provider.dimension(),
+        "Embedding provider ready"
+    );
     let pipeline = EmbeddingPipeline::new_single(
         embedding_provider.clone(),
         store.clone(),
@@ -485,9 +547,14 @@ async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
     tracing::info!("Database ready");
 
     // Initialize embedding provider and pipeline
-    tracing::info!("Initializing local embedding provider");
     let embedding_provider: Arc<dyn memcp::embedding::EmbeddingProvider + Send + Sync> =
-        Arc::new(LocalEmbeddingProvider::new(".fastembed_cache", "AllMiniLML6V2").await?);
+        build_embedding_provider(cli).await?;
+    tracing::info!(
+        provider = %cli.embedding_provider,
+        model = %embedding_provider.model_name(),
+        dim = embedding_provider.dimension(),
+        "Embedding provider ready"
+    );
     let pipeline = EmbeddingPipeline::new_single(
         embedding_provider.clone(),
         store.clone(),
@@ -592,6 +659,12 @@ async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
         let json = serde_json::to_string_pretty(&locomo_report)?;
         std::fs::write(&report_path, json)?;
         tracing::info!(path = %report_path.display(), "LoCoMo report saved");
+
+        // Save per-question results for analysis
+        let details_path = run_dir.join(format!("{}_details.json", config.name));
+        let details_json = serde_json::to_string_pretty(&results)?;
+        std::fs::write(&details_path, details_json)?;
+        tracing::info!(path = %details_path.display(), "Per-question details saved");
 
         // Append to benchmark history
         let history_entry = locomo_history_entry(config.name.as_str(), &locomo_report);

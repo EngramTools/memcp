@@ -124,6 +124,8 @@ pub fn model_dimension(model_name: &str) -> Option<usize> {
         "text-embedding-3-small" => Some(1536),
         "text-embedding-3-large" => Some(3072),
         "text-embedding-ada-002" => Some(1536),
+        // Google models (direct and via OpenRouter)
+        "gemini-embedding-001" | "google/gemini-embedding-001" => Some(768),
         _ => None,
     }
 }

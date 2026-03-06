@@ -791,6 +791,7 @@ pub async fn create_embedding_provider(
                 api_key,
                 Some(config.embedding.openai_model.clone()),
                 config.embedding.dimension,
+                config.embedding.openai_base_url.clone(),
             )?;
             // Warn if user-supplied dimension override differs from the model's known dimension
             if let Some(override_dim) = config.embedding.dimension {
@@ -952,6 +953,7 @@ async fn create_tier_provider(
                 api_key,
                 Some(model),
                 tier.dimension,
+                tier.base_url.clone(),
             )?;
             Ok(Arc::new(provider))
         }

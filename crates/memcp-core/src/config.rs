@@ -405,6 +405,9 @@ pub struct EmbeddingTierConfig {
     /// OpenAI API key override (falls back to top-level if not set)
     #[serde(default)]
     pub openai_api_key: Option<String>,
+    /// API base URL override (defaults to OpenAI; use Google's endpoint for Gemini embeddings)
+    #[serde(default)]
+    pub base_url: Option<String>,
     /// Vector dimension override (auto-detected from model if omitted)
     #[serde(default)]
     pub dimension: Option<usize>,
@@ -448,6 +451,12 @@ pub struct EmbeddingConfig {
     /// Default: "text-embedding-3-small" (1536 dimensions)
     #[serde(default = "default_openai_model")]
     pub openai_model: String,
+
+    /// API base URL for OpenAI-compatible embedding providers.
+    /// Default: "https://api.openai.com/v1"
+    /// For Google Gemini: "https://generativelanguage.googleapis.com/v1beta/openai"
+    #[serde(default)]
+    pub openai_base_url: Option<String>,
 
     /// Override vector dimension. Auto-detected from model if omitted.
     /// Only needed for custom/unknown models.
@@ -493,6 +502,7 @@ impl Default for EmbeddingConfig {
             cache_dir: default_cache_dir(),
             local_model: default_local_model(),
             openai_model: default_openai_model(),
+            openai_base_url: None,
             dimension: None,
             reembed_on_tag_change: false,
             tiers: HashMap::new(),

@@ -160,10 +160,12 @@ pub async fn run_locomo_benchmark(
 
             // Step 3a: QI expansion — multi-query with original preserved (fail-open)
             let mut search_variants = vec![qa.question.clone()];
+            let mut qi_created_after: Option<chrono::DateTime<chrono::Utc>> = None;
+            let mut qi_created_before: Option<chrono::DateTime<chrono::Utc>> = None;
 
             if config.qi_expansion {
                 if let Some(ref provider) = qi_provider {
-                    let timeout = Duration::from_secs(2);
+                    let timeout = Duration::from_secs(15);
                     match tokio::time::timeout(timeout, provider.expand(&qa.question)).await {
                         Ok(Ok(expanded)) => {
                             if !expanded.variants.is_empty() {
@@ -174,6 +176,11 @@ pub async fn run_locomo_benchmark(
                                     }
                                 }
                                 search_variants = variants;
+                            }
+                            // Wire time_range into search filters
+                            if let Some(ref tr) = expanded.time_range {
+                                qi_created_after = tr.after;
+                                qi_created_before = tr.before;
                             }
                         }
                         Ok(Err(e)) => {
@@ -218,8 +225,8 @@ pub async fn run_locomo_benchmark(
                         variant,
                         query_embedding.as_ref(),
                         20,
-                        None, // no date filters for LoCoMo
-                        None,
+                        qi_created_after,
+                        qi_created_before,
                         None,
                         bm25_k,
                         vector_k,
@@ -248,11 +255,11 @@ pub async fn run_locomo_benchmark(
                     let candidates: Vec<RankedCandidate> =
                         hits.iter().enumerate().map(|(i, h)| RankedCandidate {
                             id: h.memory.id.to_string(),
-                            content: h.memory.content.chars().take(500).collect(),
+                            content: h.memory.content.chars().take(1000).collect(),
                             current_rank: i + 1,
                         }).collect();
 
-                    let timeout = Duration::from_secs(3);
+                    let timeout = Duration::from_secs(30);
                     match tokio::time::timeout(
                         timeout,
                         provider.rerank(&qa.question, &candidates),
@@ -287,10 +294,9 @@ pub async fn run_locomo_benchmark(
                 }
             }
 
-            // Step 3d: Take top 10 memories for answer generation
-            // Note: LoCoMo uses "locomo-benchmark" source (not per-session), so session
-            // expansion doesn't apply here — all turns share one source per sample.
-            let memories: Vec<_> = hits.into_iter().take(10).map(|h| h.memory).collect();
+            // Step 3d: Take top 20 memories for answer generation
+            // More context helps single-hop recall; the answer model can ignore irrelevant ones.
+            let memories: Vec<_> = hits.into_iter().take(20).map(|h| h.memory).collect();
 
             // Step 3e: Generate hypothesis
             let hypothesis =

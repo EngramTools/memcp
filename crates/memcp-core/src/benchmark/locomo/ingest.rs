@@ -58,11 +58,11 @@ async fn ingest_per_turn(
                 tags: Some(vec![
                     "locomo".to_string(),
                     format!("session:{}", session_idx),
-                    format!("turn:{}", turn.dialog_id),
+                    format!("turn:{}", turn.dia_id),
                 ]),
                 created_at,
-                actor: None,
-                actor_type: "system".to_string(),
+                actor: Some(turn.speaker.clone()),
+                actor_type: "user".to_string(),
                 audience: "global".to_string(),
                 idempotency_key: None,
                 parent_id: None,
@@ -102,6 +102,7 @@ async fn ingest_per_session(
         let session_base_time = parse_locomo_date(&session.date);
 
         // Build concatenated content for the full session.
+        // Keep "Speaker: text" format here since multiple speakers per session.
         let mut lines = vec![format!("Session date: {}", session.date)];
         for turn in &session.dialog {
             lines.push(format!("{}: {}", turn.speaker, turn.text));
@@ -117,8 +118,8 @@ async fn ingest_per_session(
                 format!("session:{}", session_idx),
             ]),
             created_at: session_base_time,
-            actor: None,
-            actor_type: "system".to_string(),
+            actor: session.speakers.first().cloned(),
+            actor_type: "user".to_string(),
             audience: "global".to_string(),
             idempotency_key: None,
             parent_id: None,
@@ -145,13 +146,27 @@ async fn ingest_per_session(
     Ok(count)
 }
 
-/// Parse a LoCoMo date string to UTC midnight.
+/// Parse a LoCoMo date string to UTC.
 ///
 /// Supports formats:
+/// - "1:56 pm on 8 May, 2023" (real locomo10.json format)
 /// - "March 15, 2023" (long month name)
 /// - "2023-03-15" (ISO 8601)
 /// - "03/15/2023" (US slash format)
 pub fn parse_locomo_date(date_str: &str) -> Option<DateTime<Utc>> {
+    // Try real LoCoMo format: "H:MM am/pm on D Month, YYYY"
+    // Strip the time+on prefix and parse just the date part.
+    if let Some(pos) = date_str.find(" on ") {
+        let date_part = &date_str[pos + 4..]; // e.g. "8 May, 2023"
+        // Try "D Month, YYYY"
+        if let Ok(d) = NaiveDate::parse_from_str(date_part, "%d %B, %Y") {
+            return d.and_hms_opt(0, 0, 0).map(|dt| Utc.from_utc_datetime(&dt));
+        }
+        // Try "DD Month, YYYY"
+        if let Ok(d) = NaiveDate::parse_from_str(date_part, "%e %B, %Y") {
+            return d.and_hms_opt(0, 0, 0).map(|dt| Utc.from_utc_datetime(&dt));
+        }
+    }
     // Try ISO 8601 first.
     if let Ok(d) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
         return d.and_hms_opt(0, 0, 0).map(|dt| Utc.from_utc_datetime(&dt));
@@ -195,6 +210,13 @@ mod tests {
         let dt = parse_locomo_date("03/15/2023");
         assert!(dt.is_some());
         assert_eq!(dt.unwrap().format("%Y-%m-%d").to_string(), "2023-03-15");
+    }
+
+    #[test]
+    fn test_parse_locomo_date_real_format() {
+        let dt = parse_locomo_date("1:56 pm on 8 May, 2023");
+        assert!(dt.is_some(), "Should parse real LoCoMo date format");
+        assert_eq!(dt.unwrap().format("%Y-%m-%d").to_string(), "2023-05-08");
     }
 
     #[test]

@@ -28,46 +28,57 @@ struct EmbedData {
     embedding: Vec<f32>,
 }
 
-/// OpenAI-backed embedding provider.
+/// OpenAI-compatible embedding provider.
 ///
-/// Supports configurable OpenAI embedding models.
-/// Requires a valid API key — validated on construction, not at embed time.
+/// Supports any OpenAI-compatible embeddings API (OpenAI, Google Gemini, etc.)
+/// via configurable base URL. Requires a valid API key — validated on construction,
+/// not at embed time.
 pub struct OpenAIEmbeddingProvider {
     client: reqwest::Client,
     api_key: String,
     model: String,
     dim: usize,
+    base_url: String,
 }
 
 impl OpenAIEmbeddingProvider {
     /// Create a new OpenAIEmbeddingProvider.
     ///
     /// # Arguments
-    /// * `api_key` - OpenAI API key (must be non-empty)
-    /// * `model` - OpenAI model name; defaults to "text-embedding-3-small" if None
+    /// * `api_key` - API key (must be non-empty)
+    /// * `model` - Model name; defaults to "text-embedding-3-small" if None
     /// * `dimension` - Override vector dimension; auto-detected from model if None
+    /// * `base_url` - API base URL; defaults to "https://api.openai.com/v1" if None.
+    ///   For Google Gemini: "https://generativelanguage.googleapis.com/v1beta/openai"
     ///
     /// # Errors
     /// Returns `EmbeddingError::NotConfigured` if api_key is empty.
     /// Returns `EmbeddingError::ModelInit` if model is unknown and no dimension override provided.
-    pub fn new(api_key: String, model: Option<String>, dimension: Option<usize>) -> Result<Self, EmbeddingError> {
+    pub fn new(
+        api_key: String,
+        model: Option<String>,
+        dimension: Option<usize>,
+        base_url: Option<String>,
+    ) -> Result<Self, EmbeddingError> {
         if api_key.trim().is_empty() {
             return Err(EmbeddingError::NotConfigured(
-                "OpenAI API key is required when using the openai embedding provider. \
+                "API key is required when using the openai embedding provider. \
                  Set MEMCP_EMBEDDING__OPENAI_API_KEY or openai_api_key in memcp.toml"
                     .to_string(),
             ));
         }
 
         let model_name = model.unwrap_or_else(|| "text-embedding-3-small".to_string());
+        let base_url = base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
         // Resolve dimension: explicit override > registry lookup > error for unknown models
         let dim = match dimension {
             Some(d) => d,
             None => model_dimension(&model_name).ok_or_else(|| {
                 EmbeddingError::ModelInit(format!(
-                    "Unknown OpenAI model '{}'. Provide 'embedding.dimension' in config to override, \
-                     or use a known model: text-embedding-3-small, text-embedding-3-large, text-embedding-ada-002",
+                    "Unknown model '{}'. Provide 'embedding.dimension' in config to override, \
+                     or use a known model: text-embedding-3-small, text-embedding-3-large, \
+                     text-embedding-ada-002, gemini-embedding-001",
                     model_name
                 ))
             })?,
@@ -78,6 +89,7 @@ impl OpenAIEmbeddingProvider {
             api_key,
             model: model_name,
             dim,
+            base_url,
         })
     }
 }
@@ -92,7 +104,7 @@ impl EmbeddingProvider for OpenAIEmbeddingProvider {
 
         let response = self
             .client
-            .post("https://api.openai.com/v1/embeddings")
+            .post(format!("{}/embeddings", self.base_url))
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&request)
             .send()
