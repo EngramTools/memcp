@@ -1675,7 +1675,50 @@ pub async fn cmd_curation_run(
 pub async fn cmd_curation_log(
     store: &Arc<PostgresMemoryStore>,
     limit: i64,
+    run_id: Option<String>,
 ) -> Result<()> {
+    // If a specific run_id is provided, show detailed actions for that run
+    if let Some(ref rid) = run_id {
+        let actions = store
+            .get_curation_actions(rid)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to fetch curation actions: {}", e))?;
+
+        if actions.is_empty() {
+            let output = serde_json::json!({
+                "run_id": rid,
+                "actions": [],
+                "message": "No actions found for this run",
+            });
+            println!("{}", serde_json::to_string(&output)?);
+            return Ok(());
+        }
+
+        let action_json: Vec<serde_json::Value> = actions
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "id": a.id,
+                    "action_type": a.action_type,
+                    "target_memory_ids": a.target_memory_ids,
+                    "merged_memory_id": a.merged_memory_id,
+                    "original_salience": a.original_salience,
+                    "details": a.details,
+                    "created_at": a.created_at,
+                })
+            })
+            .collect();
+
+        let output = serde_json::json!({
+            "run_id": rid,
+            "actions": action_json,
+            "count": actions.len(),
+        });
+        println!("{}", serde_json::to_string(&output)?);
+        return Ok(());
+    }
+
+    // Default: show recent runs
     let runs = store
         .get_curation_runs(limit as usize)
         .await

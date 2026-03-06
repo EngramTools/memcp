@@ -597,6 +597,9 @@ enum CurationAction {
         /// Number of recent runs to show (default: 10)
         #[arg(long, default_value = "10")]
         limit: i64,
+        /// Show detailed actions for a specific run ID
+        #[arg(long)]
+        run_id: Option<String>,
     },
     /// Undo a curation run (restore merged originals, remove tags, revert stability)
     Undo {
@@ -980,8 +983,8 @@ async fn main() -> Result<()> {
                 CurationAction::Run { propose } => {
                     cli::cmd_curation_run(&store, &config, propose).await?;
                 }
-                CurationAction::Log { limit } => {
-                    cli::cmd_curation_log(&store, limit).await?;
+                CurationAction::Log { limit, run_id } => {
+                    cli::cmd_curation_log(&store, limit, run_id).await?;
                 }
                 CurationAction::Undo { run_id } => {
                     cli::cmd_curation_undo(&store, &run_id).await?;
