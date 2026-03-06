@@ -24,6 +24,7 @@ pub async fn run_curation(
     store: &Arc<PostgresMemoryStore>,
     config: &CurationConfig,
     llm_provider: Option<&dyn CurationProvider>,
+    dry_run: bool,
 ) -> Result<CurationResult, CurationError> {
     // 1. Determine window
     let window_start = store
@@ -43,6 +44,11 @@ pub async fn run_curation(
         return Ok(CurationResult::skipped("No candidates in window"));
     }
 
+    if dry_run {
+        // Dry-run: no run record, no side effects
+        return execute_curation(store, config, llm_provider, &candidates, "dry-run", true).await;
+    }
+
     // 3. Create run record
     let run_id = store
         .create_curation_run("auto", window_start, window_end)
@@ -50,7 +56,7 @@ pub async fn run_curation(
         .map_err(|e| CurationError::Storage(e.to_string()))?;
 
     // Execute with error handling — on failure, mark run as failed
-    match execute_curation(store, config, llm_provider, &candidates, &run_id).await {
+    match execute_curation(store, config, llm_provider, &candidates, &run_id, false).await {
         Ok(result) => Ok(result),
         Err(e) => {
             let _ = store.fail_curation_run(&run_id, &e.to_string()).await;
@@ -66,6 +72,7 @@ async fn execute_curation(
     llm_provider: Option<&dyn CurationProvider>,
     candidates: &[(Memory, SalienceRow)],
     run_id: &str,
+    dry_run: bool,
 ) -> Result<CurationResult, CurationError> {
     // 4. Build clusters via embedding similarity
     let clusters = build_clusters(store, candidates, config).await?;
@@ -82,6 +89,7 @@ async fn execute_curation(
     let mut flagged_count = 0usize;
     let mut strengthened_count = 0usize;
     let mut skipped_count = 0usize;
+    let mut proposed_actions: Vec<CurationAction> = Vec::new();
 
     for cluster in &clusters {
         let actions = provider
@@ -110,7 +118,7 @@ async fn execute_curation(
                     }
 
                     // If content is empty (LLM review said merge but didn't synthesize),
-                    // ask provider to synthesize
+                    // ask provider to synthesize (read-only LLM call, safe for dry_run)
                     if synthesized_content.is_empty() {
                         let sources: Vec<_> = cluster
                             .iter()
@@ -130,6 +138,15 @@ async fn execute_curation(
                                         .join("\n\n---\n\n")
                                 });
                         }
+                    }
+
+                    if dry_run {
+                        proposed_actions.push(CurationAction::Merge {
+                            source_ids,
+                            synthesized_content,
+                        });
+                        merged_count += 1;
+                        continue;
                     }
 
                     // Collect union of tags and highest stability
@@ -204,6 +221,12 @@ async fn execute_curation(
                         continue;
                     }
 
+                    if dry_run {
+                        proposed_actions.push(CurationAction::FlagStale { memory_id, reason });
+                        flagged_count += 1;
+                        continue;
+                    }
+
                     // Get current stability for undo tracking
                     let original_stability = cluster
                         .iter()
@@ -237,6 +260,12 @@ async fn execute_curation(
                 CurationAction::Strengthen { memory_id, reason } => {
                     if strengthened_count >= config.max_strengthens_per_run {
                         tracing::debug!("Strengthen cap reached, skipping");
+                        continue;
+                    }
+
+                    if dry_run {
+                        proposed_actions.push(CurationAction::Strengthen { memory_id, reason });
+                        strengthened_count += 1;
                         continue;
                     }
 
@@ -277,17 +306,19 @@ async fn execute_curation(
         }
     }
 
-    // 7. Complete run
-    store
-        .complete_curation_run(
-            run_id,
-            merged_count as i32,
-            flagged_count as i32,
-            strengthened_count as i32,
-            skipped_count as i32,
-        )
-        .await
-        .map_err(|e| CurationError::Storage(e.to_string()))?;
+    // 7. Complete run (skip in dry_run — no run record was created)
+    if !dry_run {
+        store
+            .complete_curation_run(
+                run_id,
+                merged_count as i32,
+                flagged_count as i32,
+                strengthened_count as i32,
+                skipped_count as i32,
+            )
+            .await
+            .map_err(|e| CurationError::Storage(e.to_string()))?;
+    }
 
     Ok(CurationResult {
         run_id: run_id.to_string(),
@@ -298,6 +329,7 @@ async fn execute_curation(
         candidates_processed: candidates.len(),
         clusters_found: clusters.len(),
         skipped_reason: None,
+        proposed_actions,
     })
 }
 

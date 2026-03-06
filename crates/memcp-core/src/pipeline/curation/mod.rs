@@ -85,6 +85,9 @@ pub struct CurationResult {
     pub candidates_processed: usize,
     pub clusters_found: usize,
     pub skipped_reason: Option<String>,
+    /// Populated only in dry_run mode — the actions that would be taken.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub proposed_actions: Vec<CurationAction>,
 }
 
 impl CurationResult {
@@ -99,6 +102,7 @@ impl CurationResult {
             candidates_processed: 0,
             clusters_found: 0,
             skipped_reason: Some(reason.into()),
+            proposed_actions: Vec::new(),
         }
     }
 }

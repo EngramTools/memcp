@@ -103,7 +103,7 @@ Plans:
 - **Status**: DONE (4/4 plans done)
 - **Depends on**: Phase 06.6
 - **Requirements:** [MOD-01, MOD-02, MOD-03, MOD-04, MOD-05, MOD-06]
-- **Plans:** 4/4 plans complete
+- **Plans:** 5 plans (4 complete + 1 gap closure)
 
 Requirements:
 - MOD-01: `fastembed` is optional behind `local-embed` Cargo feature (default on). `--no-default-features` builds without it.
@@ -137,7 +137,7 @@ Plans:
 - **Goal**: Separate test database from the main development/production database so tests and dev usage don't interfere with each other
 - **Status**: DONE (4/4 plans done)
 - **Depends on**: Phase 07.1
-- **Plans:** 4/4 plans complete
+- **Plans:** 5 plans (4 complete + 1 gap closure)
 
 Plans:
 - [x] 07.2-01-PLAN.md — Test DB isolation via `#[sqlx::test]`: from_pool constructor, per-test ephemeral databases, parallel-safe tests
@@ -342,17 +342,18 @@ Plans:
 - **Status**: DONE
 - **Depends on**: Phase 08.3
 - **Origin**: Deferred from Phase 06.1 (Search Enrichment)
-- **Plans:** 3/4 plans executed
+- **Plans:** 5 plans (4 complete + 1 gap closure)
 
 Plans:
 - [x] 08.6-01-PLAN.md — Curation foundation: migration, CurationConfig, CurationProvider trait, AlgorithmicCurator [Wave 1] — commit 18343bb
+- [ ] 08.6-05-PLAN.md — Gap closure: true dry-run mode for --propose flag [Wave 1]
 
 ## Phase 08.7: Multi-Model Embeddings
 - **Goal**: Run multiple embedding models simultaneously — fast local model for bulk ingestion, quality API model for important memories. Tiered embedding strategy with automatic model selection based on memory importance/type. Extends Phase 07 single-model modularity to concurrent multi-model.
 - **Status**: DONE
 - **Depends on**: Phase 08.3
 - **Origin**: Deferred from Phase 04 (Embeddings)
-- **Plans:** 4/4 plans complete
+- **Plans:** 5 plans (4 complete + 1 gap closure)
 
 Plans:
 - [x] 08.7-01-PLAN.md — Config structs (EmbeddingTierConfig, RoutingConfig, PromotionConfig) + migration 017 (tier column) + EmbeddingRouter + store methods [Wave 1]

@@ -1688,7 +1688,7 @@ pub async fn cmd_curation_run(
     }
 
     let provider_ref = provider.as_deref();
-    let result = curation::worker::run_curation(store, &curation_config, provider_ref)
+    let result = curation::worker::run_curation(store, &curation_config, provider_ref, propose)
         .await
         .map_err(|e| anyhow::anyhow!("Curation failed: {}", e))?;
 

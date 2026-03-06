@@ -380,7 +380,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             loop {
                 interval.tick().await;
                 let provider_ref = curation_provider.as_deref();
-                match curation::worker::run_curation(&curation_store, &curation_config, provider_ref).await {
+                match curation::worker::run_curation(&curation_store, &curation_config, provider_ref, false).await {
                     Ok(result) => {
                         if let Some(reason) = &result.skipped_reason {
                             tracing::debug!(reason = %reason, "Curation pass skipped");
