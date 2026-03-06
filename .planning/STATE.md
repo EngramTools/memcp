@@ -3,25 +3,26 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 08.4-03-PLAN.md
-last_updated: "2026-03-06T04:17:50.508Z"
+stopped_at: Completed 08.6-01-PLAN.md
+last_updated: "2026-03-06T04:28:00.000Z"
 progress:
   total_phases: 50
   completed_phases: 23
   total_plans: 102
-  completed_plans: 69
-  percent: 64
+  completed_plans: 70
+  percent: 69
 ---
 
 # Project State
 
 ## Current Phase
-Phase 09-documentation-qa-playbook — Ready to discuss
+Phase 08.6-ai-brain-curation — Plan 01 complete, Plans 02-04 remaining
 
-Progress: [███████░░░] 69/102 plans (68%)
+Progress: [███████░░░] 70/102 plans (69%)
 
 ## Active Context
-- Last completed: Phase 08.4 Memory chunking complete (all 3 plans) (2026-03-06)
+- Last completed: Phase 08.6 Plan 01 — Curation foundation (migration, config, trait, algorithmic curator) (2026-03-06)
+- Phase 08.4 complete: Schema, splitter, pipeline integration all verified
 - Phase 08.4 complete: Schema, splitter, pipeline integration all verified
 - Phase 14.7 complete: PostgresMemoryStore schema isolation + benchmark schema lifecycle
 - Phase 14.6 complete: LoCoMo foundation (Plan 01) + runner/CLI/CI (Plan 02)
@@ -35,8 +36,8 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 **Current focus:** Phase 09 — Documentation & QA Playbook
 
 ## Session Continuity
-Last session: 2026-03-06T04:17:50.503Z
-Stopped at: Completed 08.4-03-PLAN.md
+Last session: 2026-03-06T04:28:00.000Z
+Stopped at: Completed 08.6-01-PLAN.md
 Resume file: None
 
 ## Accumulated Context

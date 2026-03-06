@@ -342,6 +342,10 @@ Plans:
 - **Status**: DONE
 - **Depends on**: Phase 08.3
 - **Origin**: Deferred from Phase 06.1 (Search Enrichment)
+- **Plans:** 1/4 plans documented
+
+Plans:
+- [x] 08.6-01-PLAN.md — Curation foundation: migration, CurationConfig, CurationProvider trait, AlgorithmicCurator [Wave 1] — commit 18343bb
 
 ## Phase 08.7: Multi-Model Embeddings
 - **Goal**: Run multiple embedding models simultaneously — fast local model for bulk ingestion, quality API model for important memories. Tiered embedding strategy with automatic model selection based on memory importance/type. Extends Phase 07 single-model modularity to concurrent multi-model.
