@@ -342,7 +342,7 @@ Plans:
 - **Status**: DONE
 - **Depends on**: Phase 08.3
 - **Origin**: Deferred from Phase 06.1 (Search Enrichment)
-- **Plans:** 5 plans (4 complete + 1 gap closure)
+- **Plans:** 5/5 plans complete
 
 Plans:
 - [x] 08.6-01-PLAN.md — Curation foundation: migration, CurationConfig, CurationProvider trait, AlgorithmicCurator [Wave 1] — commit 18343bb
