@@ -1255,6 +1255,23 @@ pub async fn build_status(
         None
     };
 
+    // Curation stats
+    let curation_stats = if config.curation.enabled {
+        let runs = store.get_curation_runs(1).await.unwrap_or_default();
+        let last_run = runs.first();
+        json!({
+            "enabled": true,
+            "last_run": last_run.map(|r| r.completed_at.unwrap_or(r.started_at).to_rfc3339()),
+            "last_run_status": last_run.map(|r| r.status.clone()),
+            "last_merged": last_run.map(|r| r.merged_count).unwrap_or(0),
+            "last_flagged": last_run.map(|r| r.flagged_stale_count).unwrap_or(0),
+            "last_strengthened": last_run.map(|r| r.strengthened_count).unwrap_or(0),
+            "interval_secs": config.curation.interval_secs,
+        })
+    } else {
+        json!({"enabled": false})
+    };
+
     // Build full JSON output
     let mut output = json!({
         "daemon": daemon_info,
@@ -1273,6 +1290,7 @@ pub async fn build_status(
             "format": config.status_line.format,
         },
         "gc": gc_info,
+        "curation": curation_stats,
     });
     if let Some(checks) = checks {
         output.as_object_mut().unwrap().insert("checks".to_string(), checks);
@@ -1330,6 +1348,34 @@ pub async fn cmd_status(
                 })
                 .collect();
             println!("  {}", check_line.join("  "));
+        }
+
+        // Curation stats in pretty mode
+        if let Some(curation) = output.get("curation") {
+            let enabled = curation.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+            if !enabled {
+                println!("  Curation: disabled");
+            } else if let Some(last_run) = curation.get("last_run").and_then(|v| v.as_str()) {
+                let status = curation.get("last_run_status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let merged = curation.get("last_merged").and_then(|v| v.as_i64()).unwrap_or(0);
+                let flagged = curation.get("last_flagged").and_then(|v| v.as_i64()).unwrap_or(0);
+                let strengthened = curation.get("last_strengthened").and_then(|v| v.as_i64()).unwrap_or(0);
+                let interval = curation.get("interval_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+                let interval_str = if interval >= 86400 {
+                    format!("every {}d", interval / 86400)
+                } else if interval >= 3600 {
+                    format!("every {}h", interval / 3600)
+                } else {
+                    format!("every {}s", interval)
+                };
+                println!("  Curation: last run {} ({}) | {} merged, {} flagged, {} strengthened | {}",
+                    last_run, status, merged, flagged, strengthened, interval_str);
+            } else {
+                let interval = curation.get("interval_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+                println!("  Curation: enabled, no runs yet (interval: {}s)", interval);
+            }
         }
     } else {
         // JSON output
