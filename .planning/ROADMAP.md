@@ -320,7 +320,7 @@ Plans:
 - **Status**: DONE (3/3 plans done)
 - **Depends on**: Phase 08.3
 - **Origin**: Deferred from Phase 04 (Embeddings)
-- **Plans:** 2/3 plans executed
+- **Plans:** 3/3 plans complete
 
 Plans:
 - [x] 08.4-01-PLAN.md — Schema migration (parent_id, chunk_index, total_chunks) + ChunkingConfig + store methods [Wave 1] — commit 7a63d4b
