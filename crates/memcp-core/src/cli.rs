@@ -1679,14 +1679,6 @@ pub async fn cmd_curation_run(
         }
     };
 
-    if propose {
-        // Dry-run: run curation but only report what would happen
-        // For now, run the full pipeline and report results
-        // TODO: Add true dry-run mode that doesn't execute actions
-        eprintln!("note: --propose mode runs the full pipeline and reports results");
-        eprintln!("      (true dry-run without side effects planned for future release)");
-    }
-
     let provider_ref = provider.as_deref();
     let result = curation::worker::run_curation(store, &curation_config, provider_ref, propose)
         .await
@@ -1698,6 +1690,30 @@ pub async fn cmd_curation_run(
             "reason": reason,
         });
         println!("{}", serde_json::to_string(&output)?);
+    } else if propose && !result.proposed_actions.is_empty() {
+        let output = serde_json::json!({
+            "status": "proposed",
+            "candidates_processed": result.candidates_processed,
+            "clusters_found": result.clusters_found,
+            "proposed_merges": result.merged_count,
+            "proposed_stale_flags": result.flagged_stale_count,
+            "proposed_strengthens": result.strengthened_count,
+            "proposed_skips": result.skipped_count,
+            "actions": result.proposed_actions,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else if propose {
+        let output = serde_json::json!({
+            "status": "proposed",
+            "candidates_processed": result.candidates_processed,
+            "clusters_found": result.clusters_found,
+            "proposed_merges": 0,
+            "proposed_stale_flags": 0,
+            "proposed_strengthens": 0,
+            "proposed_skips": 0,
+            "actions": [],
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         let output = serde_json::json!({
             "status": "ok",
