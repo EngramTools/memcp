@@ -537,7 +537,7 @@ Requirements:
 - DISC-03: memcp discover CLI subcommand and POST /v1/discover HTTP API
 
 Plans:
-- [ ] 14-01-PLAN.md — UUID hallucination prevention (integer ref mapping) [Wave 1]
+- [x] 14-01-PLAN.md — UUID hallucination prevention (integer ref mapping) [Wave 1]
 - [ ] 14-02-PLAN.md — Type-specific retention via FSRS stability [Wave 1]
 - [ ] 14-03-PLAN.md — Multi-query retrieval (decomposition + RRF fusion) [Wave 2]
 - [ ] 14-04-PLAN.md — Retroactive neighbor enrichment (daemon worker) [Wave 2]

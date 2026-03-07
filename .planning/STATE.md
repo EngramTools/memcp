@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 08.6-05-PLAN.md
-last_updated: "2026-03-06T04:53:22.682Z"
+stopped_at: "Completed 14-01-PLAN.md (UUID Hallucination Prevention)"
+last_updated: "2026-03-07T06:02:53Z"
 progress:
   total_phases: 50
   completed_phases: 24
@@ -16,17 +16,16 @@ progress:
 # Project State
 
 ## Current Phase
-Phase 08.6-ai-brain-curation — All 5 plans complete
+Phase 14-memory-boosting — In progress (14-01 complete)
 
 Progress: [███████░░░] 75/103 plans (73%)
 
 ## Active Context
-- Last completed: Phase 08.6 Plan 05 — Curation dry-run (--propose) gap closure (2026-03-06)
-- Phase 08.6 complete: All 5 plans delivered (schema + LLM providers + worker + CLI + dry-run)
-- Phase 08.4 complete: Schema, splitter, pipeline integration all verified
+- Last completed: Phase 14-01 — UUID Hallucination Prevention (session-scoped integer refs for memory IDs)
+- Phase 08.6: curation schema, algorithmic+LLM providers, worker, CLI, dry-run --propose (2026-03-06)
+- Phase 08.6: curation schema, algorithmic+LLM providers, worker, CLI, dry-run --propose
 - Phase 08.4 complete: Schema, splitter, pipeline integration all verified
 - Phase 14.7 complete: PostgresMemoryStore schema isolation + benchmark schema lifecycle
-- Phase 14.6 complete: LoCoMo foundation (Plan 01) + runner/CLI/CI (Plan 02)
 - Bi-temporal search story complete: schema+extraction (08.8) + retrieval ranking (08.11.1)
 
 ## Project Reference
@@ -34,14 +33,21 @@ Progress: [███████░░░] 75/103 plans (73%)
 See: .planning/PROJECT.md (updated 2026-03-02)
 
 **Core value:** Persistent memory for AI agents via MCP + CLI
-**Current focus:** Phase 09 — Documentation & QA Playbook
+**Current focus:** Phase 08.7 — memcp-extensions
 
 ## Session Continuity
-Last session: 2026-03-06T04:53:22.667Z
-Stopped at: Completed 08.6-05-PLAN.md
-Resume file: None
+Last session: 2026-03-07T06:02:53Z
+Stopped at: Completed 14-01-PLAN.md (UUID Hallucination Prevention)
+Resume file: .planning/phases/14-memory-boosting/14-CONTEXT.md
 
 ## Accumulated Context
+
+### Phase 14-01 Decisions
+- Phase 14-01: UuidRefMap is session-scoped (one per MemoryService/MCP connection) — refs reset between sessions, no cleanup needed
+- Phase 14-01: refs start at 1 not 0 — more natural for agents reading numbered lists
+- Phase 14-01: recall_memory memories use memory_id (not id) — ref injected explicitly alongside memory_id field
+- Phase 14-01: inject_ref called before field projection in search_memory — ref always present regardless of fields param
+- Phase 14-01: unknown integer refs fall through as-is — store returns "not found" naturally without extra error handling
 
 ### Phase 14.7-01 Decisions
 - Phase 14.7-01: Schema created via one-off PgConnection before pool to avoid chicken-and-egg; pool uses after_connect hook for all connections
