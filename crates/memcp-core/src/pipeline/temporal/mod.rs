@@ -10,6 +10,7 @@
 use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Datelike, TimeZone, Utc, Weekday};
+use metrics;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -532,6 +533,7 @@ pub async fn run_temporal_worker(
                                 precision = %precision.as_str(),
                                 "Temporal LLM worker: updated event_time"
                             );
+                            metrics::counter!("memcp_temporal_extractions_total").increment(1);
                         }
                     }
                 }

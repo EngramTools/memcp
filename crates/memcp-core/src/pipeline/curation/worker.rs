@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::Utc;
+use metrics;
 
 use super::algorithmic::AlgorithmicCurator;
 use super::{ClusterMember, CurationAction, CurationError, CurationProvider, CurationResult};
@@ -318,6 +319,10 @@ async fn execute_curation(
             )
             .await
             .map_err(|e| CurationError::Storage(e.to_string()))?;
+
+        metrics::counter!("memcp_curation_runs_total").increment(1);
+        metrics::counter!("memcp_curation_merged_total").increment(merged_count as u64);
+        metrics::counter!("memcp_curation_flagged_total").increment(flagged_count as u64);
     }
 
     Ok(CurationResult {

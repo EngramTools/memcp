@@ -7,6 +7,7 @@
 use std::sync::atomic::Ordering;
 
 use axum::{extract::State, http::StatusCode, Json};
+use metrics;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -111,6 +112,7 @@ pub async fn discover_handler(
     }).collect();
 
     let count = discoveries.len();
+    metrics::histogram!("memcp_discover_results_returned").record(count as f64);
     let output = json!({
         "discoveries": discoveries,
         "query": params.query,

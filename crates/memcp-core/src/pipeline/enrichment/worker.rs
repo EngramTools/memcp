@@ -7,6 +7,8 @@
 
 use std::sync::Arc;
 
+use metrics;
+
 use super::{EnrichmentProvider, EnrichmentError};
 use crate::config::EnrichmentConfig;
 use crate::consolidation::similarity::find_similar_memories;
@@ -162,6 +164,11 @@ async fn run_enrichment_sweep(
         }
 
         enriched_count += 1;
+    }
+
+    metrics::counter!("memcp_enrichment_sweeps_total").increment(1);
+    if enriched_count > 0 {
+        metrics::counter!("memcp_enrichment_memories_total").increment(enriched_count as u64);
     }
 
     Ok(enriched_count)

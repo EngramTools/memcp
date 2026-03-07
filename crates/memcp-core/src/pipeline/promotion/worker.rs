@@ -7,6 +7,8 @@
 use std::sync::Arc;
 use uuid::Uuid;
 
+use metrics;
+
 use super::PromotionResult;
 use crate::config::PromotionConfig;
 use crate::embedding::{EmbeddingProvider, build_embedding_text};
@@ -115,6 +117,11 @@ pub async fn run_promotion_sweep(
                 failed_count += 1;
             }
         }
+    }
+
+    metrics::counter!("memcp_promotion_sweeps_total").increment(1);
+    if promoted_count > 0 {
+        metrics::counter!("memcp_promotion_promoted_total").increment(promoted_count as u64);
     }
 
     Ok(PromotionResult {
