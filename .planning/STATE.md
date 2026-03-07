@@ -3,24 +3,25 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: "Completed 14-01-PLAN.md (UUID Hallucination Prevention)"
-last_updated: "2026-03-07T06:02:53Z"
+stopped_at: "Completed 14-02-PLAN.md (Type-Specific Retention Periods)"
+last_updated: "2026-03-07T06:07:00Z"
 progress:
   total_phases: 50
   completed_phases: 24
   total_plans: 103
-  completed_plans: 75
-  percent: 73
+  completed_plans: 76
+  percent: 74
 ---
 
 # Project State
 
 ## Current Phase
-Phase 14-memory-boosting — In progress (14-01 complete)
+Phase 14-memory-boosting — In progress (14-02 complete)
 
-Progress: [███████░░░] 75/103 plans (73%)
+Progress: [███████░░░] 76/103 plans (74%)
 
 ## Active Context
+- Last completed: Phase 14-02 — Type-Specific Retention Periods (RetentionConfig + stability at store time)
 - Last completed: Phase 14-01 — UUID Hallucination Prevention (session-scoped integer refs for memory IDs)
 - Phase 08.6: curation schema, algorithmic+LLM providers, worker, CLI, dry-run --propose (2026-03-06)
 - Phase 08.6: curation schema, algorithmic+LLM providers, worker, CLI, dry-run --propose
@@ -36,11 +37,19 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 **Current focus:** Phase 08.7 — memcp-extensions
 
 ## Session Continuity
-Last session: 2026-03-07T06:02:53Z
-Stopped at: Completed 14-01-PLAN.md (UUID Hallucination Prevention)
+Last session: 2026-03-07T06:07:00Z
+Stopped at: Completed 14-02-PLAN.md (Type-Specific Retention Periods)
 Resume file: .planning/phases/14-memory-boosting/14-CONTEXT.md
 
 ## Accumulated Context
+
+### Phase 14-02 Decisions
+- Phase 14-02: RetentionConfig.type_stability defaults: decision=5.0, preference=5.0, instruction=3.5, fact=2.5, observation=1.0, summary=2.0, default=2.5
+- Phase 14-02: stability only written when abs(stability - 2.5) > 0.01 — avoids unnecessary DB writes for fact/untyped (default tier)
+- Phase 14-02: retention_config: Option<RetentionConfig> in PostgresMemoryStore — None = no type-specific behavior (matches CLI path)
+- Phase 14-02: set_retention_config() called before Arc wrapping in both serve (main.rs) and daemon (daemon.rs) paths
+- Phase 14-02: fail-open — stability write errors logged but don't fail store operation
+- Phase 14-02: get_salience_data always returns SalienceRow::default() (stability=1.0) for IDs with no DB row — test assertions must check stability value, not map presence
 
 ### Phase 14-01 Decisions
 - Phase 14-01: UuidRefMap is session-scoped (one per MemoryService/MCP connection) — refs reset between sessions, no cleanup needed
