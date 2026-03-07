@@ -50,7 +50,7 @@
 - **Status**: DONE
 - **Depends on**: Phase 06.3
 - **Requirements:** [PROV-01, PROV-02, EXCL-01, EXCL-02, EXCL-03, EXCL-04, EXCL-05, EXCL-06]
-- **Plans:** 3 plans
+- **Plans:** 5 plans
 
 Plans:
 - [x] 06.4-01-PLAN.md — Schema migration + provenance plumbing through structs, SQL, and MCP tools
@@ -62,7 +62,7 @@ Plans:
 - **Status**: DONE
 - **Depends on**: Phase 06.4
 - **Requirements:** [CLI-01, CLI-02, CLI-03, CLI-04, CLI-05, CLI-06, CLI-07, CLI-08, CLI-09]
-- **Plans:** 3 plans
+- **Plans:** 5 plans
 
 Requirements:
 - CLI-01: `memcp store` — write memory to DB with `embedding_status='pending'`, exit immediately
@@ -467,7 +467,7 @@ Plans:
 - **Status**: Planning complete
 - **Depends on**: Phase 09
 - **Requirements:** [PH-01, PH-02, PH-03, PH-04, PH-05, PH-06, PH-07]
-- **Plans:** 3 plans
+- **Plans:** 5 plans
 - **Note (quantum-safe encryption)**: TLS 1.3 with post-quantum key exchange (ML-KEM/Kyber) for DB connections. AES-256 at-rest via pgcrypto is already quantum-resistant. Consider optional column-level encryption for sensitive memory content. DEFERRED.
 
 Requirements:
@@ -483,6 +483,8 @@ Plans:
 - [ ] 10-01-PLAN.md — Prometheus infrastructure: dependencies, config structs, recorder install, /metrics endpoint, pool config wiring, pool poller [Wave 1]
 - [ ] 10-02-PLAN.md — Rate limiting + metrics middleware on /v1/* routes + enriched /status [Wave 2, depends on 01]
 - [ ] 10-03-PLAN.md — Structured logging (request spans, Redacted) + worker/handler metric instrumentation [Wave 2, depends on 01]
+- [ ] 10-04-PLAN.md — Gap closure: rate limits + metrics for Phase 14 endpoints (discover, export, delete) + worker instrumentation (enrichment, promotion, curation, temporal) [Wave 2, depends on 01]
+- [ ] 10-05-PLAN.md — Integration tests for metrics endpoint, rate limiting, and middleware [Wave 3, depends on 01+02+03+04]
 
 ## Phase 10.1: Stress & Load Testing
 - **Goal**: Load test all core operations under simulated multi-tenant conditions. Establish capacity numbers and known breaking points.
