@@ -49,8 +49,10 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             match PostgresMemoryStore::new(&config.database_url, run_migrations).await {
-                Ok(s) => {
+                Ok(mut s) => {
                     tracing::info!(database_url = %config.database_url, "PostgreSQL store initialized");
+                    // Apply type-specific FSRS stability config before wrapping in Arc
+                    s.set_retention_config(config.retention.clone());
                     break Arc::new(s);
                 }
                 Err(e) if tokio::time::Instant::now() < deadline => {

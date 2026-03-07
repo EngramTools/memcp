@@ -120,6 +120,9 @@ pub struct PostgresMemoryStore {
     /// When set, all pool connections use SET search_path TO {schema}, public.
     /// When None, uses the default public schema.
     schema: Option<String>,
+    /// Retention configuration: type-specific initial FSRS stability.
+    /// When set, store() applies type-appropriate initial stability after INSERT.
+    retention_config: Option<crate::config::RetentionConfig>,
 }
 
 impl PostgresMemoryStore {
@@ -247,6 +250,7 @@ impl PostgresMemoryStore {
             embedding_dimension: None,
             idempotency_config: IdempotencyConfig::default(),
             schema: schema_owned,
+            retention_config: None,
         })
     }
 
@@ -289,6 +293,7 @@ impl PostgresMemoryStore {
             embedding_dimension: None,
             idempotency_config: IdempotencyConfig::default(),
             schema: None,
+            retention_config: None,
         })
     }
 
@@ -310,6 +315,7 @@ impl PostgresMemoryStore {
             embedding_dimension: None,
             idempotency_config,
             schema: None,
+            retention_config: None,
         })
     }
 
@@ -318,6 +324,14 @@ impl PostgresMemoryStore {
     /// Typically called after loading the full Config, before the store handles requests.
     pub fn set_idempotency_config(&mut self, config: IdempotencyConfig) {
         self.idempotency_config = config;
+    }
+
+    /// Update the retention configuration after construction.
+    ///
+    /// When set, store() applies type-specific initial FSRS stability based on type_hint.
+    /// Typically called from main.rs or daemon after loading the full Config.
+    pub fn set_retention_config(&mut self, config: crate::config::RetentionConfig) {
+        self.retention_config = Some(config);
     }
 
     /// Truncate all benchmark-relevant tables: memories, memory_embeddings, memory_salience, memory_consolidations.
@@ -716,6 +730,32 @@ impl MemoryStore for PostgresMemoryStore {
                     error = %e,
                     "store: failed to register idempotency key (memory was still stored)"
                 );
+            }
+        }
+
+        // --- Step 5: Apply type-specific initial FSRS stability (if retention config set) ---
+        if let Some(ref retention) = self.retention_config {
+            let type_hint = input.type_hint.as_str();
+            let stability = retention.stability_for_type(type_hint);
+            // Only write if different from default (2.5) to avoid unnecessary DB writes
+            if (stability - 2.5).abs() > 0.01 {
+                if let Err(e) = self.update_memory_stability(&id, stability).await {
+                    // Log but don't fail — memory is stored, salience row may be missing
+                    tracing::warn!(
+                        memory_id = %id,
+                        type_hint = %type_hint,
+                        stability = stability,
+                        error = %e,
+                        "store: failed to set type-specific initial stability (memory was still stored)"
+                    );
+                } else {
+                    tracing::debug!(
+                        memory_id = %id,
+                        type_hint = %type_hint,
+                        stability = stability,
+                        "store: applied type-specific initial FSRS stability"
+                    );
+                }
             }
         }
 

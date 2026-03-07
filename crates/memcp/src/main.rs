@@ -1594,11 +1594,11 @@ async fn main() -> Result<()> {
 
             // 5. Initialize PostgreSQL store
             let run_migrations = !cli.skip_migrate;
-            let store = Arc::new(
-                PostgresMemoryStore::new(&config.database_url, run_migrations)
-                    .await
-                    .expect("Failed to initialize database"),
-            );
+            let mut pg_store_init = PostgresMemoryStore::new(&config.database_url, run_migrations)
+                .await
+                .expect("Failed to initialize database");
+            pg_store_init.set_retention_config(config.retention.clone());
+            let store = Arc::new(pg_store_init);
 
             tracing::info!(database_url = %config.database_url, "PostgreSQL store initialized");
 

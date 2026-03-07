@@ -581,3 +581,88 @@ async fn test_idempotency_key_conflict(pool: PgPool) {
         "Conflicting idempotency_key must return original memory content"
     );
 }
+
+// -----------------------------------------------------------------------
+// Retention config tests: type-specific initial FSRS stability
+// -----------------------------------------------------------------------
+
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_store_decision_stability(pool: PgPool) {
+    let mut store = PostgresMemoryStore::from_pool(pool).await.unwrap();
+    store.set_retention_config(memcp::config::RetentionConfig::default());
+
+    let memory = store
+        .store(MemoryBuilder::new().content("Architecture decision: use PostgreSQL").type_hint("decision").build())
+        .await
+        .unwrap();
+
+    let salience_map = store.get_salience_data(&[memory.id.clone()]).await.unwrap();
+    let salience = salience_map.get(&memory.id).expect("salience row should exist");
+    assert!(
+        (salience.stability - 5.0).abs() < 0.01,
+        "decision type should have stability=5.0, got {}",
+        salience.stability
+    );
+}
+
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_store_observation_stability(pool: PgPool) {
+    let mut store = PostgresMemoryStore::from_pool(pool).await.unwrap();
+    store.set_retention_config(memcp::config::RetentionConfig::default());
+
+    let memory = store
+        .store(MemoryBuilder::new().content("I noticed the sky was clear today").type_hint("observation").build())
+        .await
+        .unwrap();
+
+    let salience_map = store.get_salience_data(&[memory.id.clone()]).await.unwrap();
+    let salience = salience_map.get(&memory.id).expect("salience row should exist");
+    assert!(
+        (salience.stability - 1.0).abs() < 0.01,
+        "observation type should have stability=1.0, got {}",
+        salience.stability
+    );
+}
+
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_store_untyped_stability(pool: PgPool) {
+    // When no retention config is set, store() should not write a salience row.
+    // get_salience_data returns the SalienceRow default (stability=1.0) for missing rows.
+    let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
+
+    let memory = store
+        .store(MemoryBuilder::new().content("Some generic memory").type_hint("fact").build())
+        .await
+        .unwrap();
+
+    // Without retention config, no salience row is written — get_salience_data returns default (1.0)
+    let salience_map = store.get_salience_data(&[memory.id.clone()]).await.unwrap();
+    let salience = salience_map.get(&memory.id).expect("get_salience_data always returns an entry");
+    assert!(
+        (salience.stability - 1.0).abs() < 0.01,
+        "without retention config, stability should be SalienceRow default (1.0), got {}",
+        salience.stability
+    );
+}
+
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_store_fact_stability_no_extra_write(pool: PgPool) {
+    // fact type has stability=2.5 (== default_stability), so no extra DB write should happen.
+    // Without a DB write, get_salience_data returns the SalienceRow default (stability=1.0).
+    let mut store = PostgresMemoryStore::from_pool(pool).await.unwrap();
+    store.set_retention_config(memcp::config::RetentionConfig::default());
+
+    let memory = store
+        .store(MemoryBuilder::new().content("A factual piece of info").type_hint("fact").build())
+        .await
+        .unwrap();
+
+    // fact stability (2.5) == default_stability (2.5), so no DB write — returns SalienceRow default (1.0)
+    let salience_map = store.get_salience_data(&[memory.id.clone()]).await.unwrap();
+    let salience = salience_map.get(&memory.id).expect("get_salience_data always returns an entry");
+    assert!(
+        (salience.stability - 1.0).abs() < 0.01,
+        "fact type (stability==default) should not write salience row — returns default 1.0, got {}",
+        salience.stability
+    );
+}
