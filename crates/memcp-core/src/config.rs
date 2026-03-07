@@ -1675,6 +1675,15 @@ pub struct RateLimitConfig {
     /// Burst multiplier over the base RPS (default: 2)
     #[serde(default = "default_burst_multiplier")]
     pub burst_multiplier: u32,
+    /// Requests per second for discover endpoint (default: 50, compute-heavy)
+    #[serde(default = "default_discover_rps")]
+    pub discover_rps: u32,
+    /// Requests per second for delete endpoint (default: 50)
+    #[serde(default = "default_delete_rps")]
+    pub delete_rps: u32,
+    /// Requests per second for export endpoint (default: 10, bulk read)
+    #[serde(default = "default_export_rps")]
+    pub export_rps: u32,
 }
 
 fn default_rate_limit_enabled() -> bool { true }
@@ -1685,6 +1694,9 @@ fn default_search_rps() -> u32 { 100 }
 fn default_annotate_rps() -> u32 { 50 }
 fn default_update_rps() -> u32 { 50 }
 fn default_burst_multiplier() -> u32 { 2 }
+fn default_discover_rps() -> u32 { 50 }
+fn default_delete_rps() -> u32 { 50 }
+fn default_export_rps() -> u32 { 10 }
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
@@ -1697,6 +1709,9 @@ impl Default for RateLimitConfig {
             annotate_rps: default_annotate_rps(),
             update_rps: default_update_rps(),
             burst_multiplier: default_burst_multiplier(),
+            discover_rps: default_discover_rps(),
+            delete_rps: default_delete_rps(),
+            export_rps: default_export_rps(),
         }
     }
 }
