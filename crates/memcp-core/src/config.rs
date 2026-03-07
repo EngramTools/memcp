@@ -1642,6 +1642,93 @@ impl Default for EnrichmentConfig {
     }
 }
 
+/// Configuration for HTTP API rate limiting.
+///
+/// Per-endpoint rate limits applied by tower_governor middleware.
+/// Disabled by default — opt in via `[rate_limit] enabled = true`.
+/// Nested env var overrides use double underscores:
+///   MEMCP_RATE_LIMIT__ENABLED=true
+///   MEMCP_RATE_LIMIT__GLOBAL_RPS=200
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    /// Whether rate limiting is enabled (default: true)
+    #[serde(default = "default_rate_limit_enabled")]
+    pub enabled: bool,
+    /// Global requests per second across all endpoints (default: 200)
+    #[serde(default = "default_global_rps")]
+    pub global_rps: u32,
+    /// Requests per second for recall endpoint (default: 100)
+    #[serde(default = "default_recall_rps")]
+    pub recall_rps: u32,
+    /// Requests per second for store endpoint (default: 50)
+    #[serde(default = "default_store_rps")]
+    pub store_rps: u32,
+    /// Requests per second for search endpoint (default: 100)
+    #[serde(default = "default_search_rps")]
+    pub search_rps: u32,
+    /// Requests per second for annotate endpoint (default: 50)
+    #[serde(default = "default_annotate_rps")]
+    pub annotate_rps: u32,
+    /// Requests per second for update endpoint (default: 50)
+    #[serde(default = "default_update_rps")]
+    pub update_rps: u32,
+    /// Burst multiplier over the base RPS (default: 2)
+    #[serde(default = "default_burst_multiplier")]
+    pub burst_multiplier: u32,
+}
+
+fn default_rate_limit_enabled() -> bool { true }
+fn default_global_rps() -> u32 { 200 }
+fn default_recall_rps() -> u32 { 100 }
+fn default_store_rps() -> u32 { 50 }
+fn default_search_rps() -> u32 { 100 }
+fn default_annotate_rps() -> u32 { 50 }
+fn default_update_rps() -> u32 { 50 }
+fn default_burst_multiplier() -> u32 { 2 }
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        RateLimitConfig {
+            enabled: default_rate_limit_enabled(),
+            global_rps: default_global_rps(),
+            recall_rps: default_recall_rps(),
+            store_rps: default_store_rps(),
+            search_rps: default_search_rps(),
+            annotate_rps: default_annotate_rps(),
+            update_rps: default_update_rps(),
+            burst_multiplier: default_burst_multiplier(),
+        }
+    }
+}
+
+/// Configuration for observability and metrics collection.
+///
+/// Controls Prometheus metrics exporter and pool polling interval.
+/// Nested env var overrides use double underscores:
+///   MEMCP_OBSERVABILITY__METRICS_ENABLED=false
+///   MEMCP_OBSERVABILITY__POOL_POLL_INTERVAL_SECS=10
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObservabilityConfig {
+    /// Whether Prometheus metrics are enabled (default: true)
+    #[serde(default = "default_metrics_enabled")]
+    pub metrics_enabled: bool,
+    /// How often to poll DB connection pool stats in seconds (default: 10)
+    #[serde(default = "default_pool_poll_interval_secs")]
+    pub pool_poll_interval_secs: u64,
+}
+
+fn default_metrics_enabled() -> bool { true }
+fn default_pool_poll_interval_secs() -> u64 { 10 }
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        ObservabilityConfig {
+            metrics_enabled: default_metrics_enabled(),
+            pool_poll_interval_secs: default_pool_poll_interval_secs(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Log level: trace, debug, info, warn, error
@@ -1789,6 +1876,17 @@ pub struct Config {
     /// Existing configs without [enrichment] section still work (serde default applied).
     #[serde(default)]
     pub enrichment: EnrichmentConfig,
+
+    /// HTTP API rate limiting configuration.
+    /// Controls per-endpoint request rate limits via tower_governor middleware.
+    /// Existing configs without [rate_limit] section still work (serde default applied).
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
+
+    /// Observability configuration (Prometheus metrics + pool polling).
+    /// Existing configs without [observability] section still work (serde default applied).
+    #[serde(default)]
+    pub observability: ObservabilityConfig,
 }
 
 fn default_log_level() -> String {
@@ -1831,6 +1929,8 @@ impl Default for Config {
             import: ImportConfig::default(),
             retention: RetentionConfig::default(),
             enrichment: EnrichmentConfig::default(),
+            rate_limit: RateLimitConfig::default(),
+            observability: ObservabilityConfig::default(),
         }
     }
 }

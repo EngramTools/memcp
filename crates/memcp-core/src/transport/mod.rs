@@ -10,3 +10,4 @@ pub mod health;
 pub mod ipc;
 pub mod daemon;
 pub mod api;
+pub mod metrics;
