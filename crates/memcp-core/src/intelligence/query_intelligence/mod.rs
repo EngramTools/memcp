@@ -122,6 +122,54 @@ pub trait QueryIntelligenceProvider: Send + Sync {
 
     /// Return the model name identifier used by this provider.
     fn model_name(&self) -> &str;
+
+    /// Explain why each discovered memory is an interesting/unexpected connection
+    /// to the original query topic.
+    ///
+    /// Called after `discover_associations()` to generate per-result connection
+    /// explanations. Returns one explanation string per result, in order.
+    ///
+    /// Fail-open: default implementation returns an empty vec (no explanations).
+    /// Providers override this to provide LLM-generated explanations.
+    async fn explain_connections(
+        &self,
+        _query: &str,
+        _results: &[(&str, f64)],  // (content_snippet, similarity)
+    ) -> Result<Vec<String>, QueryIntelligenceError> {
+        Ok(vec![])
+    }
+}
+
+/// Build the discover connection explanation prompt.
+///
+/// Asks the LLM to explain why each discovered memory represents an interesting
+/// or unexpected connection to the query topic.
+pub fn build_explain_connections_prompt(query: &str, numbered_items: &str) -> String {
+    format!(
+        "You are helping an AI agent understand unexpected memory connections.\n\
+         The agent searched for '{query}' and found memories with moderate similarity \
+         (0.3-0.7) — related but not directly about the topic.\n\n\
+         For each memory below, write one short sentence (max 15 words) explaining \
+         why it represents an interesting or unexpected connection to '{query}'.\n\n\
+         Output only valid JSON: {{\"explanations\": [\"reason 1\", \"reason 2\", ...]}}\n\
+         One explanation per memory, in the same order. No commentary.\n\n\
+         Memories:\n{numbered_items}"
+    )
+}
+
+/// JSON schema for connection explanation output.
+pub fn explain_connections_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "explanations": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "One short explanation per discovered memory, in order"
+            }
+        },
+        "required": ["explanations"]
+    })
 }
 
 /// Build the query expansion prompt.

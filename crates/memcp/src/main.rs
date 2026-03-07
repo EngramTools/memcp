@@ -343,6 +343,28 @@ enum Commands {
         #[arg(long)]
         include_state: bool,
     },
+    /// Discover unexpected memory connections via cosine sweet-spot search.
+    /// Finds memories related-but-different (0.3-0.7 similarity) — for creative
+    /// exploration and lateral thinking, not exact retrieval (use search for that).
+    Discover {
+        /// Topic or concept to explore connections for
+        query: String,
+        /// Minimum cosine similarity (default 0.3). Lower = more surprising connections.
+        #[arg(long, default_value = "0.3")]
+        min_similarity: f64,
+        /// Maximum cosine similarity (default 0.7). Higher = more obviously related.
+        #[arg(long, default_value = "0.7")]
+        max_similarity: f64,
+        /// Maximum results to return (default 10)
+        #[arg(short, long, default_value = "10")]
+        limit: u32,
+        /// Project scope filter
+        #[arg(long)]
+        project: Option<String>,
+        /// Output raw JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1582,6 +1604,24 @@ async fn main() -> Result<()> {
 
                 // Report count to stderr (stdout is reserved for data output).
                 eprintln!("Exported {} memories", count);
+            }
+        }
+
+        Commands::Discover { query, min_similarity, max_similarity, limit, project, json } => {
+            if let Some(ref remote_url) = cli.remote {
+                let body = serde_json::json!({
+                    "query": query,
+                    "min_similarity": min_similarity,
+                    "max_similarity": max_similarity,
+                    "limit": limit,
+                    "project": project,
+                });
+                let result = cli::dispatch_remote(remote_url, "discover", body).await?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let store = cli::connect_store(&config, cli.skip_migrate).await?;
+                let project = cli::resolve_project(project, &config);
+                cli::cmd_discover(&store, query, min_similarity, max_similarity, limit, project, json).await?;
             }
         }
 

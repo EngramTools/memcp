@@ -12,6 +12,7 @@ pub mod annotate;
 pub mod update;
 pub mod delete;
 pub mod export;
+pub mod discover;
 
 use axum::{Router, routing::{get, post, delete}};
 use crate::transport::health::AppState;
@@ -27,6 +28,7 @@ use crate::transport::health::AppState;
 ///   DELETE /v1/memories/{id}    — hard delete a memory by ID
 ///   GET    /v1/status           — alias for /status (convenience for plugin callers)
 ///   GET    /v1/export           — export memories (jsonl, csv, markdown)
+///   POST   /v1/discover         — cosine sweet-spot discovery (creative association)
 ///
 /// Phase 12 pattern:
 /// ```rust
@@ -42,4 +44,5 @@ pub fn router() -> Router<AppState> {
         .route("/v1/memories/:id", delete(delete::handle_delete))
         .route("/v1/status", get(crate::transport::health::status_handler))
         .route("/v1/export", get(export::export_handler))
+        .route("/v1/discover", post(discover::discover_handler))
 }

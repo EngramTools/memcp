@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use super::{
     DecomposedQuery, ExpandedQuery, QueryIntelligenceError, QueryIntelligenceProvider,
     RankedCandidate, RankedResult, TimeRange, build_decomposition_prompt, build_expansion_prompt,
-    build_reranking_prompt, decomposition_schema, expansion_schema, reranking_schema,
+    build_explain_connections_prompt, build_reranking_prompt, decomposition_schema,
+    explain_connections_schema, expansion_schema, reranking_schema,
 };
 
 // --- HTTP request/response structs (local — mirrors extraction/ollama.rs pattern) ---
@@ -54,6 +55,13 @@ struct ExpandedQueryOutput {
     #[serde(default)]
     variants: Vec<String>,
     time_range: Option<TimeRangeOutput>,
+}
+
+/// Parsed connection explanation output from LLM
+#[derive(Deserialize)]
+struct ExplainConnectionsOutput {
+    #[serde(default)]
+    explanations: Vec<String>,
 }
 
 /// Parsed query decomposition output from LLM
@@ -315,6 +323,51 @@ impl QueryIntelligenceProvider for OllamaQueryIntelligenceProvider {
             .collect();
 
         Ok(results)
+    }
+
+    async fn explain_connections(
+        &self,
+        query: &str,
+        results: &[(&str, f64)],
+    ) -> Result<Vec<String>, QueryIntelligenceError> {
+        if results.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Build numbered list: "1. [0.47] content snippet"
+        let numbered_items: String = results
+            .iter()
+            .enumerate()
+            .map(|(i, (content, sim))| {
+                let snippet: String = content.chars().take(120).collect();
+                format!("{}. [{:.2}] {}", i + 1, sim, snippet)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let prompt = build_explain_connections_prompt(query, &numbered_items);
+
+        let content = match self.chat(prompt, explain_connections_schema()).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "Ollama explain_connections request failed");
+                return Ok(vec![]);
+            }
+        };
+
+        let output: ExplainConnectionsOutput = match serde_json::from_str(&content) {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    content = %content,
+                    "Failed to parse explain_connections JSON"
+                );
+                return Ok(vec![]);
+            }
+        };
+
+        Ok(output.explanations)
     }
 
     fn model_name(&self) -> &str {

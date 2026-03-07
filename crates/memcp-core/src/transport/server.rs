@@ -415,6 +415,20 @@ pub struct SearchMemoryParams {
     pub project: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DiscoverMemoriesParams {
+    /// Topic or concept to explore connections for
+    pub query: String,
+    /// Minimum cosine similarity (default 0.3). Lower = more surprising connections.
+    pub min_similarity: Option<f64>,
+    /// Maximum cosine similarity (default 0.7). Higher = more obviously related.
+    pub max_similarity: Option<f64>,
+    /// Maximum number of results (default 10)
+    pub limit: Option<u32>,
+    /// Project scope filter
+    pub project: Option<String>,
+}
+
 // Helper: convert MemcpError to CallToolResult with isError: true
 fn store_error_to_result(err: MemcpError) -> CallToolResult {
     match err {
@@ -2023,6 +2037,132 @@ Example: {\"id\": \"abc\", \"tags\": [\"decision\"], \"salience\": \"1.5x\"}")]
         }
     }
 
+    #[tool(description = "Discover unexpected connections between memories. \
+Finds memories in the cosine similarity sweet spot (0.3-0.7) — related enough \
+to be meaningful but different enough to be surprising. Use for creative \
+exploration and lateral thinking, not for finding specific information (use search_memory for that).\n\
+Returns results with similarity scores and optional LLM-generated connection explanations.")]
+    async fn discover_memories(
+        &self,
+        Parameters(params): Parameters<DiscoverMemoriesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tracing::info!(
+            tool = "discover_memories",
+            query = %params.query,
+            min_similarity = ?params.min_similarity,
+            max_similarity = ?params.max_similarity,
+            limit = ?params.limit,
+            "Tool called"
+        );
+
+        // Validate query
+        if params.query.trim().is_empty() {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": "Field 'query' is required and cannot be empty",
+                "field": "query"
+            })));
+        }
+
+        let min_sim = params.min_similarity.unwrap_or(0.3).clamp(0.0, 1.0);
+        let max_sim = params.max_similarity.unwrap_or(0.7).clamp(0.0, 1.0);
+        let limit = params.limit.unwrap_or(10).clamp(1, 50);
+
+        if min_sim >= max_sim {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": "min_similarity must be less than max_similarity",
+                "fields": ["min_similarity", "max_similarity"]
+            })));
+        }
+
+        // Require embedding provider — discovery is vector-only
+        let embedding_provider = match &self.embedding_provider {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": "discover_memories requires an embedding provider"
+                })));
+            }
+        };
+
+        // Require pg_store
+        let pg_store = match &self.pg_store {
+            Some(s) => Arc::clone(s),
+            None => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": "discover_memories requires PostgreSQL backend"
+                })));
+            }
+        };
+
+        // Embed query
+        let embedding = match embedding_provider.embed(&params.query).await {
+            Ok(emb) => pgvector::Vector::from(emb),
+            Err(e) => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": format!("Embedding failed: {}", e)
+                })));
+            }
+        };
+
+        // Run discovery
+        let results = match pg_store.discover_associations(
+            &embedding,
+            min_sim,
+            max_sim,
+            limit,
+            params.project.as_deref(),
+        ).await {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": format!("Discovery failed: {}", e)
+                })));
+            }
+        };
+
+        // Optional LLM explanations (fail-open — no explanations if unavailable)
+        let explanations = if let Some(ref provider) = self.qi_expansion_provider {
+            let slices: Vec<(&str, f64)> = results.iter()
+                .map(|(m, sim)| (m.content.as_str(), *sim))
+                .collect();
+            provider.explain_connections(&params.query, &slices).await.unwrap_or_default()
+        } else {
+            vec![]
+        };
+
+        // Build response with UUID ref mapping
+        let discoveries: Vec<serde_json::Value> = results.iter().enumerate().map(|(i, (memory, sim))| {
+            let mut obj = json!({
+                "id": memory.id,
+                "content": memory.content,
+                "type_hint": memory.type_hint,
+                "tags": memory.tags,
+                "similarity": format!("{:.3}", sim),
+                "created_at": memory.created_at.to_rfc3339(),
+            });
+            self.inject_ref(&mut obj);
+            if let Some(explanation) = explanations.get(i) {
+                if let Some(o) = obj.as_object_mut() {
+                    o.insert("connection".to_string(), json!(explanation));
+                }
+            }
+            obj
+        }).collect();
+
+        Ok(CallToolResult::structured(json!({
+            "discoveries": discoveries,
+            "query": params.query,
+            "similarity_range": [min_sim, max_sim],
+            "count": discoveries.len(),
+        })))
+    }
+
     #[tool(description = "Health check.")]
     async fn health_check(
         &self,
@@ -2079,7 +2219,7 @@ impl ServerHandler for MemoryService {
                 website_url: None,
             },
             instructions: Some(
-                "Memory server for AI agents. Tools: store_memory, get_memory, search_memory, update_memory, delete_memory, bulk_delete_memories, list_memories, reinforce_memory, health_check.\n\nSearch uses keyword + semantic matching ranked by salience (recency, access frequency, relevance, reinforcement). Use list_memories to browse by filters. Reinforcement uses spaced repetition — faded memories get stronger boosts.\n\nDefaults: type_hint=\"fact\", source=\"default\", actor_type=\"agent\", audience=\"global\". Weights: 0=disable leg, 1=default, >1=emphasize.".to_string()
+                "Memory server for AI agents. Tools: store_memory, get_memory, search_memory, update_memory, delete_memory, bulk_delete_memories, list_memories, reinforce_memory, recall_memory, discover_memories, health_check.\n\nSearch uses keyword + semantic matching ranked by salience (recency, access frequency, relevance, reinforcement). Use list_memories to browse by filters. Reinforcement uses spaced repetition — faded memories get stronger boosts.\n\ndiscover_memories finds creative connections in the 0.3-0.7 similarity sweet spot — use for lateral thinking and inspiration, not exact retrieval.\n\nDefaults: type_hint=\"fact\", source=\"default\", actor_type=\"agent\", audience=\"global\". Weights: 0=disable leg, 1=default, >1=emphasize.".to_string()
             ),
         }
     }

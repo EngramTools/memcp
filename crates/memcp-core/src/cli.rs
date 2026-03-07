@@ -1650,6 +1650,95 @@ pub async fn cmd_recall(
 }
 
 // ---------------------------------------------------------------------------
+// Discover command
+// ---------------------------------------------------------------------------
+
+/// Discover unexpected memory connections in the cosine sweet spot.
+///
+/// Requires the daemon to be running (embedding via IPC).
+/// Results include similarity score and — when LLM explanations are not available —
+/// just the memory content and score.
+pub async fn cmd_discover(
+    store: &Arc<PostgresMemoryStore>,
+    query: String,
+    min_similarity: f64,
+    max_similarity: f64,
+    limit: u32,
+    project: Option<String>,
+    json_output: bool,
+) -> Result<()> {
+    if query.trim().is_empty() {
+        anyhow::bail!("query is required and must not be empty");
+    }
+
+    if min_similarity >= max_similarity {
+        anyhow::bail!("min_similarity ({}) must be less than max_similarity ({})", min_similarity, max_similarity);
+    }
+
+    // Embed via daemon for vector similarity
+    let query_embedding = match embed_via_daemon(&query).await {
+        Some(emb) => emb,
+        None => {
+            eprintln!("error: discover requires the daemon to be running for query embedding");
+            eprintln!("hint: start the daemon with 'memcp daemon'");
+            std::process::exit(1);
+        }
+    };
+
+    let query_vec = pgvector::Vector::from(query_embedding);
+    let results = store
+        .discover_associations(&query_vec, min_similarity, max_similarity, limit, project.as_deref())
+        .await
+        .map_err(|e| anyhow::anyhow!("Discovery failed: {}", e))?;
+
+    if json_output {
+        let items: Vec<serde_json::Value> = results.iter().map(|(memory, sim)| {
+            json!({
+                "id": memory.id,
+                "content": memory.content,
+                "type_hint": memory.type_hint,
+                "tags": memory.tags,
+                "similarity": format!("{:.3}", sim),
+                "created_at": memory.created_at.to_rfc3339(),
+                "project": memory.project,
+            })
+        }).collect();
+        let output = json!({
+            "discoveries": items,
+            "query": query,
+            "similarity_range": [min_similarity, max_similarity],
+            "count": items.len(),
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        if results.is_empty() {
+            println!("No discoveries found for \"{query}\" in similarity range [{min_similarity:.1}, {max_similarity:.1}].");
+            return Ok(());
+        }
+
+        println!("Discovered {} connection(s) for \"{query}\":", results.len());
+        println!();
+
+        for (i, (memory, sim)) in results.iter().enumerate() {
+            println!("{}. [{:.2}] {}", i + 1, sim, memory.content);
+            if let Some(ref tags) = memory.tags {
+                if let Some(arr) = tags.as_array() {
+                    let tag_str: Vec<String> = arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect();
+                    if !tag_str.is_empty() {
+                        println!("   Tags: {}", tag_str.join(", "));
+                    }
+                }
+            }
+            println!();
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Curation commands
 // ---------------------------------------------------------------------------
 
