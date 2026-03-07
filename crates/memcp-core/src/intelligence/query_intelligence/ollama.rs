@@ -9,9 +9,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ExpandedQuery, QueryIntelligenceError, QueryIntelligenceProvider, RankedCandidate,
-    RankedResult, TimeRange, build_expansion_prompt, build_reranking_prompt, expansion_schema,
-    reranking_schema,
+    DecomposedQuery, ExpandedQuery, QueryIntelligenceError, QueryIntelligenceProvider,
+    RankedCandidate, RankedResult, TimeRange, build_decomposition_prompt, build_expansion_prompt,
+    build_reranking_prompt, decomposition_schema, expansion_schema, reranking_schema,
 };
 
 // --- HTTP request/response structs (local — mirrors extraction/ollama.rs pattern) ---
@@ -56,17 +56,22 @@ struct ExpandedQueryOutput {
     time_range: Option<TimeRangeOutput>,
 }
 
+/// Parsed query decomposition output from LLM
+#[derive(Deserialize)]
+struct DecomposedQueryOutput {
+    #[serde(default)]
+    is_multi_faceted: bool,
+    #[serde(default)]
+    sub_queries: Vec<String>,
+    #[serde(default)]
+    variants: Vec<String>,
+    time_range: Option<TimeRangeOutput>,
+}
+
 #[derive(Deserialize)]
 struct TimeRangeOutput {
     after: Option<String>,
     before: Option<String>,
-}
-
-/// Parsed re-ranking output from LLM
-#[derive(Deserialize)]
-struct RerankOutput {
-    #[serde(default)]
-    ranked_ids: Vec<String>,
 }
 
 // --- Provider ---
@@ -152,6 +157,67 @@ fn parse_datetime_opt(s: Option<String>) -> Option<DateTime<Utc>> {
 
 #[async_trait]
 impl QueryIntelligenceProvider for OllamaQueryIntelligenceProvider {
+    async fn decompose(&self, query: &str) -> Result<DecomposedQuery, QueryIntelligenceError> {
+        let current_date = Utc::now().format("%Y-%m-%d").to_string();
+        let prompt = build_decomposition_prompt(query, &current_date);
+
+        let content = match self.chat(prompt, decomposition_schema()).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "Ollama decomposition request failed, using raw query");
+                return Ok(DecomposedQuery {
+                    is_multi_faceted: false,
+                    sub_queries: vec![],
+                    variants: vec![query.to_string()],
+                    time_range: None,
+                });
+            }
+        };
+
+        let output: DecomposedQueryOutput = match serde_json::from_str(&content) {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    content = %content,
+                    "Failed to parse decomposition JSON, using raw query"
+                );
+                return Ok(DecomposedQuery {
+                    is_multi_faceted: false,
+                    sub_queries: vec![],
+                    variants: vec![query.to_string()],
+                    time_range: None,
+                });
+            }
+        };
+
+        let is_multi = output.is_multi_faceted && !output.sub_queries.is_empty();
+        tracing::debug!(
+            is_multi_faceted = is_multi,
+            sub_query_count = output.sub_queries.len(),
+            variant_count = output.variants.len(),
+            "Query decomposed"
+        );
+
+        let time_range = output.time_range.map(|tr| TimeRange {
+            after: parse_datetime_opt(tr.after),
+            before: parse_datetime_opt(tr.before),
+        });
+
+        Ok(DecomposedQuery {
+            is_multi_faceted: is_multi,
+            sub_queries: if is_multi { output.sub_queries } else { vec![] },
+            variants: if is_multi {
+                vec![]
+            } else if output.variants.is_empty() {
+                vec![query.to_string()]
+            } else {
+                output.variants
+            },
+            time_range,
+        })
+    }
+
     async fn expand(&self, query: &str) -> Result<ExpandedQuery, QueryIntelligenceError> {
         let current_date = Utc::now().format("%Y-%m-%d").to_string();
         let prompt = build_expansion_prompt(query, &current_date);
@@ -187,13 +253,16 @@ impl QueryIntelligenceProvider for OllamaQueryIntelligenceProvider {
         query: &str,
         candidates: &[RankedCandidate],
     ) -> Result<Vec<RankedResult>, QueryIntelligenceError> {
-        // Serialize candidates as JSON array for prompt
+        // Send 1-indexed integer IDs instead of UUIDs to keep output short.
+        let idx_to_real_id: Vec<&str> = candidates.iter().map(|c| c.id.as_str()).collect();
+
         let candidates_json = {
             let arr: Vec<serde_json::Value> = candidates
                 .iter()
-                .map(|c| {
+                .enumerate()
+                .map(|(i, c)| {
                     serde_json::json!({
-                        "id": c.id,
+                        "id": i + 1,
                         "content": c.content,
                         "rank": c.current_rank
                     })
@@ -210,26 +279,38 @@ impl QueryIntelligenceProvider for OllamaQueryIntelligenceProvider {
         let prompt = build_reranking_prompt(query, &candidates_json);
         let content = self.chat(prompt, reranking_schema()).await?;
 
-        let output: RerankOutput = serde_json::from_str(&content).map_err(|e| {
+        // Parse ranked_ids — model returns integer indices as strings or numbers.
+        let raw: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
             QueryIntelligenceError::Generation(format!(
                 "Failed to parse rerank JSON from model output: {} (content: {})",
                 e, &content
             ))
         })?;
 
-        // Build a set of valid candidate IDs for defensive filtering
-        let valid_ids: std::collections::HashSet<&str> =
-            candidates.iter().map(|c| c.id.as_str()).collect();
+        let ranked_ids = raw
+            .get("ranked_ids")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                QueryIntelligenceError::Generation(format!(
+                    "Missing ranked_ids array in model output: {}",
+                    &content
+                ))
+            })?;
 
-        // Convert to RankedResult — llm_rank is 1-based index position
-        let results: Vec<RankedResult> = output
-            .ranked_ids
-            .into_iter()
-            .filter(|id| valid_ids.contains(id.as_str()))
+        // Map integer indices back to real IDs
+        let results: Vec<RankedResult> = ranked_ids
+            .iter()
+            .filter_map(|v| {
+                let idx = v
+                    .as_u64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))?;
+                let zero_idx = (idx as usize).checked_sub(1)?;
+                idx_to_real_id.get(zero_idx).map(|&real_id| real_id.to_string())
+            })
             .enumerate()
-            .map(|(idx, id)| RankedResult {
+            .map(|(rank, id)| RankedResult {
                 id,
-                llm_rank: idx + 1,
+                llm_rank: rank + 1,
             })
             .collect();
 
