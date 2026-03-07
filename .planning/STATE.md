@@ -3,24 +3,25 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: "Completed 14-02-PLAN.md (Type-Specific Retention Periods)"
-last_updated: "2026-03-07T06:07:00Z"
+stopped_at: "Completed 14-04-PLAN.md (Retroactive Neighbor Enrichment)"
+last_updated: "2026-03-07T06:17:00Z"
 progress:
   total_phases: 50
   completed_phases: 24
   total_plans: 103
-  completed_plans: 76
-  percent: 74
+  completed_plans: 79
+  percent: 77
 ---
 
 # Project State
 
 ## Current Phase
-Phase 14-memory-boosting — In progress (14-02 complete)
+Phase 14-memory-boosting — In progress (14-04 complete)
 
-Progress: [███████░░░] 76/103 plans (74%)
+Progress: [████████░░] 79/103 plans (77%)
 
 ## Active Context
+- Last completed: Phase 14-04 — Retroactive Neighbor Enrichment (background daemon sweep with neighbor-derived tags)
 - Last completed: Phase 14-02 — Type-Specific Retention Periods (RetentionConfig + stability at store time)
 - Last completed: Phase 14-01 — UUID Hallucination Prevention (session-scoped integer refs for memory IDs)
 - Phase 08.6: curation schema, algorithmic+LLM providers, worker, CLI, dry-run --propose (2026-03-06)
@@ -37,11 +38,18 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 **Current focus:** Phase 08.7 — memcp-extensions
 
 ## Session Continuity
-Last session: 2026-03-07T06:07:00Z
-Stopped at: Completed 14-02-PLAN.md (Type-Specific Retention Periods)
+Last session: 2026-03-07T06:17:00Z
+Stopped at: Completed 14-04-PLAN.md (Retroactive Neighbor Enrichment)
 Resume file: .planning/phases/14-memory-boosting/14-CONTEXT.md
 
 ## Accumulated Context
+
+### Phase 14-04 Decisions
+- Phase 14-04: Reuse QI config (Ollama base_url + reranking_ollama_model) for enrichment provider — avoids new config surface
+- Phase 14-04: No-neighbor memories get 'enriched' marker immediately — prevents infinite re-scanning on every sweep
+- Phase 14-04: LlmUnavailable skips without marking enriched (retry next sweep); ProviderError also skips
+- Phase 14-04: Tag sanitization: lowercase + alphanumeric + hyphen/underscore only, max 50 chars
+- Phase 14-04: std::mem::forget(shutdown_tx) keeps enrichment running for daemon lifetime
 
 ### Phase 14-02 Decisions
 - Phase 14-02: RetentionConfig.type_stability defaults: decision=5.0, preference=5.0, instruction=3.5, fact=2.5, observation=1.0, summary=2.0, default=2.5
