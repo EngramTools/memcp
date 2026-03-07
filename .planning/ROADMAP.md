@@ -517,38 +517,62 @@ Plans:
 
 ## Phase 14: Memory Boosting (Competitor-Informed)
 - **Goal**: Retrieval and evolution improvements informed by competitive landscape analysis (engram/.planning/competitive-landscape.md). Focuses on the highest-impact ideas from code review of 10+ competitor codebases.
-- **Status**: Not planned
+- **Status**: Planned
+- **Requirements:** [UUID-01, UUID-02, RET-01, RET-02, MQ-01, MQ-02, MQ-03, ENR-01, ENR-02, ENR-03, DISC-01, DISC-02, DISC-03]
+- **Plans:** 5 plans
+
+Requirements:
+- UUID-01: UuidRefMap with session-scoped integer-to-UUID mapping
+- UUID-02: All MCP tool responses include ref field, all ID inputs resolve integers
+- RET-01: RetentionConfig with type_hint to FSRS stability mapping
+- RET-02: store() applies type-specific initial stability
+- MQ-01: DecomposedQuery type and decompose() trait method replacing expand()
+- MQ-02: Ollama and OpenAI providers implement decompose()
+- MQ-03: search_memory handler uses multi-query pipeline with rrf_fuse_multi()
+- ENR-01: EnrichmentConfig and EnrichmentProvider trait
+- ENR-02: Background sweep worker finding neighbors and suggesting tags via LLM
+- ENR-03: Daemon wiring with config-gated startup
+- DISC-01: discover_associations() cosine sweet-spot query in PostgresMemoryStore
+- DISC-02: discover_memories MCP tool with LLM-generated connection explanations
+- DISC-03: memcp discover CLI subcommand and POST /v1/discover HTTP API
+
+Plans:
+- [ ] 14-01-PLAN.md — UUID hallucination prevention (integer ref mapping) [Wave 1]
+- [ ] 14-02-PLAN.md — Type-specific retention via FSRS stability [Wave 1]
+- [ ] 14-03-PLAN.md — Multi-query retrieval (decomposition + RRF fusion) [Wave 2]
+- [ ] 14-04-PLAN.md — Retroactive neighbor enrichment (daemon worker) [Wave 2]
+- [ ] 14-05-PLAN.md — Creative association discovery (CLI + MCP + API) [Wave 3]
 - **Depends on**: Phase 12
 - **Note**: PRIVATE — stays in private repo, never enters public memcp fork
 - **Origin**: Competitive landscape research (2026-03-03) — Viren Mohindra's "State of Agent Memory 2026", SimpleMem, A-Mem, mcp-memory-service, Mem0
 
 ### Phase 14.1: Multi-Query Retrieval
 - **Goal**: Decompose a search query into 1-4 targeted sub-queries, each hitting the hybrid search pipeline in parallel, then merge results. Modeled after SimpleMem's intent-aware retrieval planning — rated "the best retrieval strategy in the survey" by code review. Directly improves recall for complex/multi-faceted queries.
-- **Status**: Not planned
+- **Status**: Planned
 - **Depends on**: Phase 14
 - **Source**: SimpleMem (arXiv:2601.02553)
 
 ### Phase 14.2: Type-Specific Retention Periods
 - **Goal**: Make salience decay vary by memory type. Architecture decisions get longer retention (365 days), error observations get shorter (30 days), ephemeral context decays fastest. Uses existing `expires_at` column + `type_hint` to set retention at store time. Configurable retention schedule in memcp.toml.
-- **Status**: Not planned
+- **Status**: Planned
 - **Depends on**: Phase 14
 - **Source**: mcp-memory-service (doobidoo)
 
 ### Phase 14.3: Retroactive Neighbor Enrichment
 - **Goal**: When a new memory is stored, retrieve the 5 nearest existing memories and use an LLM to update their tags and context to reflect emerging patterns. New information doesn't just add to the store — it changes how old memories are represented. Addresses the "no feedback loop" gap. Makes the memory store compound over time.
-- **Status**: Not planned
+- **Status**: Planned
 - **Depends on**: Phase 14.1
 - **Source**: A-Mem (NeurIPS 2025, arXiv:2502.12110, Zetzelkasten-inspired)
 
 ### Phase 14.4: Creative Association Discovery
 - **Goal**: New query mode that searches the 0.3-0.7 cosine similarity "sweet spot" between memory pairs. Above 0.7 = redundant (already known to be related). Below 0.3 = noise. The sweet spot finds genuinely unexpected connections. Exposed as `memcp discover` CLI command and MCP tool.
-- **Status**: Not planned
+- **Status**: Planned
 - **Depends on**: Phase 14
 - **Source**: mcp-memory-service ("dream-inspired" consolidation)
 
 ### Phase 14.5: UUID Hallucination Prevention
 - **Goal**: Replace real UUIDs with integer indices before passing memory IDs to LLMs. Prevents a class of errors where models generate plausible-looking but invalid UUIDs. Transform layer in MCP tool responses and search result formatting.
-- **Status**: Not planned
+- **Status**: Planned
 - **Depends on**: Phase 14
 - **Source**: Mem0 (discovered during code review)
 

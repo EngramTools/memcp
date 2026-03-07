@@ -297,7 +297,7 @@ fn default_qi_openai_base_url() -> String {
 }
 
 fn default_qi_openai_model() -> String {
-    "gpt-4o-mini".to_string()
+    "gpt-5-mini".to_string()
 }
 
 fn default_latency_budget_ms() -> u64 {
@@ -1479,6 +1479,72 @@ impl Default for ResourceLimitsConfig {
     }
 }
 
+/// Configuration for type-specific FSRS stability initialization.
+///
+/// Different memory types have different natural lifetimes. Architecture decisions
+/// should persist much longer than ephemeral observations. By setting different
+/// initial FSRS stability values per type_hint at store time, important memories
+/// decay slower through the existing salience scoring system.
+///
+/// Nested env var overrides use double underscores:
+///   MEMCP_RETENTION__DEFAULT_STABILITY=2.5
+///
+/// Override a specific type via TOML:
+/// ```toml
+/// [retention]
+/// [retention.type_stability]
+/// decision = 7.0
+/// observation = 0.5
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetentionConfig {
+    /// Map of type_hint → initial FSRS stability (days).
+    /// Higher stability = slower salience decay.
+    /// Default tiers: decision=5.0, preference=5.0, instruction=3.5, fact=2.5, observation=1.0, summary=2.0
+    #[serde(default = "default_type_stability")]
+    pub type_stability: HashMap<String, f64>,
+
+    /// Default stability for untyped or unknown type_hint memories.
+    /// Default: 2.5 (matches the previous global default stability)
+    #[serde(default = "default_retention_stability")]
+    pub default_stability: f64,
+}
+
+fn default_type_stability() -> HashMap<String, f64> {
+    let mut m = HashMap::new();
+    m.insert("decision".to_string(), 5.0);
+    m.insert("preference".to_string(), 5.0);
+    m.insert("instruction".to_string(), 3.5);
+    m.insert("fact".to_string(), 2.5);
+    m.insert("observation".to_string(), 1.0);
+    m.insert("summary".to_string(), 2.0);
+    m
+}
+
+fn default_retention_stability() -> f64 { 2.5 }
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            type_stability: default_type_stability(),
+            default_stability: default_retention_stability(),
+        }
+    }
+}
+
+impl RetentionConfig {
+    /// Returns the initial FSRS stability for the given type_hint.
+    ///
+    /// Falls back to `default_stability` when the type is unknown or empty.
+    /// Higher stability = slower salience decay over time.
+    pub fn stability_for_type(&self, type_hint: &str) -> f64 {
+        if type_hint.is_empty() {
+            return self.default_stability;
+        }
+        self.type_stability.get(type_hint).copied().unwrap_or(self.default_stability)
+    }
+}
+
 /// Configuration for the `memcp import` pipeline.
 ///
 /// Applied during all import commands (jsonl, openclaw, chatgpt, etc.).
@@ -1648,6 +1714,12 @@ pub struct Config {
     /// Existing configs without [import] section still work (serde default applied).
     #[serde(default)]
     pub import: ImportConfig,
+
+    /// Type-specific FSRS stability initialization.
+    /// Controls initial decay rate per memory type_hint at store time.
+    /// Existing configs without [retention] section still work (serde default applied).
+    #[serde(default)]
+    pub retention: RetentionConfig,
 }
 
 fn default_log_level() -> String {
@@ -1688,6 +1760,7 @@ impl Default for Config {
             project: ProjectConfig::default(),
             temporal: TemporalConfig::default(),
             import: ImportConfig::default(),
+            retention: RetentionConfig::default(),
         }
     }
 }
@@ -1709,6 +1782,50 @@ impl Config {
             .merge(Env::prefixed("MEMCP_"))
             .extract()
             .map_err(|e| MemcpError::Config(format!("Failed to load config: {}", e)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_retention_defaults() {
+        let config = RetentionConfig::default();
+
+        assert_eq!(config.stability_for_type("decision"), 5.0, "decision should be 5.0");
+        assert_eq!(config.stability_for_type("preference"), 5.0, "preference should be 5.0");
+        assert_eq!(config.stability_for_type("instruction"), 3.5, "instruction should be 3.5");
+        assert_eq!(config.stability_for_type("fact"), 2.5, "fact should be 2.5");
+        assert_eq!(config.stability_for_type("observation"), 1.0, "observation should be 1.0");
+        assert_eq!(config.stability_for_type("summary"), 2.0, "summary should be 2.0");
+    }
+
+    #[test]
+    fn test_retention_untyped() {
+        let config = RetentionConfig::default();
+
+        assert_eq!(config.stability_for_type(""), 2.5, "empty string should return default 2.5");
+        assert_eq!(config.stability_for_type("unknown_type"), 2.5, "unknown type should return default 2.5");
+        assert_eq!(config.stability_for_type("foobar"), 2.5, "arbitrary type should return default 2.5");
+    }
+
+    #[test]
+    fn test_retention_serde() {
+        let config = RetentionConfig::default();
+        let json = serde_json::to_string(&config).expect("should serialize");
+        let deserialized: RetentionConfig = serde_json::from_str(&json).expect("should deserialize");
+
+        assert_eq!(deserialized.default_stability, config.default_stability);
+        assert_eq!(deserialized.stability_for_type("decision"), 5.0);
+        assert_eq!(deserialized.stability_for_type("observation"), 1.0);
+    }
+
+    #[test]
+    fn test_config_has_retention_field() {
+        let config = Config::default();
+        assert_eq!(config.retention.stability_for_type("decision"), 5.0);
+        assert_eq!(config.retention.default_stability, 2.5);
     }
 }
 

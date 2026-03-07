@@ -357,6 +357,7 @@ mod tests {
             cache_dir: "/tmp/memcp_models".to_string(),
             local_model: "AllMiniLML6V2".to_string(),
             openai_model: "text-embedding-3-small".to_string(),
+            openai_base_url: None,
             dimension: Some(384),
             reembed_on_tag_change: false,
             tiers: Default::default(),
