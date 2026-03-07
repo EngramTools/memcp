@@ -14,6 +14,7 @@ pub struct MemoryBuilder {
     actor_type: String,
     audience: String,
     idempotency_key: Option<String>,
+    project: Option<String>,
 }
 
 impl MemoryBuilder {
@@ -29,6 +30,7 @@ impl MemoryBuilder {
             actor_type: "agent".to_string(),
             audience: "global".to_string(),
             idempotency_key: None,
+            project: None,
         }
     }
 
@@ -74,6 +76,12 @@ impl MemoryBuilder {
         self
     }
 
+    /// Set the project scope.
+    pub fn project(mut self, project: &str) -> Self {
+        self.project = Some(project.to_string());
+        self
+    }
+
     /// Consume the builder and produce a `CreateMemory`.
     pub fn build(self) -> CreateMemory {
         CreateMemory {
@@ -91,8 +99,14 @@ impl MemoryBuilder {
             total_chunks: None,
             event_time: None,
             event_time_precision: None,
-            project: None,
+            project: self.project,
         }
+    }
+
+    /// Convenience: build with an explicit project override (deprecated in favor of `.project()`).
+    pub fn build_with_project(mut self, project: Option<String>) -> CreateMemory {
+        self.project = project;
+        self.build()
     }
 }
 

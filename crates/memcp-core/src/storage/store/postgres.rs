@@ -4035,6 +4035,118 @@ impl PostgresMemoryStore {
     // Temporal update
     // -----------------------------------------------------------------------
 
+    // -----------------------------------------------------------------------
+    // Discovery — cosine sweet-spot associations
+    // -----------------------------------------------------------------------
+
+    /// Find memories in the cosine similarity "sweet spot" — related enough to
+    /// be meaningful but different enough to be surprising.
+    ///
+    /// Standard search (`search_similar`) finds the highest-similarity results.
+    /// Discovery finds the interesting middle ground: memories in the
+    /// `[min_similarity, max_similarity]` range. Default sweet spot: 0.3–0.7.
+    ///
+    /// Strategy: HNSW-friendly ORDER BY + LIMIT (fetches 3× limit to survive
+    /// post-filter attrition), then filters in application code.
+    ///
+    /// # Arguments
+    ///
+    /// * `query_embedding` — Embedding of the discovery query.
+    /// * `min_similarity`  — Lower bound (inclusive). Default: 0.3.
+    /// * `max_similarity`  — Upper bound (inclusive). Default: 0.7.
+    /// * `limit`           — Max results to return after filtering.
+    /// * `project`         — Optional project scope filter.
+    ///
+    /// Returns `Vec<(Memory, f64)>` sorted by similarity descending within the sweet spot.
+    pub async fn discover_associations(
+        &self,
+        query_embedding: &pgvector::Vector,
+        min_similarity: f64,
+        max_similarity: f64,
+        limit: u32,
+        project: Option<&str>,
+    ) -> Result<Vec<(Memory, f64)>, MemcpError> {
+        // Fetch 3× limit so that enough rows survive the sweet-spot post-filter.
+        let fetch_limit = ((limit as i64) * 3).min(300);
+
+        // Build query with optional project filter.
+        let sql = if project.is_some() {
+            "SELECT m.id, m.content, m.type_hint, m.source, m.tags, \
+                    m.created_at, m.updated_at, m.last_accessed_at, \
+                    m.access_count, m.embedding_status, \
+                    m.extracted_entities, m.extracted_facts, m.extraction_status, \
+                    m.is_consolidated_original, m.consolidated_into, \
+                    m.actor, m.actor_type, m.audience, \
+                    m.parent_id, m.chunk_index, m.total_chunks, \
+                    m.event_time, m.event_time_precision, m.project, \
+                    (1.0 - (me.embedding <=> $1)) AS similarity \
+             FROM memories m \
+             JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = TRUE \
+             WHERE m.deleted_at IS NULL \
+               AND m.embedding_status = 'complete' \
+               AND (m.project = $3 OR m.project IS NULL) \
+             ORDER BY me.embedding <=> $1 ASC \
+             LIMIT $2"
+                .to_string()
+        } else {
+            "SELECT m.id, m.content, m.type_hint, m.source, m.tags, \
+                    m.created_at, m.updated_at, m.last_accessed_at, \
+                    m.access_count, m.embedding_status, \
+                    m.extracted_entities, m.extracted_facts, m.extraction_status, \
+                    m.is_consolidated_original, m.consolidated_into, \
+                    m.actor, m.actor_type, m.audience, \
+                    m.parent_id, m.chunk_index, m.total_chunks, \
+                    m.event_time, m.event_time_precision, m.project, \
+                    (1.0 - (me.embedding <=> $1)) AS similarity \
+             FROM memories m \
+             JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = TRUE \
+             WHERE m.deleted_at IS NULL \
+               AND m.embedding_status = 'complete' \
+             ORDER BY me.embedding <=> $1 ASC \
+             LIMIT $2"
+                .to_string()
+        };
+
+        let rows = if let Some(proj) = project {
+            sqlx::query(&sql)
+                .bind(query_embedding)
+                .bind(fetch_limit)
+                .bind(proj)
+                .fetch_all(&self.pool)
+                .await
+        } else {
+            sqlx::query(&sql)
+                .bind(query_embedding)
+                .bind(fetch_limit)
+                .fetch_all(&self.pool)
+                .await
+        }
+        .map_err(|e| MemcpError::Storage(format!("discover_associations query failed: {}", e)))?;
+
+        // Parse rows, post-filter to sweet spot, sort descending, take limit.
+        let mut results: Vec<(Memory, f64)> = Vec::new();
+        for row in &rows {
+            let similarity: f64 = row
+                .try_get("similarity")
+                .map_err(|e| MemcpError::Storage(e.to_string()))?;
+
+            if similarity >= min_similarity && similarity <= max_similarity {
+                let memory = row_to_memory(row)?;
+                results.push((memory, similarity));
+            }
+        }
+
+        // Sort by similarity descending (most related within sweet spot first).
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(limit as usize);
+
+        Ok(results)
+    }
+
+    // -----------------------------------------------------------------------
+    // Temporal update
+    // -----------------------------------------------------------------------
+
     /// Update event_time and event_time_precision for a memory.
     ///
     /// Used by the temporal LLM background worker to backfill memories
