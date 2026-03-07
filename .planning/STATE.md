@@ -3,24 +3,25 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 10-04-PLAN.md (Gap Closure Rate Limits and Worker Metrics)
-last_updated: "2026-03-07T17:57:19.235Z"
+stopped_at: Completed 10-03-PLAN.md (Worker and Handler Prometheus Instrumentation)
+last_updated: "2026-03-07T19:53:10.000Z"
 progress:
   total_phases: 50
   completed_phases: 25
   total_plans: 110
-  completed_plans: 82
-  percent: 74
+  completed_plans: 83
+  percent: 75
 ---
 
 # Project State
 
 ## Current Phase
-Phase 10-production-hardening — IN PROGRESS (3/5 plans done, skipped 10-03)
+Phase 10-production-hardening — IN PROGRESS (4/5 plans done)
 
-Progress: [███████░░░] 81/110 plans (74%)
+Progress: [███████░░░] 83/110 plans (75%)
 
 ## Active Context
+- Last completed: Phase 10-03 — Worker + Handler Prometheus Instrumentation (GC counters, dedup counters, embedding pipeline counters/histogram/gauges, recall/search histograms)
 - Last completed: Phase 10-04 — Gap Closure (discover_rps/delete_rps/export_rps in RateLimitConfig, worker metrics: enrichment, promotion, curation, temporal, discover histogram)
 - Last completed: Phase 10-02 — Rate Limiting + Metrics Middleware + Status Enrichment (per-endpoint GovernorLayer, metrics_middleware, enriched /status, TraceLayer, Redacted<T>)
 - Last completed: Phase 10-01 — Prometheus Metrics Foundation (recorder install, /metrics endpoint, RateLimitConfig, ObservabilityConfig, pool poller, max_db_connections wired)
@@ -48,6 +49,11 @@ Stopped at: Completed 10-04-PLAN.md (Gap Closure Rate Limits and Worker Metrics)
 Resume file: None
 
 ## Accumulated Context
+
+### Phase 10-03 Decisions
+- Phase 10-03: Gauge updates (memcp_memories_total, memcp_memories_pending_embedding) placed inline in embedding worker after each successful job — avoids adding store dependency to the pool poller
+- Phase 10-03: Empty-result early-return path in search_handler also records memcp_search_results_returned (value 0.0) so every search request contributes a data point
+- Phase 10-03: insert_embedding storage failure path counts as status=error separate from embed provider failure path
 
 ### Phase 14-03 Decisions
 - Phase 14-03: decompose() added as optional trait method with default fallback to expand() — backward compat for all existing providers
