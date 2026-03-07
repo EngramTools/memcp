@@ -275,6 +275,12 @@ pub struct QueryIntelligenceConfig {
     #[serde(default = "default_qi_openai_model")]
     pub reranking_openai_model: String,
 
+    /// Enable multi-query decomposition (default: true).
+    /// When enabled, complex queries are decomposed into sub-queries merged via RRF.
+    /// Set to false to always use single-query expansion (legacy behavior).
+    #[serde(default = "default_true")]
+    pub multi_query_enabled: bool,
+
     /// Maximum combined latency budget in ms (default: 2000)
     #[serde(default = "default_latency_budget_ms")]
     pub latency_budget_ms: u64,
@@ -282,6 +288,10 @@ pub struct QueryIntelligenceConfig {
     /// Max content chars sent to re-ranker per candidate (default: 500)
     #[serde(default = "default_rerank_content_chars")]
     pub rerank_content_chars: usize,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_qi_provider() -> String {
@@ -322,6 +332,7 @@ impl Default for QueryIntelligenceConfig {
             openai_api_key: None,
             expansion_openai_model: default_qi_openai_model(),
             reranking_openai_model: default_qi_openai_model(),
+            multi_query_enabled: default_true(),
             latency_budget_ms: default_latency_budget_ms(),
             rerank_content_chars: default_rerank_content_chars(),
         }
@@ -1579,6 +1590,58 @@ impl Default for ImportConfig {
     }
 }
 
+/// Configuration for the retroactive neighbor enrichment daemon worker.
+///
+/// When enabled, the enrichment worker periodically scans for un-enriched memories,
+/// finds their nearest neighbors, and uses an LLM to suggest tags that improve
+/// discoverability based on neighbor relationships.
+///
+/// Disabled by default (opt-in via `enabled = true` in [enrichment] config section).
+/// Uses the same Ollama/OpenAI provider as query intelligence — no separate LLM config needed.
+///
+/// Nested env var overrides use double underscores:
+///   MEMCP_ENRICHMENT__ENABLED=true
+///   MEMCP_ENRICHMENT__BATCH_LIMIT=100
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnrichmentConfig {
+    /// Whether the enrichment daemon worker is enabled. Default: false (opt-in).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Maximum memories to process per enrichment sweep. Default: 50.
+    #[serde(default = "default_enrichment_batch_limit")]
+    pub batch_limit: usize,
+
+    /// Seconds between enrichment sweeps. Default: 3600 (1 hour).
+    #[serde(default = "default_enrichment_sweep_interval")]
+    pub sweep_interval_secs: u64,
+
+    /// Number of nearest neighbors to consider when enriching a memory. Default: 5.
+    #[serde(default = "default_enrichment_neighbor_depth")]
+    pub neighbor_depth: usize,
+
+    /// Minimum cosine similarity for a memory to be included as a neighbor. Default: 0.7.
+    #[serde(default = "default_enrichment_similarity_threshold")]
+    pub neighbor_similarity_threshold: f64,
+}
+
+fn default_enrichment_batch_limit() -> usize { 50 }
+fn default_enrichment_sweep_interval() -> u64 { 3600 }
+fn default_enrichment_neighbor_depth() -> usize { 5 }
+fn default_enrichment_similarity_threshold() -> f64 { 0.7 }
+
+impl Default for EnrichmentConfig {
+    fn default() -> Self {
+        EnrichmentConfig {
+            enabled: false,
+            batch_limit: default_enrichment_batch_limit(),
+            sweep_interval_secs: default_enrichment_sweep_interval(),
+            neighbor_depth: default_enrichment_neighbor_depth(),
+            neighbor_similarity_threshold: default_enrichment_similarity_threshold(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Log level: trace, debug, info, warn, error
@@ -1720,6 +1783,12 @@ pub struct Config {
     /// Existing configs without [retention] section still work (serde default applied).
     #[serde(default)]
     pub retention: RetentionConfig,
+
+    /// Retroactive neighbor enrichment configuration.
+    /// Background daemon worker that adds tags to existing memories based on their nearest neighbors.
+    /// Existing configs without [enrichment] section still work (serde default applied).
+    #[serde(default)]
+    pub enrichment: EnrichmentConfig,
 }
 
 fn default_log_level() -> String {
@@ -1761,6 +1830,7 @@ impl Default for Config {
             temporal: TemporalConfig::default(),
             import: ImportConfig::default(),
             retention: RetentionConfig::default(),
+            enrichment: EnrichmentConfig::default(),
         }
     }
 }
@@ -1826,6 +1896,26 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.retention.stability_for_type("decision"), 5.0);
         assert_eq!(config.retention.default_stability, 2.5);
+    }
+
+    #[test]
+    fn test_enrichment_config_defaults() {
+        let config = EnrichmentConfig::default();
+        assert!(!config.enabled, "enrichment should be disabled by default");
+        assert_eq!(config.batch_limit, 50, "batch_limit should default to 50");
+        assert_eq!(config.sweep_interval_secs, 3600, "sweep_interval_secs should default to 3600");
+        assert_eq!(config.neighbor_depth, 5, "neighbor_depth should default to 5");
+        assert!((config.neighbor_similarity_threshold - 0.7).abs() < f64::EPSILON,
+            "neighbor_similarity_threshold should default to 0.7");
+    }
+
+    #[test]
+    fn test_config_has_enrichment_field() {
+        let config = Config::default();
+        assert!(!config.enrichment.enabled, "enrichment should be disabled by default");
+        assert_eq!(config.enrichment.batch_limit, 50);
+        assert_eq!(config.enrichment.sweep_interval_secs, 3600);
+        assert_eq!(config.enrichment.neighbor_depth, 5);
     }
 }
 
