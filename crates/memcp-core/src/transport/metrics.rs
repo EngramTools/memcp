@@ -3,7 +3,7 @@
 //! Installs the global metrics recorder, describes all metrics, and provides
 //! the /metrics endpoint handler and pool metrics background poller.
 
-use metrics::{describe_counter, describe_gauge, describe_histogram, gauge, Unit};
+use metrics::{counter, describe_counter, describe_gauge, describe_histogram, gauge, histogram, Unit};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -40,6 +40,34 @@ pub fn describe_metrics() {
     describe_counter!("memcp_gc_runs_total", "Total GC worker runs");
     describe_counter!("memcp_gc_pruned_total", "Total memories pruned by GC");
     describe_counter!("memcp_dedup_merges_total", "Total deduplication merges performed");
+    describe_counter!("memcp_enrichment_sweeps_total", "Enrichment worker sweep runs");
+    describe_counter!("memcp_enrichment_memories_total", "Memories enriched with neighbor tags");
+    describe_counter!("memcp_promotion_sweeps_total", "Promotion sweep worker runs");
+    describe_counter!("memcp_promotion_promoted_total", "Memories promoted to quality embedding tier");
+    describe_counter!("memcp_curation_runs_total", "Curation worker pass runs");
+    describe_counter!("memcp_curation_merged_total", "Memories merged by curation");
+    describe_counter!("memcp_curation_flagged_total", "Memories flagged stale by curation");
+    describe_counter!("memcp_temporal_extractions_total", "Temporal event-time LLM extractions completed");
+    describe_histogram!("memcp_discover_results_returned", "Results returned per discover call");
+}
+
+/// Tower middleware recording request count and duration for /v1/* routes.
+///
+/// Applied only to the API sub-router (not /health, /status, or /metrics).
+/// Uses global metrics macros — no AppState dependency.
+pub async fn metrics_middleware(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let endpoint = req.uri().path().to_string();
+    let start = std::time::Instant::now();
+    let response = next.run(req).await;
+    let status = response.status().as_u16().to_string();
+    let duration = start.elapsed().as_secs_f64();
+    counter!("memcp_requests_total", "endpoint" => endpoint.clone(), "status" => status)
+        .increment(1);
+    histogram!("memcp_request_duration_seconds", "endpoint" => endpoint).record(duration);
+    response
 }
 
 /// Spawn a background task that polls pool stats every `interval` and writes Prometheus gauges.
