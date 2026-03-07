@@ -73,6 +73,7 @@ use std::time::{Duration, Instant};
 use chrono::DateTime;
 use chrono::Utc;
 use crate::query_intelligence::{RankedCandidate, temporal::parse_temporal_hint};
+use crate::search::rrf_fuse_multi;
 
 use crate::config::{IdempotencyConfig, RecallConfig, ResourceCapsConfig, SalienceConfig, SearchConfig};
 use crate::content_filter::{ContentFilter, FilterVerdict};
@@ -1232,37 +1233,53 @@ Callable from code_execution_20260120 sandboxes.")]
             }
         };
 
-        // 4. Query Intelligence: expansion (if enabled)
+        // 4. Query Intelligence: decompose (if enabled) — replaces expand()
         let qi_start = Instant::now();
         let qi_budget = Duration::from_millis(self.qi_config.latency_budget_ms);
 
-        let (search_query, qi_time_range) = if let Some(ref provider) = self.qi_expansion_provider {
-            let expansion_budget = qi_budget * 6 / 10; // 60% for expansion
-            match tokio::time::timeout(expansion_budget, provider.expand(&params.query)).await {
-                Ok(Ok(expanded)) => {
-                    tracing::info!(
-                        variants = expanded.variants.len(),
-                        has_time_range = expanded.time_range.is_some(),
-                        "Query expanded"
-                    );
-                    // Use first variant as the search query (best formulation)
-                    let best_query = expanded.variants.into_iter().next().unwrap_or_else(|| params.query.clone());
-                    (best_query, expanded.time_range)
+        // decomposed_meta: (is_multi_faceted, sub_queries_for_debug)
+        let mut decomposed_meta: Option<(bool, Vec<String>)> = None;
+        let (search_query, qi_time_range, sub_queries_for_search) =
+            if let Some(ref provider) = self.qi_expansion_provider {
+                let decompose_budget = qi_budget * 6 / 10; // 60% for decomposition
+                match tokio::time::timeout(decompose_budget, provider.decompose(&params.query)).await {
+                    Ok(Ok(dq)) => {
+                        if dq.is_multi_faceted && !dq.sub_queries.is_empty() && self.qi_config.multi_query_enabled {
+                            tracing::info!(
+                                sub_query_count = dq.sub_queries.len(),
+                                has_time_range = dq.time_range.is_some(),
+                                "Query decomposed into sub-queries (multi-query path)"
+                            );
+                            decomposed_meta = Some((true, dq.sub_queries.clone()));
+                            let time_range = dq.time_range;
+                            // sub_queries_for_search is non-empty → multi-query path
+                            (params.query.clone(), time_range, dq.sub_queries)
+                        } else {
+                            tracing::info!(
+                                variants = dq.variants.len(),
+                                has_time_range = dq.time_range.is_some(),
+                                "Query decomposed as simple (single-query path)"
+                            );
+                            decomposed_meta = Some((false, vec![]));
+                            let best_query = dq.variants.into_iter().next().unwrap_or_else(|| params.query.clone());
+                            let time_range = dq.time_range;
+                            (best_query, time_range, vec![])
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(error = %e, "Query decomposition failed, using original query");
+                        (params.query.clone(), None, vec![])
+                    }
+                    Err(_) => {
+                        tracing::warn!(elapsed_ms = ?qi_start.elapsed().as_millis(), "Query decomposition timed out, using original query");
+                        (params.query.clone(), None, vec![])
+                    }
                 }
-                Ok(Err(e)) => {
-                    tracing::warn!(error = %e, "Query expansion failed, using original query");
-                    (params.query.clone(), None)
-                }
-                Err(_) => {
-                    tracing::warn!(elapsed_ms = ?qi_start.elapsed().as_millis(), "Query expansion timed out, using original query");
-                    (params.query.clone(), None)
-                }
-            }
-        } else {
-            // No LLM expansion — try deterministic temporal fallback
-            let time_range = parse_temporal_hint(&params.query, Utc::now());
-            (params.query.clone(), time_range)
-        };
+            } else {
+                // No LLM — try deterministic temporal fallback
+                let time_range = parse_temporal_hint(&params.query, Utc::now());
+                (params.query.clone(), time_range, vec![])
+            };
 
         // 5. Optionally embed the search_query (graceful degradation to BM25-only if no provider)
         let query_embedding: Option<pgvector::Vector> = if let Some(ref provider) = self.embedding_provider {
@@ -1333,22 +1350,120 @@ Callable from code_execution_20260120 sandboxes.")]
         // Salience re-ranking happens after, then cursor filtering is applied application-side.
         let fetch_limit = if cursor_position.is_some() { limit as i64 * 5 } else { limit as i64 };
         let tags_slice: Option<Vec<String>> = params.tags.clone();
-        let raw_hits = match pg_store.hybrid_search(
-            &search_query,
-            query_embedding.as_ref(),
-            fetch_limit,
-            created_after,
-            created_before,
-            tags_slice.as_deref(),
-            bm25_k,
-            vector_k,
-            symbolic_k,
-            None, // source filter (MCP uses separate params)
-            params.audience.as_deref(),
-            params.project.as_deref(),
-        ).await {
-            Ok(hits) => hits,
-            Err(e) => return Ok(store_error_to_result(e)),
+
+        // 8a. Multi-query path: run hybrid_search for each sub-query, fuse results via rrf_fuse_multi.
+        let raw_hits = if !sub_queries_for_search.is_empty() {
+            // Embed all sub-queries
+            let mut sub_query_result_ranks: Vec<Vec<(String, i64)>> = Vec::new();
+            for sub_q in &sub_queries_for_search {
+                let sub_embedding = if let Some(ref ep) = self.embedding_provider {
+                    match ep.embed(sub_q).await {
+                        Ok(vec) => Some(pgvector::Vector::from(vec)),
+                        Err(e) => {
+                            tracing::warn!(sub_query = %sub_q, error = %e, "Failed to embed sub-query, using BM25 only for this leg");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                let sub_hits = match pg_store.hybrid_search(
+                    sub_q,
+                    sub_embedding.as_ref(),
+                    fetch_limit,
+                    created_after,
+                    created_before,
+                    tags_slice.as_deref(),
+                    bm25_k,
+                    vector_k,
+                    symbolic_k,
+                    None,
+                    params.audience.as_deref(),
+                    params.project.as_deref(),
+                ).await {
+                    Ok(hits) => hits,
+                    Err(e) => {
+                        tracing::warn!(sub_query = %sub_q, error = %e, "Sub-query search failed, skipping leg");
+                        continue;
+                    }
+                };
+                // Convert to (id, rank) pairs for rrf_fuse_multi
+                let ranks: Vec<(String, i64)> = sub_hits
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, hit)| (hit.memory.id, (i + 1) as i64))
+                    .collect();
+                sub_query_result_ranks.push(ranks);
+            }
+
+            if sub_query_result_ranks.is_empty() {
+                // All sub-query legs failed — fall back to original query
+                tracing::warn!("All sub-query legs failed, falling back to original query");
+                match pg_store.hybrid_search(
+                    &params.query,
+                    query_embedding.as_ref(),
+                    fetch_limit,
+                    created_after,
+                    created_before,
+                    tags_slice.as_deref(),
+                    bm25_k,
+                    vector_k,
+                    symbolic_k,
+                    None,
+                    params.audience.as_deref(),
+                    params.project.as_deref(),
+                ).await {
+                    Ok(hits) => hits,
+                    Err(e) => return Ok(store_error_to_result(e)),
+                }
+            } else {
+                // Fuse sub-query results via RRF
+                const MULTI_QUERY_K: f64 = 60.0;
+                let fused = rrf_fuse_multi(&sub_query_result_ranks, MULTI_QUERY_K);
+
+                // Fetch full Memory objects for fused IDs (top fetch_limit)
+                let fused_ids: Vec<String> = fused.into_iter()
+                    .take(fetch_limit as usize)
+                    .map(|(id, _)| id)
+                    .collect();
+
+                match pg_store.get_memories_by_ids(&fused_ids).await {
+                    Ok(memory_map) => {
+                        // Preserve fused rank order: iterate fused_ids in order, look up memory
+                        fused_ids.iter().enumerate().filter_map(|(i, id)| {
+                            memory_map.get(id).map(|mem| {
+                                let rank = i + 1;
+                                let rrf_score = 1.0 / (MULTI_QUERY_K + rank as f64);
+                                crate::search::HybridRawHit {
+                                    memory: mem.clone(),
+                                    rrf_score,
+                                    match_source: "multi_query".to_string(),
+                                }
+                            })
+                        }).collect()
+                    }
+                    Err(e) => return Ok(store_error_to_result(e)),
+                }
+            }
+        } else {
+            // 8b. Single-query path (default)
+            match pg_store.hybrid_search(
+                &search_query,
+                query_embedding.as_ref(),
+                fetch_limit,
+                created_after,
+                created_before,
+                tags_slice.as_deref(),
+                bm25_k,
+                vector_k,
+                symbolic_k,
+                None, // source filter (MCP uses separate params)
+                params.audience.as_deref(),
+                params.project.as_deref(),
+            ).await {
+                Ok(hits) => hits,
+                Err(e) => return Ok(store_error_to_result(e)),
+            }
         };
 
         // 9. Fetch salience data for all result IDs
@@ -1573,6 +1688,14 @@ Callable from code_execution_20260120 sandboxes.")]
             "next_cursor": next_cursor,
             "has_more": has_more,
         });
+
+        // 15a. Add decomposition debug metadata when available
+        if let Some((is_multi, sub_queries)) = decomposed_meta {
+            response["decomposed"] = json!(is_multi);
+            if is_multi && !sub_queries.is_empty() {
+                response["sub_queries"] = json!(sub_queries);
+            }
+        }
 
         if count == 0 {
             response["hint"] = json!("No memories matched your query. Try broader search terms or use list_memories to browse all memories.");
