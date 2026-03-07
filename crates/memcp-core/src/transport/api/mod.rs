@@ -111,7 +111,7 @@ pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
             .route("/v1/store", post(store::store_handler))
             .route("/v1/annotate", post(annotate::annotate_handler))
             .route("/v1/update", post(update::update_handler))
-            .route("/v1/memories/:id", delete(delete::handle_delete))
+            .route("/v1/memories/{id}", delete(delete::handle_delete))
             .route("/v1/status", get(crate::transport::health::status_handler))
             .route("/v1/export", get(export::export_handler))
             .route("/v1/discover", post(discover::discover_handler));
@@ -142,7 +142,7 @@ pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
         .layer(build_rate_limit_layer(rl.discover_rps, rl.burst_multiplier));
 
     let delete_routes = Router::new()
-        .route("/v1/memories/:id", delete(delete::handle_delete))
+        .route("/v1/memories/{id}", delete(delete::handle_delete))
         .layer(build_rate_limit_layer(rl.delete_rps, rl.burst_multiplier));
 
     let export_routes = Router::new()
