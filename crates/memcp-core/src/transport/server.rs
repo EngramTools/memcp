@@ -4,6 +4,55 @@
 //! update_memory, delete_memory, list_memories, recall_memory, feedback_memory, etc.
 //! Wires together storage/, intelligence/, and pipeline/ layers.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Session-scoped integer reference mapping for memory IDs.
+///
+/// LLMs frequently hallucinate plausible-looking UUIDs. By presenting sequential
+/// integers (1, 2, 3...) in tool responses and accepting them as input, agents
+/// avoid an entire class of invalid-ID errors.
+///
+/// One UuidRefMap per MemoryService instance (per MCP connection) — refs are
+/// session-scoped and reset between connections.
+pub struct UuidRefMap {
+    ref_to_uuid: std::sync::Mutex<HashMap<u32, String>>,
+    uuid_to_ref: std::sync::Mutex<HashMap<String, u32>>,
+    next_ref: AtomicU32,
+}
+
+impl UuidRefMap {
+    pub fn new() -> Self {
+        Self {
+            ref_to_uuid: std::sync::Mutex::new(HashMap::new()),
+            uuid_to_ref: std::sync::Mutex::new(HashMap::new()),
+            next_ref: AtomicU32::new(1), // Start from 1 (more natural for agents)
+        }
+    }
+
+    /// Assign an integer ref to a UUID. Idempotent — same UUID always gets same ref.
+    pub fn assign_ref(&self, uuid: &str) -> u32 {
+        let mut uuid_map = self.uuid_to_ref.lock().unwrap();
+        if let Some(&r) = uuid_map.get(uuid) {
+            return r;
+        }
+        let r = self.next_ref.fetch_add(1, Ordering::SeqCst);
+        uuid_map.insert(uuid.to_string(), r);
+        self.ref_to_uuid.lock().unwrap().insert(r, uuid.to_string());
+        r
+    }
+
+    /// Resolve an input string to a UUID. Accepts both integer refs and UUID strings.
+    /// Returns None only if an integer ref is not found in the mapping.
+    pub fn resolve(&self, input: &str) -> Option<String> {
+        if let Ok(n) = input.parse::<u32>() {
+            self.ref_to_uuid.lock().unwrap().get(&n).cloned()
+        } else {
+            Some(input.to_string()) // UUID passthrough
+        }
+    }
+}
+
 use rmcp::{
     ServerHandler,
     tool,
@@ -59,6 +108,7 @@ pub struct MemoryService {
     resource_limits: crate::config::ResourceLimitsConfig,
     gc_config: crate::config::GcConfig,
     last_auto_gc: Arc<std::sync::Mutex<Option<Instant>>>,
+    ref_map: UuidRefMap,
 }
 
 impl MemoryService {
@@ -97,6 +147,7 @@ impl MemoryService {
             resource_limits: crate::config::ResourceLimitsConfig::default(),
             gc_config: crate::config::GcConfig::default(),
             last_auto_gc: Arc::new(std::sync::Mutex::new(None)),
+            ref_map: UuidRefMap::new(),
         }
     }
 
@@ -1927,5 +1978,53 @@ impl ServerHandler for MemoryService {
                 None,
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod uuid_ref_tests {
+    use super::*;
+
+    #[test]
+    fn test_uuid_ref_idempotent() {
+        let map = UuidRefMap::new();
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let r1 = map.assign_ref(uuid);
+        let r2 = map.assign_ref(uuid);
+        assert_eq!(r1, r2, "Same UUID must always get the same ref");
+    }
+
+    #[test]
+    fn test_uuid_ref_resolve_integer() {
+        let map = UuidRefMap::new();
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let r = map.assign_ref(uuid);
+        let resolved = map.resolve(&r.to_string());
+        assert_eq!(resolved, Some(uuid.to_string()), "Integer ref must resolve back to UUID");
+    }
+
+    #[test]
+    fn test_uuid_ref_passthrough() {
+        let map = UuidRefMap::new();
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        // UUID passthrough — no assignment needed
+        let resolved = map.resolve(uuid);
+        assert_eq!(resolved, Some(uuid.to_string()), "UUID string must pass through as-is");
+    }
+
+    #[test]
+    fn test_uuid_ref_resolve_unknown_integer() {
+        let map = UuidRefMap::new();
+        // Ref 999 was never assigned
+        let resolved = map.resolve("999");
+        assert_eq!(resolved, None, "Unknown integer ref must return None");
+    }
+
+    #[test]
+    fn test_uuid_ref_starts_at_one() {
+        let map = UuidRefMap::new();
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let r = map.assign_ref(uuid);
+        assert_eq!(r, 1, "First assigned ref must be 1, not 0");
     }
 }
