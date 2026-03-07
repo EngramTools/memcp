@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: "Completed 14-04-PLAN.md (Retroactive Neighbor Enrichment)"
-last_updated: "2026-03-07T06:17:00Z"
+stopped_at: "Completed 14-03-PLAN.md (Multi-Query Retrieval)"
+last_updated: "2026-03-07T06:20:27Z"
 progress:
   total_phases: 50
   completed_phases: 24
@@ -38,11 +38,18 @@ See: .planning/PROJECT.md (updated 2026-03-02)
 **Current focus:** Phase 08.7 — memcp-extensions
 
 ## Session Continuity
-Last session: 2026-03-07T06:17:00Z
-Stopped at: Completed 14-04-PLAN.md (Retroactive Neighbor Enrichment)
+Last session: 2026-03-07T06:20:27Z
+Stopped at: Completed 14-03-PLAN.md (Multi-Query Retrieval)
 Resume file: .planning/phases/14-memory-boosting/14-CONTEXT.md
 
 ## Accumulated Context
+
+### Phase 14-03 Decisions
+- Phase 14-03: decompose() added as optional trait method with default fallback to expand() — backward compat for all existing providers
+- Phase 14-03: Multi-query path uses rrf_fuse_multi with k=60.0 (research default) across sub-query legs
+- Phase 14-03: get_memories_by_ids used post-fusion to fetch full Memory objects in fused rank order
+- Phase 14-03: decomposed/sub_queries debug metadata always injected in search response (not debug-only flag)
+- Phase 14-03: multi_query_enabled defaults to true; false disables multi-faceted path even if LLM returns is_multi_faceted=true
 
 ### Phase 14-04 Decisions
 - Phase 14-04: Reuse QI config (Ollama base_url + reranking_ollama_model) for enrichment provider — avoids new config surface
