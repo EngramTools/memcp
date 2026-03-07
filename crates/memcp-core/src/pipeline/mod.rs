@@ -15,3 +15,4 @@ pub mod chunking;
 pub mod curation;
 pub mod promotion;
 pub mod temporal;
+pub mod enrichment;
