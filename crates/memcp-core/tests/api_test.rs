@@ -13,6 +13,7 @@ use memcp::store::postgres::PostgresMemoryStore;
 use memcp::config::Config;
 use memcp::transport::health::AppState;
 use memcp::transport::api;
+use metrics_exporter_prometheus::PrometheusBuilder;
 use sqlx::PgPool;
 use tokio::time::Instant;
 
@@ -27,6 +28,8 @@ use tokio::time::Instant;
 async fn make_test_state(pool: PgPool, ready: bool) -> AppState {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
     let config = Config::default();
+    // Build a non-global prometheus recorder for test isolation
+    let metrics_handle = PrometheusBuilder::new().build_recorder().handle();
     AppState {
         ready: Arc::new(AtomicBool::new(ready)),
         started_at: Instant::now(),
@@ -35,6 +38,7 @@ async fn make_test_state(pool: PgPool, ready: bool) -> AppState {
         config: Arc::new(config),
         embed_provider: None,
         embed_sender: None,
+        metrics_handle,
     }
 }
 

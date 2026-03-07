@@ -14,6 +14,7 @@
 /// Bind failure is non-fatal: logs a warning and returns rather than crashing the daemon.
 
 use axum::{Router, Json, extract::State, routing::get, http::StatusCode};
+use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Serialize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,6 +48,8 @@ pub struct AppState {
     /// Embedding pipeline sender for enqueuing jobs (store handler wait=true path).
     /// None when pipeline not available (store handler falls back to polling).
     pub embed_sender: Option<mpsc::Sender<EmbeddingJob>>,
+    /// Prometheus scrape handle for /metrics endpoint.
+    pub metrics_handle: PrometheusHandle,
 }
 
 #[derive(Serialize)]
@@ -153,6 +156,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) {
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/status", get(status_handler))
+        .route("/metrics", get(crate::transport::metrics::metrics_handler))
         .merge(api_routes)
         .with_state(state);
 

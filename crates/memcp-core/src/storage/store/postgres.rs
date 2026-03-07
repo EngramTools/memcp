@@ -146,6 +146,19 @@ impl PostgresMemoryStore {
         Self::new_with_schema(database_url, run_migrations, search_config, None).await
     }
 
+    /// Create a new PostgresMemoryStore with a configurable connection pool size.
+    ///
+    /// Use this constructor in daemon mode to wire `max_db_connections` from config.
+    /// All other callers use `new()` which defaults to 10 connections.
+    pub async fn new_with_pool_config(
+        database_url: &str,
+        run_migrations: bool,
+        search_config: &SearchConfig,
+        max_connections: u32,
+    ) -> Result<Self, MemcpError> {
+        Self::new_with_schema_internal(database_url, run_migrations, search_config, None, max_connections).await
+    }
+
     /// Create a new PostgresMemoryStore with optional schema isolation.
     ///
     /// When `schema` is `Some(name)`, all pool connections use `SET search_path TO {name}, public`
@@ -160,6 +173,17 @@ impl PostgresMemoryStore {
         run_migrations: bool,
         search_config: &SearchConfig,
         schema: Option<&str>,
+    ) -> Result<Self, MemcpError> {
+        Self::new_with_schema_internal(database_url, run_migrations, search_config, schema, 10).await
+    }
+
+    /// Internal constructor with full parameter control.
+    async fn new_with_schema_internal(
+        database_url: &str,
+        run_migrations: bool,
+        search_config: &SearchConfig,
+        schema: Option<&str>,
+        max_connections: u32,
     ) -> Result<Self, MemcpError> {
         // Validate schema name if provided
         if let Some(name) = schema {
@@ -187,8 +211,8 @@ impl PostgresMemoryStore {
         let schema_owned: Option<String> = schema.map(|s| s.to_string());
         let pool = {
             let mut opts = PgPoolOptions::new()
-                .max_connections(10)         // good default for single-server MCP stdio
-                .min_connections(1)          // keep at least one warm connection
+                .max_connections(max_connections) // configurable: daemon uses resource_caps.max_db_connections
+                .min_connections(1)               // keep at least one warm connection
                 .idle_timeout(Duration::from_secs(300))    // 5 min idle cleanup
                 .max_lifetime(Duration::from_secs(1800));  // 30 min max connection age
 
@@ -2604,6 +2628,19 @@ impl PostgresMemoryStore {
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to count live memories: {}", e)))?;
         Ok(count)
+    }
+
+    /// Count memories with embedding_status = 'pending' (excludes soft-deleted).
+    ///
+    /// Used by /status endpoint and observability metrics to track embedding backlog.
+    pub async fn count_pending_embeddings(&self) -> Result<i64, MemcpError> {
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM memories WHERE embedding_status = 'pending' AND deleted_at IS NULL"
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to count pending embeddings: {}", e)))?;
+        Ok(count.0)
     }
 
     /// Fetch GC candidates: low-salience memories older than min_age_days.

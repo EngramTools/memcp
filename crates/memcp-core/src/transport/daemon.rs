@@ -50,7 +50,12 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         let mut delay = std::time::Duration::from_secs(1);
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
-            match PostgresMemoryStore::new(&config.database_url, run_migrations).await {
+            match PostgresMemoryStore::new_with_pool_config(
+                &config.database_url,
+                run_migrations,
+                &config.search,
+                config.resource_caps.max_db_connections,
+            ).await {
                 Ok(mut s) => {
                     tracing::info!(database_url = %config.database_url, "PostgreSQL store initialized");
                     // Apply type-specific FSRS stability config before wrapping in Arc
@@ -183,6 +188,19 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         let addr: std::net::SocketAddr = format!("{}:{}", config.health.bind, config.health.port)
             .parse()
             .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], 9090)));
+
+        // Install Prometheus recorder and register metric descriptions.
+        // MUST be called before spawning pool metrics poller and before /metrics endpoint is hit.
+        let metrics_handle = crate::transport::metrics::install_prometheus_recorder();
+        crate::transport::metrics::describe_metrics();
+
+        // Spawn pool metrics poller (updates active/idle gauges every poll_interval).
+        let poll_interval = Duration::from_secs(config.observability.pool_poll_interval_secs);
+        crate::transport::metrics::spawn_pool_metrics_poller(
+            Arc::new(store.pool().clone()),
+            poll_interval,
+        );
+
         let state = crate::health::AppState {
             ready: ready.clone(),
             started_at: tokio::time::Instant::now(),
@@ -191,6 +209,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             config: std::sync::Arc::new(config.clone()),
             embed_provider: Some(router.default_provider().clone()),
             embed_sender: Some(pipeline.sender()),
+            metrics_handle,
         };
         Some(tokio::spawn(crate::health::serve(addr, state)))
     } else {
