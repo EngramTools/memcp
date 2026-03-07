@@ -1,7 +1,35 @@
-//! Tracing/logging initialization.
+//! Tracing/logging initialization and content privacy utilities.
 //!
 //! Configures tracing-subscriber with env-filter. All output goes to stderr
 //! (stdout reserved for JSON-RPC in MCP serve mode).
+//!
+//! Also provides `Redacted<T>` — a Display/Debug wrapper that redacts any value
+//! to `[REDACTED]` so memory content never leaks into INFO-level logs.
+
+/// Wrapper that redacts content in Display and Debug output.
+///
+/// Use for memory content fields that must not appear in INFO-level logs.
+///
+/// # Example
+/// ```rust
+/// use memcp::logging::Redacted;
+/// let content = "my secret memory";
+/// tracing::info!(content = %Redacted(&content), "storing memory");
+/// // Logs: content=[REDACTED]
+/// ```
+pub struct Redacted<T>(pub T);
+
+impl<T> std::fmt::Display for Redacted<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[REDACTED]")
+    }
+}
+
+impl<T> std::fmt::Debug for Redacted<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[REDACTED]")
+    }
+}
 
 /// Structured logging setup using tracing
 ///
