@@ -92,6 +92,10 @@ pub async fn run_gc(
         .hard_purge_old_deleted(config.hard_purge_grace_days)
         .await?;
 
+    // Prometheus counters: one run completed, pruned + expired count
+    metrics::counter!("memcp_gc_runs_total").increment(1);
+    metrics::counter!("memcp_gc_pruned_total").increment((pruned_count + expired_count) as u64);
+
     Ok(GcResult {
         pruned_count,
         expired_count,

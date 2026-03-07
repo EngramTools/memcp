@@ -59,8 +59,10 @@ impl EmbeddingPipeline {
                 let provider = router.provider(&tier)
                     .unwrap_or_else(|| router.default_provider());
 
+                let embed_start = std::time::Instant::now();
                 match provider.embed(&text).await {
                     Ok(vector) => {
+                        let duration = embed_start.elapsed().as_secs_f64();
                         let embedding = pgvector::Vector::from(vector);
                         let emb_id = Uuid::new_v4().to_string();
                         let model = provider.model_name().to_string();
@@ -76,6 +78,7 @@ impl EmbeddingPipeline {
                                 "Failed to store embedding"
                             );
                             let _ = store.update_embedding_status(&job.memory_id, "failed").await;
+                            metrics::counter!("memcp_embedding_jobs_total", "status" => "error").increment(1);
                             if let Some(tx) = job.completion_tx {
                                 let _ = tx.send(EmbeddingCompletion {
                                     status: "failed".to_string(),
@@ -86,6 +89,8 @@ impl EmbeddingPipeline {
                             worker_pending.fetch_sub(1, Ordering::Relaxed);
                         } else {
                             let _ = store.update_embedding_status(&job.memory_id, "complete").await;
+                            metrics::counter!("memcp_embedding_jobs_total", "status" => "success").increment(1);
+                            metrics::histogram!("memcp_embedding_duration_seconds", "tier" => tier.clone()).record(duration);
                             tracing::debug!(memory_id = %job.memory_id, tier = %tier, "Embedding complete");
                             if let Some(tx) = job.completion_tx {
                                 let _ = tx.send(EmbeddingCompletion {
@@ -93,6 +98,14 @@ impl EmbeddingPipeline {
                                     dimension: Some(dim),
                                     tier: tier.clone(),
                                 });
+                            }
+
+                            // Update memory count gauges after each successful embedding
+                            if let Ok(total) = store.count_live_memories().await {
+                                metrics::gauge!("memcp_memories_total").set(total as f64);
+                            }
+                            if let Ok(pending) = store.count_pending_embeddings().await {
+                                metrics::gauge!("memcp_memories_pending_embedding").set(pending as f64);
                             }
 
                             // Trigger consolidation check
@@ -153,6 +166,7 @@ impl EmbeddingPipeline {
                             "Embedding failed after 3 retries, marking as failed"
                         );
                         let _ = store.update_embedding_status(&job.memory_id, "failed").await;
+                        metrics::counter!("memcp_embedding_jobs_total", "status" => "error").increment(1);
                         if let Some(tx) = job.completion_tx {
                             let _ = tx.send(EmbeddingCompletion {
                                 status: "failed".to_string(),

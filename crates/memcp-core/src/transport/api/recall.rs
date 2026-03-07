@@ -129,6 +129,9 @@ pub async fn recall_handler(
 
     let truncation_chars = state.config.recall.truncation_chars;
 
+    // Record histogram of memories returned per recall request.
+    metrics::histogram!("memcp_recall_memories_returned").record(result.memories.len() as f64);
+
     // Build memories array with truncation and related context.
     let memories: Vec<serde_json::Value> = result.memories.iter().map(|mem| {
         let (truncated_content, was_truncated) = truncate_content(&mem.content, truncation_chars);

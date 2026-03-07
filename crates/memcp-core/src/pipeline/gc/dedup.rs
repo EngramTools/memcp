@@ -111,10 +111,11 @@ impl DedupWorker {
 
                 match self.store.merge_duplicate(&existing_id, &job.memory_id, source_info).await {
                     Ok(()) => {
-                        // Update dedup merge count metric
+                        // Update dedup merge count metric (DB-level) and Prometheus counter
                         if let Err(e) = self.store.increment_dedup_merges().await {
                             tracing::warn!(error = %e, "Failed to increment dedup merge counter");
                         }
+                        metrics::counter!("memcp_dedup_merges_total").increment(1);
                         tracing::info!(
                             new_id = %job.memory_id,
                             existing_id = %existing_id,

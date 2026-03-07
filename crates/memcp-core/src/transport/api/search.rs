@@ -113,6 +113,7 @@ pub async fn search_handler(
     };
 
     if raw_hits.is_empty() {
+        metrics::histogram!("memcp_search_results_returned").record(0.0_f64);
         let output = json!({
             "results": [],
             "next_cursor": serde_json::Value::Null,
@@ -228,6 +229,10 @@ pub async fn search_handler(
     }).collect();
 
     let total = results.len();
+
+    // Record histogram of search results returned per request.
+    metrics::histogram!("memcp_search_results_returned").record(total as f64);
+
     let output = json!({
         "results": results,
         "next_cursor": next_cursor,
