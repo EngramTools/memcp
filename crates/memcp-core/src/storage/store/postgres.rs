@@ -1288,6 +1288,32 @@ impl PostgresMemoryStore {
         rows.iter().map(row_to_memory).collect()
     }
 
+    /// Get recent memories that haven't been enriched yet (no 'enriched' tag).
+    ///
+    /// Used by the enrichment daemon worker to find candidates for retroactive
+    /// neighbor-based tag enrichment. Returns the most recently created memories first,
+    /// so new memories get enriched before older ones.
+    pub async fn get_unenriched_memories(&self, limit: i64) -> Result<Vec<crate::store::Memory>, MemcpError> {
+        let rows = sqlx::query(
+            "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
+             extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
+             event_time, event_time_precision, project \
+             FROM memories \
+             WHERE deleted_at IS NULL \
+               AND embedding_status = 'complete' \
+               AND NOT (tags @> '[\"enriched\"]'::jsonb) \
+             ORDER BY created_at DESC \
+             LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to fetch unenriched memories: {}", e)))?;
+
+        rows.iter().map(row_to_memory).collect()
+    }
+
     /// Return embedding statistics grouped by status and by model.
     ///
     /// Returns:

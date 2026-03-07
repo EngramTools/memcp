@@ -31,6 +31,8 @@ use crate::query_intelligence::ollama::OllamaQueryIntelligenceProvider;
 use crate::query_intelligence::openai::OpenAIQueryIntelligenceProvider;
 use crate::store::postgres::PostgresMemoryStore;
 use crate::curation::{self, create_curation_provider};
+use crate::enrichment::create_enrichment_provider;
+use crate::enrichment::worker::run_enrichment;
 use crate::summarization::create_summarization_provider;
 
 /// Main daemon entry point.
@@ -410,6 +412,42 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         );
     } else {
         tracing::info!("Curation disabled via config");
+    }
+
+    // 8.65. Spawn enrichment worker if enabled
+    if config.enrichment.enabled {
+        if let Some(enrichment_provider) = create_enrichment_provider(&config.query_intelligence) {
+            let enrichment_store = store.clone();
+            let enrichment_config = config.enrichment.clone();
+            // Use a watch channel for shutdown signaling (matches run_enrichment signature)
+            let (enrichment_shutdown_tx, enrichment_shutdown_rx) = tokio::sync::watch::channel(false);
+            tokio::spawn(async move {
+                if let Err(e) = run_enrichment(
+                    enrichment_store,
+                    enrichment_provider,
+                    enrichment_config,
+                    enrichment_shutdown_rx,
+                )
+                .await
+                {
+                    tracing::error!(error = %e, "Enrichment worker failed");
+                }
+            });
+            // Note: enrichment_shutdown_tx is intentionally held here; dropping it would
+            // immediately signal shutdown. We keep it alive for the process lifetime.
+            // In practice the daemon exits via process shutdown, not this channel.
+            std::mem::forget(enrichment_shutdown_tx);
+            tracing::info!(
+                sweep_interval_secs = config.enrichment.sweep_interval_secs,
+                batch_limit = config.enrichment.batch_limit,
+                neighbor_depth = config.enrichment.neighbor_depth,
+                "Enrichment worker started"
+            );
+        } else {
+            tracing::info!("Enrichment enabled but no QI provider configured — skipping");
+        }
+    } else {
+        tracing::debug!("Enrichment disabled via config (set enrichment.enabled = true to enable)");
     }
 
     // 8.7. Spawn promotion sweep worker if multi-model is configured
