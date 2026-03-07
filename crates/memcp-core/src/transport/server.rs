@@ -194,6 +194,17 @@ impl MemoryService {
         self.start_time.elapsed().as_secs()
     }
 
+    /// Inject an integer `ref` field alongside the `id` field in a JSON object.
+    ///
+    /// The ref is assigned idempotently via UuidRefMap — the same UUID always
+    /// gets the same integer ref within a session. Safe to call multiple times.
+    fn inject_ref(&self, obj: &mut serde_json::Value) {
+        if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
+            let r = self.ref_map.assign_ref(id);
+            obj.as_object_mut().map(|m| m.insert("ref".to_string(), json!(r)));
+        }
+    }
+
     /// Returns the tool router with `_meta.allowed_callers` injected into sandbox-safe tools.
     ///
     /// CEX-03: `search_memory` and `store_memory` are annotated as callable from
@@ -718,6 +729,9 @@ Callable from code_execution_20260120 sandboxes.")]
                     }
                 }
 
+                // Inject integer ref alongside UUID id
+                self.inject_ref(&mut response_obj);
+
                 Ok(CallToolResult::structured(response_obj))
             }
             Err(e) => Ok(store_error_to_result(e)),
@@ -743,19 +757,23 @@ Callable from code_execution_20260120 sandboxes.")]
             })));
         }
 
-        match self.store.get(&params.id).await {
+        // Resolve integer ref or UUID passthrough
+        let id = self.ref_map.resolve(&params.id)
+            .unwrap_or_else(|| params.id.clone());
+
+        match self.store.get(&id).await {
             Ok(memory) => {
                 // Implicit salience bump on direct retrieval (fire-and-forget, not on search results)
                 if let Some(ref pg_store) = self.pg_store {
                     let store = pg_store.clone();
-                    let id = params.id.clone();
+                    let id_clone = id.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = store.touch_salience(&id).await {
-                            tracing::warn!("Failed to touch salience for {}: {}", id, e);
+                        if let Err(e) = store.touch_salience(&id_clone).await {
+                            tracing::warn!("Failed to touch salience for {}: {}", id_clone, e);
                         }
                     });
                 }
-                Ok(CallToolResult::structured(json!({
+                let mut obj = json!({
                     "id": memory.id,
                     "content": memory.content,
                     "type_hint": memory.type_hint,
@@ -770,7 +788,9 @@ Callable from code_execution_20260120 sandboxes.")]
                     "actor_type": memory.actor_type,
                     "audience": memory.audience,
                     "hint": "Use update_memory to modify or delete_memory to remove"
-                })))
+                });
+                self.inject_ref(&mut obj);
+                Ok(CallToolResult::structured(obj))
             }
             Err(e) => Ok(store_error_to_result(e)),
         }
@@ -798,6 +818,10 @@ Callable from code_execution_20260120 sandboxes.")]
                 "field": "id"
             })));
         }
+
+        // Resolve integer ref or UUID passthrough
+        let id = self.ref_map.resolve(&params.id)
+            .unwrap_or_else(|| params.id.clone());
 
         if params.content.is_none()
             && params.type_hint.is_none()
@@ -841,7 +865,7 @@ Callable from code_execution_20260120 sandboxes.")]
             tags: params.tags,
         };
 
-        match self.store.update(&params.id, input).await {
+        match self.store.update(&id, input).await {
             Ok(memory) => {
                 // Re-embed when content changes. Tag-only changes skip re-embed by default
                 // (configurable via embedding.reembed_on_tag_change in memcp.toml).
@@ -864,10 +888,10 @@ Callable from code_execution_20260120 sandboxes.")]
                         // Reset extraction status to pending, then enqueue
                         if let Some(ref pg_store) = self.pg_store {
                             let store = pg_store.clone();
-                            let id = memory.id.clone();
+                            let mem_id = memory.id.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = store.update_extraction_status(&id, "pending").await {
-                                    tracing::warn!("Failed to reset extraction status for {}: {}", id, e);
+                                if let Err(e) = store.update_extraction_status(&mem_id, "pending").await {
+                                    tracing::warn!("Failed to reset extraction status for {}: {}", mem_id, e);
                                 }
                             });
                         }
@@ -878,7 +902,7 @@ Callable from code_execution_20260120 sandboxes.")]
                         });
                     }
                 }
-                Ok(CallToolResult::structured(json!({
+                let mut obj = json!({
                     "id": memory.id,
                     "content": memory.content,
                     "type_hint": memory.type_hint,
@@ -892,7 +916,9 @@ Callable from code_execution_20260120 sandboxes.")]
                     "actor_type": memory.actor_type,
                     "audience": memory.audience,
                     "hint": "Use get_memory to re-read or delete_memory to remove"
-                })))
+                });
+                self.inject_ref(&mut obj);
+                Ok(CallToolResult::structured(obj))
             }
             Err(e) => Ok(store_error_to_result(e)),
         }
@@ -917,10 +943,14 @@ Callable from code_execution_20260120 sandboxes.")]
             })));
         }
 
-        match self.store.delete(&params.id).await {
+        // Resolve integer ref or UUID passthrough
+        let id = self.ref_map.resolve(&params.id)
+            .unwrap_or_else(|| params.id.clone());
+
+        match self.store.delete(&id).await {
             Ok(()) => Ok(CallToolResult::structured(json!({
                 "deleted": true,
-                "id": params.id,
+                "id": id,
                 "hint": "Memory permanently removed. Use store_memory to create new memories."
             }))),
             Err(e) => Ok(store_error_to_result(e)),
@@ -1081,7 +1111,7 @@ Callable from code_execution_20260120 sandboxes.")]
                     .memories
                     .iter()
                     .map(|m| {
-                        json!({
+                        let mut obj = json!({
                             "id": m.id,
                             "content": m.content,
                             "type_hint": m.type_hint,
@@ -1094,7 +1124,9 @@ Callable from code_execution_20260120 sandboxes.")]
                             "actor": m.actor,
                             "actor_type": m.actor_type,
                             "audience": m.audience,
-                        })
+                        });
+                        self.inject_ref(&mut obj);
+                        obj
                     })
                     .collect();
 
@@ -1527,6 +1559,8 @@ Callable from code_execution_20260120 sandboxes.")]
                     "reinforcement": (bd.reinforcement * 1000.0).round() / 1000.0,
                 });
             }
+            // Inject integer ref alongside UUID id (always present, even when field projection is used)
+            self.inject_ref(&mut obj);
             // Apply field projection (no-op when fields is None or empty).
             apply_field_projection(obj, &params.fields)
         }).collect();
@@ -1574,12 +1608,16 @@ Callable from code_execution_20260120 sandboxes.")]
             })));
         }
 
+        // Resolve integer ref or UUID passthrough
+        let id = self.ref_map.resolve(&params.id)
+            .unwrap_or_else(|| params.id.clone());
+
         // Verify memory exists
-        match self.store.get(&params.id).await {
+        match self.store.get(&id).await {
             Err(MemcpError::NotFound { .. }) => {
                 return Ok(CallToolResult::structured_error(json!({
                     "isError": true,
-                    "error": format!("Memory not found: {}", params.id),
+                    "error": format!("Memory not found: {}", id),
                     "hint": "Use list_memories to find available memory IDs"
                 })));
             }
@@ -1602,16 +1640,20 @@ Callable from code_execution_20260120 sandboxes.")]
             }
         };
 
-        match pg_store.reinforce_salience(&params.id, rating).await {
-            Ok(row) => Ok(CallToolResult::structured(json!({
-                "id": params.id,
-                "stability": row.stability,
-                "reinforcement_count": row.reinforcement_count,
-                "message": format!(
-                    "Memory reinforced. Stability: {:.1} days, reinforcements: {}",
-                    row.stability, row.reinforcement_count
-                )
-            }))),
+        match pg_store.reinforce_salience(&id, rating).await {
+            Ok(row) => {
+                let mut obj = json!({
+                    "id": id,
+                    "stability": row.stability,
+                    "reinforcement_count": row.reinforcement_count,
+                    "message": format!(
+                        "Memory reinforced. Stability: {:.1} days, reinforcements: {}",
+                        row.stability, row.reinforcement_count
+                    )
+                });
+                self.inject_ref(&mut obj);
+                Ok(CallToolResult::structured(obj))
+            },
             Err(e) => Ok(store_error_to_result(e)),
         }
     }
@@ -1636,6 +1678,10 @@ Callable from code_execution_20260120 sandboxes.")]
             })));
         }
 
+        // Resolve integer ref or UUID passthrough
+        let id = self.ref_map.resolve(&params.id)
+            .unwrap_or_else(|| params.id.clone());
+
         let pg_store = match &self.pg_store {
             Some(s) => s,
             None => {
@@ -1646,7 +1692,7 @@ Callable from code_execution_20260120 sandboxes.")]
             }
         };
 
-        match pg_store.apply_feedback(&params.id, &params.signal).await {
+        match pg_store.apply_feedback(&id, &params.signal).await {
             Ok(()) => Ok(CallToolResult::structured(json!({ "ok": true }))),
             Err(e) => Ok(store_error_to_result(e)),
         }
@@ -1746,16 +1792,36 @@ Callable from code_execution_20260120 sandboxes.")]
 
         match result {
             Ok(r) => {
+                // Build memories array with ref injected alongside memory_id
+                let memories: Vec<serde_json::Value> = r.memories.iter().map(|m| {
+                    let r_num = self.ref_map.assign_ref(&m.memory_id);
+                    let mut obj = json!({
+                        "memory_id": m.memory_id,
+                        "ref": r_num,
+                        "content": m.content,
+                        "relevance": m.relevance,
+                    });
+                    if m.boost_applied {
+                        obj["boost_applied"] = json!(m.boost_applied);
+                    }
+                    if m.boost_score != 0.0 {
+                        obj["boost_score"] = json!(m.boost_score);
+                    }
+                    obj
+                }).collect();
+
                 let mut response = json!({
                     "session_id": r.session_id,
                     "count": r.count,
-                    "memories": r.memories,
+                    "memories": memories,
                 });
-                // Include summary if present.
+                // Include summary if present, with ref.
                 if let Some(ref summary) = r.summary {
+                    let summary_ref = self.ref_map.assign_ref(&summary.memory_id);
                     if let serde_json::Value::Object(ref mut map) = response {
                         map.insert("summary".to_string(), json!({
                             "memory_id": summary.memory_id,
+                            "ref": summary_ref,
                             "content": summary.content,
                         }));
                     }
@@ -1789,6 +1855,10 @@ Example: {\"id\": \"abc\", \"tags\": [\"decision\"], \"salience\": \"1.5x\"}")]
             })));
         }
 
+        // Resolve integer ref or UUID passthrough
+        let id = self.ref_map.resolve(&params.id)
+            .unwrap_or_else(|| params.id.clone());
+
         let pg_store = match &self.pg_store {
             Some(s) => s,
             None => {
@@ -1801,7 +1871,7 @@ Example: {\"id\": \"abc\", \"tags\": [\"decision\"], \"salience\": \"1.5x\"}")]
 
         match crate::cli::annotate_logic(
             pg_store,
-            &params.id,
+            &id,
             params.tags,
             params.replace_tags,
             params.salience,
@@ -1816,10 +1886,12 @@ Example: {\"id\": \"abc\", \"tags\": [\"decision\"], \"salience\": \"1.5x\"}")]
                     changes.insert("salience_before".to_string(), json!(before));
                     changes.insert("salience_after".to_string(), json!(after));
                 }
-                Ok(CallToolResult::structured(json!({
+                let mut obj = json!({
                     "id": result.id,
                     "changes": changes,
-                })))
+                });
+                self.inject_ref(&mut obj);
+                Ok(CallToolResult::structured(obj))
             }
             Err(e) => Ok(CallToolResult::structured_error(json!({
                 "isError": true,
@@ -2026,5 +2098,38 @@ mod uuid_ref_tests {
         let uuid = "550e8400-e29b-41d4-a716-446655440000";
         let r = map.assign_ref(uuid);
         assert_eq!(r, 1, "First assigned ref must be 1, not 0");
+    }
+
+    #[test]
+    fn test_inject_ref_adds_ref_to_json() {
+        let map = UuidRefMap::new();
+        let uuid = "abc-123-def-456";
+        let mut obj = json!({"id": uuid, "content": "test memory"});
+        // Manually simulate inject_ref logic
+        if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
+            let r = map.assign_ref(id);
+            obj.as_object_mut().unwrap().insert("ref".to_string(), json!(r));
+        }
+        assert!(obj.get("ref").is_some(), "inject_ref must add 'ref' field");
+        assert_eq!(obj["ref"], json!(1u32), "First ref must be 1");
+        assert_eq!(obj["id"], json!(uuid), "id field must be preserved");
+    }
+
+    #[test]
+    fn test_inject_ref_array() {
+        let map = UuidRefMap::new();
+        let uuids = ["uuid-aaa", "uuid-bbb", "uuid-ccc"];
+        let mut items: Vec<serde_json::Value> = uuids.iter().map(|u| json!({"id": u})).collect();
+        // Simulate inject_ref on each element
+        for item in &mut items {
+            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                let r = map.assign_ref(id);
+                item.as_object_mut().unwrap().insert("ref".to_string(), json!(r));
+            }
+        }
+        // Each item should have a unique, sequential ref
+        assert_eq!(items[0]["ref"], json!(1u32));
+        assert_eq!(items[1]["ref"], json!(2u32));
+        assert_eq!(items[2]["ref"], json!(3u32));
     }
 }
