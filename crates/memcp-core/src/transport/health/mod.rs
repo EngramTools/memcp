@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+use tower_http::trace::TraceLayer;
 
 use crate::config::{Config, ResourceCapsConfig};
 use crate::embedding::{EmbeddingProvider, EmbeddingJob};
@@ -73,18 +74,27 @@ pub async fn status_handler(State(state): State<AppState>) -> (StatusCode, Json<
     let is_ready = state.ready.load(Ordering::Acquire);
     let uptime = state.started_at.elapsed().as_secs();
 
-    // Check DB connectivity and gather resource counts
-    let (db_status, memory_count, db_conn_count) = if let Some(ref store) = state.store {
+    // Check DB connectivity and gather resource counts + pool breakdown
+    let (db_status, memory_count, db_conn_count, pool_active, pool_idle) = if let Some(ref store) = state.store {
         // Quick connectivity check via pool
         let pool = store.pool();
         let pool_size = pool.size() as u64;
+        let idle = pool.num_idle() as u64;
+        let active = pool_size.saturating_sub(idle);
 
         match store.count_live_memories().await {
-            Ok(count) => ("ok", Some(count as u64), Some(pool_size)),
-            Err(_) => ("degraded", None, Some(pool_size)),
+            Ok(count) => ("ok", Some(count as u64), Some(pool_size), Some(active), Some(idle)),
+            Err(_) => ("degraded", None, Some(pool_size), Some(active), Some(idle)),
         }
     } else {
-        ("down", None, None)
+        ("down", None, None, None, None)
+    };
+
+    // Pending embedding count — real-time backlog visible to operators
+    let pending_embeddings: Option<i64> = if let Some(ref store) = state.store {
+        store.count_pending_embeddings().await.ok()
+    } else {
+        None
     };
 
     // Check HNSW index presence
@@ -106,6 +116,13 @@ pub async fn status_handler(State(state): State<AppState>) -> (StatusCode, Json<
     // Embeddings status: ok if ready (daemon loaded model), degraded otherwise
     let embeddings_status = if is_ready { "ok" } else { "degraded" };
 
+    // Model name: derive from embedding config (local_model or openai_model depending on provider)
+    let model_name = if state.config.embedding.provider == "openai" {
+        state.config.embedding.openai_model.clone()
+    } else {
+        state.config.embedding.local_model.clone()
+    };
+
     let overall = if db_status == "ok" && is_ready {
         "ok"
     } else if is_ready {
@@ -117,9 +134,19 @@ pub async fn status_handler(State(state): State<AppState>) -> (StatusCode, Json<
     let resp = serde_json::json!({
         "status": overall,
         "components": {
-            "db": db_status,
-            "embeddings": embeddings_status,
-            "hnsw": hnsw_status,
+            "db": {
+                "status": db_status,
+                "pool_active": pool_active,
+                "pool_idle": pool_idle,
+            },
+            "embeddings": {
+                "status": embeddings_status,
+                "pending": pending_embeddings,
+                "model": model_name,
+            },
+            "hnsw": {
+                "status": hnsw_status,
+            },
         },
         "resources": {
             "memories": {
@@ -151,14 +178,33 @@ pub async fn status_handler(State(state): State<AppState>) -> (StatusCode, Json<
 /// Non-fatal: if bind fails, logs a warning and returns rather than crashing the daemon.
 /// Orchestrators should wait for /health to return 200 before sending traffic.
 pub async fn serve(addr: SocketAddr, state: AppState) {
-    let api_routes = crate::transport::api::router();
+    // Apply per-endpoint rate limits, then wrap with metrics middleware.
+    // /health, /status, and /metrics are NOT in api_routes — they are never metered.
+    let api_routes = crate::transport::api::router(&state.config.rate_limit)
+        .layer(axum::middleware::from_fn(
+            crate::transport::metrics::metrics_middleware,
+        ));
 
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/status", get(status_handler))
         .route("/metrics", get(crate::transport::metrics::metrics_handler))
         .merge(api_routes)
-        .with_state(state);
+        .with_state(state)
+        // TraceLayer is the outermost layer — every HTTP request gets a span with
+        // request_id, method, and endpoint for structured log correlation.
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|req: &axum::http::Request<_>| {
+                    let request_id = uuid::Uuid::new_v4().to_string();
+                    tracing::info_span!(
+                        "http_request",
+                        request_id = %request_id,
+                        method = %req.method(),
+                        endpoint = %req.uri().path(),
+                    )
+                }),
+        );
 
     tracing::info!(%addr, "Health HTTP server starting");
 
