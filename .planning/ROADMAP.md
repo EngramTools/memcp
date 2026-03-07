@@ -488,7 +488,13 @@ Plans:
 
 ## Phase 10.1: Stress & Load Testing
 - **Goal**: Load test all core operations under simulated multi-tenant conditions. Establish capacity numbers and known breaking points.
-- **Status**: Not planned
+- **Status**: Planned
+- **Plans:** 3 plans
+
+Plans:
+- [ ] 10.1-01-PLAN.md — Load test types, corpus seeding, metrics, and report generation [Wave 1]
+- [ ] 10.1-02-PLAN.md — Concurrent HTTP client driver and CLI binary [Wave 2, depends on 01]
+- [ ] 10.1-03-PLAN.md — Full matrix run, capacity report, and user review checkpoint [Wave 3, depends on 02]
 - **Depends on**: Phase 10
 - **Success Criteria**:
   1. Concurrent store/search benchmark at 10, 100, 1000 ops/sec
