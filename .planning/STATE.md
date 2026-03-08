@@ -3,24 +3,25 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 10.1-01-PLAN.md
-last_updated: "2026-03-08T00:05:18.486Z"
+stopped_at: Completed 10.1-02-PLAN.md
+last_updated: "2026-03-08T00:40:00.000Z"
 progress:
   total_phases: 50
   completed_phases: 26
   total_plans: 113
-  completed_plans: 85
-  percent: 77
+  completed_plans: 86
+  percent: 76
 ---
 
 # Project State
 
 ## Current Phase
-Phase 10.1-stress-load-testing — IN PROGRESS (1/3 plans done)
+Phase 10.1-stress-load-testing — IN PROGRESS (2/3 plans done)
 
-Progress: [████████░░] 85/110 plans (77%)
+Progress: [████████░░] 86/110 plans (78%)
 
 ## Active Context
+- Last completed: Phase 10.1-02 — Concurrent HTTP Client Driver + CLI Binary (run_workload with Semaphore, 8-endpoint coverage, clap CLI binary with paired raw/rate-limited runs, JSON+Markdown reports)
 - Last completed: Phase 10.1-01 — Load Test Library Foundation (LoadTestConfig/LoadTestReport types, corpus seeder with batch SQL + random unit vectors, report generation with Markdown/JSON + baseline regression, 15 unit tests)
 - Last completed: Phase 10-05 — Integration Tests for Metrics + Rate Limiting (metrics_test.rs + rate_limit_test.rs, 11 new tests, fixed axum v0.7 path param bug)
 - Last completed: Phase 10-04 — Gap Closure (discover_rps/delete_rps/export_rps in RateLimitConfig, worker metrics: enrichment, promotion, curation, temporal, discover histogram)
@@ -46,11 +47,17 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 **Current focus:** Phase 10.1 — Stress & Load Testing
 
 ## Session Continuity
-Last session: 2026-03-07T23:58:00.000Z
-Stopped at: Completed 10.1-01-PLAN.md
-Resume file: .planning/phases/10.1-stress-load-testing/10.1-01-SUMMARY.md
+Last session: 2026-03-08T00:40:00.000Z
+Stopped at: Completed 10.1-02-PLAN.md
+Resume file: .planning/phases/10.1-stress-load-testing/10.1-02-SUMMARY.md
 
 ## Accumulated Context
+
+### Phase 10.1-02 Decisions
+- Phase 10.1-02: Write op cycle falls back to store when no IDs available — ensures write_pct is always honoured even at test start
+- Phase 10.1-02: Recall uses first=true (queryless) to avoid embed_provider dependency in load test binary
+- Phase 10.1-02: Non-global Prometheus recorder (build_recorder() per run) avoids panic when multiple runs execute in the same process
+- Phase 10.1-02: Paired raw/rate-limited runs by default; --no-rate-limit disables rate limits for raw-only measurement
 
 ### Phase 10.1-01 Decisions
 - Phase 10.1-01: Use random unit vectors (NOT zero vectors) for synthetic embeddings — zero vectors produce degenerate cosine similarity (always 0.0), making search benchmarks meaningless
