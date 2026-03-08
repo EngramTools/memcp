@@ -8,6 +8,7 @@
 //! - `metrics`: Aggregates raw RequestResult data into per-endpoint stats
 //! - `report`: Generates JSON + Markdown reports with baseline regression detection
 
+pub mod client;
 pub mod corpus;
 pub mod metrics;
 pub mod report;
