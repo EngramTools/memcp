@@ -1,0 +1,88 @@
+{
+  "timestamp": "2026-03-08T00:32:59.481149Z",
+  "git_sha": "9f65719",
+  "mode": "raw",
+  "corpus_size": 10000,
+  "concurrency": 500,
+  "rw_ratio": "80/20",
+  "duration_secs": 455.594972791,
+  "total_ops": 50000,
+  "ops_per_sec": 109.74660166616246,
+  "error_rate": 0.49616,
+  "per_endpoint": {
+    "/v1/recall": {
+      "total_ops": 10000,
+      "error_count": 1655,
+      "p50_ms": 1248,
+      "p95_ms": 30524,
+      "p99_ms": 31904,
+      "mean_ms": 6487,
+      "max_ms": 61983
+    },
+    "/v1/search": {
+      "total_ops": 10000,
+      "error_count": 1458,
+      "p50_ms": 668,
+      "p95_ms": 30293,
+      "p99_ms": 30877,
+      "mean_ms": 4999,
+      "max_ms": 32225
+    },
+    "/v1/update": {
+      "total_ops": 2294,
+      "error_count": 290,
+      "p50_ms": 1256,
+      "p95_ms": 30263,
+      "p99_ms": 31117,
+      "mean_ms": 4721,
+      "max_ms": 32751
+    },
+    "/v1/store": {
+      "total_ops": 3112,
+      "error_count": 777,
+      "p50_ms": 1173,
+      "p95_ms": 30684,
+      "p99_ms": 31054,
+      "mean_ms": 8738,
+      "max_ms": 32171
+    },
+    "/v1/delete": {
+      "total_ops": 2298,
+      "error_count": 243,
+      "p50_ms": 968,
+      "p95_ms": 30238,
+      "p99_ms": 31478,
+      "mean_ms": 4598,
+      "max_ms": 61132
+    },
+    "/v1/annotate": {
+      "total_ops": 2296,
+      "error_count": 385,
+      "p50_ms": 914,
+      "p95_ms": 30325,
+      "p99_ms": 31781,
+      "mean_ms": 4599,
+      "max_ms": 61316
+    },
+    "/v1/export": {
+      "total_ops": 10000,
+      "error_count": 10000,
+      "p50_ms": 1228,
+      "p95_ms": 30213,
+      "p99_ms": 30650,
+      "mean_ms": 4903,
+      "max_ms": 31476
+    },
+    "/v1/discover": {
+      "total_ops": 10000,
+      "error_count": 10000,
+      "p50_ms": 12,
+      "p95_ms": 240,
+      "p99_ms": 525,
+      "mean_ms": 51,
+      "max_ms": 1422
+    }
+  },
+  "baseline_regression": null,
+  "fly_tier_recommendation": "Enterprise (performance-8x)\n\nRequires Fly Postgres Standard-16 (1000 connection limit)"
+}

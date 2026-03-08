@@ -1,0 +1,88 @@
+{
+  "timestamp": "2026-03-08T01:02:49.236002Z",
+  "git_sha": "9f65719",
+  "mode": "rate-limited",
+  "corpus_size": 1000,
+  "concurrency": 500,
+  "rw_ratio": "20/80",
+  "duration_secs": 30.734376542,
+  "total_ops": 50000,
+  "ops_per_sec": 1626.8428263600076,
+  "error_rate": 0.99568,
+  "per_endpoint": {
+    "/v1/update": {
+      "total_ops": 27,
+      "error_count": 20,
+      "p50_ms": 30023,
+      "p95_ms": 30171,
+      "p99_ms": 30197,
+      "mean_ms": 24620,
+      "max_ms": 30197
+    },
+    "/v1/discover": {
+      "total_ops": 2500,
+      "error_count": 2500,
+      "p50_ms": 2,
+      "p95_ms": 16,
+      "p99_ms": 62,
+      "mean_ms": 4,
+      "max_ms": 212
+    },
+    "/v1/export": {
+      "total_ops": 2500,
+      "error_count": 2500,
+      "p50_ms": 2,
+      "p95_ms": 16,
+      "p99_ms": 110,
+      "mean_ms": 136,
+      "max_ms": 30043
+    },
+    "/v1/store": {
+      "total_ops": 39908,
+      "error_count": 39868,
+      "p50_ms": 1,
+      "p95_ms": 15,
+      "p99_ms": 81,
+      "mean_ms": 53,
+      "max_ms": 30261
+    },
+    "/v1/recall": {
+      "total_ops": 2500,
+      "error_count": 2436,
+      "p50_ms": 2,
+      "p95_ms": 30003,
+      "p99_ms": 30120,
+      "mean_ms": 1730,
+      "max_ms": 30279
+    },
+    "/v1/delete": {
+      "total_ops": 35,
+      "error_count": 25,
+      "p50_ms": 30031,
+      "p95_ms": 30218,
+      "p99_ms": 30226,
+      "mean_ms": 27547,
+      "max_ms": 30226
+    },
+    "/v1/annotate": {
+      "total_ops": 30,
+      "error_count": 22,
+      "p50_ms": 30019,
+      "p95_ms": 30196,
+      "p99_ms": 30326,
+      "mean_ms": 24178,
+      "max_ms": 30326
+    },
+    "/v1/search": {
+      "total_ops": 2500,
+      "error_count": 2413,
+      "p50_ms": 2,
+      "p95_ms": 323,
+      "p99_ms": 30031,
+      "mean_ms": 1367,
+      "max_ms": 30260
+    }
+  },
+  "baseline_regression": null,
+  "fly_tier_recommendation": "Enterprise (performance-8x)\n\nRequires Fly Postgres Standard-16 (1000 connection limit)"
+}

@@ -1,0 +1,88 @@
+{
+  "timestamp": "2026-03-08T00:20:52.568618Z",
+  "git_sha": "9f65719",
+  "mode": "raw",
+  "corpus_size": 1000,
+  "concurrency": 500,
+  "rw_ratio": "80/20",
+  "duration_secs": 90.310014084,
+  "total_ops": 50000,
+  "ops_per_sec": 553.6484575618992,
+  "error_rate": 0.42258,
+  "per_endpoint": {
+    "/v1/annotate": {
+      "total_ops": 2444,
+      "error_count": 217,
+      "p50_ms": 148,
+      "p95_ms": 616,
+      "p99_ms": 30048,
+      "mean_ms": 685,
+      "max_ms": 60126
+    },
+    "/v1/store": {
+      "total_ops": 2669,
+      "error_count": 204,
+      "p50_ms": 151,
+      "p95_ms": 30050,
+      "p99_ms": 30146,
+      "mean_ms": 2487,
+      "max_ms": 30205
+    },
+    "/v1/update": {
+      "total_ops": 2443,
+      "error_count": 65,
+      "p50_ms": 245,
+      "p95_ms": 671,
+      "p99_ms": 30093,
+      "mean_ms": 786,
+      "max_ms": 30426
+    },
+    "/v1/export": {
+      "total_ops": 10000,
+      "error_count": 10000,
+      "p50_ms": 78,
+      "p95_ms": 239,
+      "p99_ms": 30090,
+      "mean_ms": 935,
+      "max_ms": 30187
+    },
+    "/v1/recall": {
+      "total_ops": 10000,
+      "error_count": 311,
+      "p50_ms": 165,
+      "p95_ms": 544,
+      "p99_ms": 30114,
+      "mean_ms": 1165,
+      "max_ms": 60187
+    },
+    "/v1/delete": {
+      "total_ops": 2444,
+      "error_count": 34,
+      "p50_ms": 146,
+      "p95_ms": 381,
+      "p99_ms": 30067,
+      "mean_ms": 636,
+      "max_ms": 60133
+    },
+    "/v1/search": {
+      "total_ops": 10000,
+      "error_count": 298,
+      "p50_ms": 81,
+      "p95_ms": 287,
+      "p99_ms": 30096,
+      "mean_ms": 990,
+      "max_ms": 30201
+    },
+    "/v1/discover": {
+      "total_ops": 10000,
+      "error_count": 10000,
+      "p50_ms": 1,
+      "p95_ms": 20,
+      "p99_ms": 67,
+      "mean_ms": 4,
+      "max_ms": 175
+    }
+  },
+  "baseline_regression": null,
+  "fly_tier_recommendation": "Enterprise (performance-8x)\n\nRequires Fly Postgres Standard-16 (1000 connection limit)"
+}

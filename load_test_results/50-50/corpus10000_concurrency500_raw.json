@@ -1,0 +1,88 @@
+{
+  "timestamp": "2026-03-08T00:54:39.704112Z",
+  "git_sha": "9f65719",
+  "mode": "raw",
+  "corpus_size": 10000,
+  "concurrency": 500,
+  "rw_ratio": "50/50",
+  "duration_secs": 426.781669375,
+  "total_ops": 50000,
+  "ops_per_sec": 117.15592207421292,
+  "error_rate": 0.3572,
+  "per_endpoint": {
+    "/v1/annotate": {
+      "total_ops": 5829,
+      "error_count": 721,
+      "p50_ms": 981,
+      "p95_ms": 30332,
+      "p99_ms": 31266,
+      "mean_ms": 4542,
+      "max_ms": 61563
+    },
+    "/v1/delete": {
+      "total_ops": 5835,
+      "error_count": 661,
+      "p50_ms": 742,
+      "p95_ms": 30424,
+      "p99_ms": 31807,
+      "mean_ms": 4622,
+      "max_ms": 62127
+    },
+    "/v1/export": {
+      "total_ops": 6500,
+      "error_count": 6500,
+      "p50_ms": 1029,
+      "p95_ms": 30215,
+      "p99_ms": 30947,
+      "mean_ms": 4111,
+      "max_ms": 32017
+    },
+    "/v1/recall": {
+      "total_ops": 6000,
+      "error_count": 838,
+      "p50_ms": 918,
+      "p95_ms": 30492,
+      "p99_ms": 31394,
+      "mean_ms": 5312,
+      "max_ms": 62703
+    },
+    "/v1/discover": {
+      "total_ops": 6500,
+      "error_count": 6500,
+      "p50_ms": 6,
+      "p95_ms": 231,
+      "p99_ms": 573,
+      "mean_ms": 45,
+      "max_ms": 1775
+    },
+    "/v1/store": {
+      "total_ops": 7034,
+      "error_count": 1160,
+      "p50_ms": 785,
+      "p95_ms": 30524,
+      "p99_ms": 31172,
+      "mean_ms": 5992,
+      "max_ms": 32412
+    },
+    "/v1/update": {
+      "total_ops": 6302,
+      "error_count": 768,
+      "p50_ms": 1091,
+      "p95_ms": 30428,
+      "p99_ms": 31243,
+      "mean_ms": 4880,
+      "max_ms": 33974
+    },
+    "/v1/search": {
+      "total_ops": 6000,
+      "error_count": 712,
+      "p50_ms": 496,
+      "p95_ms": 30292,
+      "p99_ms": 30959,
+      "mean_ms": 4096,
+      "max_ms": 32285
+    }
+  },
+  "baseline_regression": null,
+  "fly_tier_recommendation": "Enterprise (performance-8x)\n\nRequires Fly Postgres Standard-16 (1000 connection limit)"
+}

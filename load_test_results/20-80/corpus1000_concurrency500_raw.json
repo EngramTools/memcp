@@ -1,0 +1,88 @@
+{
+  "timestamp": "2026-03-08T01:02:18.463726Z",
+  "git_sha": "9f65719",
+  "mode": "raw",
+  "corpus_size": 1000,
+  "concurrency": 500,
+  "rw_ratio": "20/80",
+  "duration_secs": 60.2404035,
+  "total_ops": 50000,
+  "ops_per_sec": 830.0077206488168,
+  "error_rate": 0.12304,
+  "per_endpoint": {
+    "/v1/recall": {
+      "total_ops": 2500,
+      "error_count": 44,
+      "p50_ms": 51,
+      "p95_ms": 126,
+      "p99_ms": 30038,
+      "mean_ms": 585,
+      "max_ms": 30195
+    },
+    "/v1/export": {
+      "total_ops": 2500,
+      "error_count": 2500,
+      "p50_ms": 38,
+      "p95_ms": 78,
+      "p99_ms": 30012,
+      "mean_ms": 497,
+      "max_ms": 30191
+    },
+    "/v1/annotate": {
+      "total_ops": 9893,
+      "error_count": 406,
+      "p50_ms": 82,
+      "p95_ms": 506,
+      "p99_ms": 1931,
+      "mean_ms": 398,
+      "max_ms": 30085
+    },
+    "/v1/delete": {
+      "total_ops": 9894,
+      "error_count": 83,
+      "p50_ms": 36,
+      "p95_ms": 97,
+      "p99_ms": 370,
+      "mean_ms": 318,
+      "max_ms": 30083
+    },
+    "/v1/store": {
+      "total_ops": 10320,
+      "error_count": 402,
+      "p50_ms": 36,
+      "p95_ms": 245,
+      "p99_ms": 30116,
+      "mean_ms": 1273,
+      "max_ms": 30199
+    },
+    "/v1/update": {
+      "total_ops": 9893,
+      "error_count": 175,
+      "p50_ms": 138,
+      "p95_ms": 720,
+      "p99_ms": 2705,
+      "mean_ms": 510,
+      "max_ms": 30274
+    },
+    "/v1/discover": {
+      "total_ops": 2500,
+      "error_count": 2500,
+      "p50_ms": 0,
+      "p95_ms": 1,
+      "p99_ms": 33,
+      "mean_ms": 1,
+      "max_ms": 171
+    },
+    "/v1/search": {
+      "total_ops": 2500,
+      "error_count": 42,
+      "p50_ms": 24,
+      "p95_ms": 64,
+      "p99_ms": 30017,
+      "mean_ms": 531,
+      "max_ms": 30191
+    }
+  },
+  "baseline_regression": null,
+  "fly_tier_recommendation": "Enterprise (performance-8x)\n\nRequires Fly Postgres Standard-16 (1000 connection limit)"
+}

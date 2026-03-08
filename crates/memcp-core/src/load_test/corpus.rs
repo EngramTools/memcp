@@ -185,30 +185,51 @@ pub async fn seed_corpus(pool: &PgPool, count: usize, num_projects: usize) -> Re
             .unwrap_or_else(|_| ProgressStyle::default_bar()),
     );
 
+    // memory_embeddings schema (current):
+    //   id TEXT NOT NULL, memory_id TEXT NOT NULL, model_name TEXT NOT NULL,
+    //   model_version TEXT NOT NULL, dimension INT NOT NULL,
+    //   embedding vector, is_current BOOL NOT NULL DEFAULT true,
+    //   created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
+    //   tier TEXT NOT NULL DEFAULT 'fast'
+    //
+    // 7 params per row: id, memory_id, model_name, model_version, dimension, embedding, tier
+    // Fixed: is_current=true, created_at/updated_at=NOW()
+    // 50 rows × 7 params = 350 params/batch — well within pg 65535 limit.
     const EMBED_BATCH: usize = 50;
     for chunk in inserted_ids.chunks(EMBED_BATCH) {
         let mut value_clauses: Vec<String> = Vec::with_capacity(chunk.len());
+        let mut embed_ids: Vec<String> = Vec::with_capacity(chunk.len());
         let mut memory_ids: Vec<String> = Vec::with_capacity(chunk.len());
         let mut vectors: Vec<String> = Vec::with_capacity(chunk.len());
 
         for (j, id) in chunk.iter().enumerate() {
-            let p = j * 3 + 1;
-            value_clauses.push(format!("(${}, ${}::vector, ${})", p, p + 1, p + 2));
+            let p = j * 7 + 1;
+            value_clauses.push(format!(
+                "(${}::text, ${}::text, ${}::text, ${}::text, ${}::int, ${}::vector, ${}::text, true, NOW(), NOW())",
+                p, p + 1, p + 2, p + 3, p + 4, p + 5, p + 6
+            ));
+            embed_ids.push(uuid::Uuid::new_v4().to_string());
             memory_ids.push(id.clone());
             vectors.push(format_pg_vector(&random_unit_vector()));
         }
 
         let sql = format!(
-            "INSERT INTO memory_embeddings (memory_id, embedding, model_name) VALUES {}",
+            "INSERT INTO memory_embeddings \
+             (id, memory_id, model_name, model_version, dimension, embedding, tier, is_current, created_at, updated_at) \
+             VALUES {}",
             value_clauses.join(", ")
         );
 
         let mut q = sqlx::query(&sql);
         for j in 0..chunk.len() {
             q = q
+                .bind(&embed_ids[j])
                 .bind(&memory_ids[j])
+                .bind("load-test-synthetic")
+                .bind("1.0")
+                .bind(384i32)
                 .bind(&vectors[j])
-                .bind("load-test-synthetic");
+                .bind("fast");
         }
         q.execute(pool)
             .await
@@ -219,14 +240,8 @@ pub async fn seed_corpus(pool: &PgPool, count: usize, num_projects: usize) -> Re
 
     embed_pb.finish_with_message("embeddings seeded");
 
-    // Update tsvector for all seeded memories in case trigger didn't fire on raw INSERT
-    sqlx::query(
-        "UPDATE memories SET search_tsv = to_tsvector('english', content) \
-         WHERE search_tsv IS NULL AND source = 'load-test-batch'",
-    )
-    .execute(pool)
-    .await
-    .map_err(|e| anyhow::anyhow!("tsvector update failed: {}", e))?;
+    // The memories table uses a functional GIN index on to_tsvector('english', content)
+    // rather than a materialized search_tsv column — no explicit tsvector update needed.
 
     let elapsed = start.elapsed().as_secs_f64();
     println!(

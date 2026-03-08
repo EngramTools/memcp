@@ -1,0 +1,88 @@
+{
+  "timestamp": "2026-03-08T01:07:49.266601Z",
+  "git_sha": "9f65719",
+  "mode": "rate-limited",
+  "corpus_size": 10000,
+  "concurrency": 500,
+  "rw_ratio": "20/80",
+  "duration_secs": 30.654372875,
+  "total_ops": 50000,
+  "ops_per_sec": 1631.0886607886607,
+  "error_rate": 0.99672,
+  "per_endpoint": {
+    "/v1/delete": {
+      "total_ops": 15,
+      "error_count": 6,
+      "p50_ms": 814,
+      "p95_ms": 30005,
+      "p99_ms": 30005,
+      "mean_ms": 12376,
+      "max_ms": 30005
+    },
+    "/v1/store": {
+      "total_ops": 39959,
+      "error_count": 39930,
+      "p50_ms": 3,
+      "p95_ms": 18,
+      "p99_ms": 102,
+      "mean_ms": 70,
+      "max_ms": 30401
+    },
+    "/v1/update": {
+      "total_ops": 13,
+      "error_count": 7,
+      "p50_ms": 811,
+      "p95_ms": 30005,
+      "p99_ms": 30005,
+      "mean_ms": 11906,
+      "max_ms": 30005
+    },
+    "/v1/search": {
+      "total_ops": 2500,
+      "error_count": 2444,
+      "p50_ms": 3,
+      "p95_ms": 30002,
+      "p99_ms": 30074,
+      "mean_ms": 1745,
+      "max_ms": 30350
+    },
+    "/v1/discover": {
+      "total_ops": 2500,
+      "error_count": 2500,
+      "p50_ms": 3,
+      "p95_ms": 19,
+      "p99_ms": 90,
+      "mean_ms": 6,
+      "max_ms": 181
+    },
+    "/v1/export": {
+      "total_ops": 2500,
+      "error_count": 2500,
+      "p50_ms": 3,
+      "p95_ms": 18,
+      "p99_ms": 166,
+      "mean_ms": 222,
+      "max_ms": 30090
+    },
+    "/v1/recall": {
+      "total_ops": 2500,
+      "error_count": 2439,
+      "p50_ms": 3,
+      "p95_ms": 30002,
+      "p99_ms": 30075,
+      "mean_ms": 1794,
+      "max_ms": 30447
+    },
+    "/v1/annotate": {
+      "total_ops": 13,
+      "error_count": 10,
+      "p50_ms": 744,
+      "p95_ms": 30005,
+      "p99_ms": 30005,
+      "mean_ms": 9645,
+      "max_ms": 30005
+    }
+  },
+  "baseline_regression": null,
+  "fly_tier_recommendation": "Enterprise (performance-8x)\n\nRequires Fly Postgres Standard-16 (1000 connection limit)"
+}
