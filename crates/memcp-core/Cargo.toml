@@ -51,6 +51,7 @@ unicode-segmentation = "1.11"
 rusqlite = { version = "0.31", features = ["bundled"] }
 zip = "2"
 sha2 = "0.10"
+rand = "0.8"
 
 [dev-dependencies]
 tempfile = "3"
@@ -62,3 +63,7 @@ metrics-exporter-prometheus = "0.18"
 name = "benchmark"
 path = "src/bin/benchmark.rs"
 required-features = ["local-embed"]
+
+[[bin]]
+name = "load-test"
+path = "src/bin/load_test.rs"

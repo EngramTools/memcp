@@ -2249,6 +2249,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "notify",
  "pgvector",
+ "rand 0.8.5",
  "regex",
  "reqwest",
  "rmcp",
