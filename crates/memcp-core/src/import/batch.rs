@@ -91,10 +91,12 @@ pub async fn batch_insert_memories(
                 id, content, type_hint, source, tags, created_at, updated_at,
                 access_count, embedding_status, actor, actor_type, audience,
                 content_hash, parent_id, chunk_index, total_chunks,
-                event_time, event_time_precision, project
+                event_time, event_time_precision, project,
+                trust_level, session_id, agent_role, metadata
              ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, 0, $8, $9, 'agent', 'global',
-                $10, NULL, NULL, NULL, NULL, NULL, $11
+                $10, NULL, NULL, NULL, NULL, NULL, $11,
+                0.4, NULL, NULL, '{}'::jsonb
              )
              ON CONFLICT (id) DO NOTHING",
         )

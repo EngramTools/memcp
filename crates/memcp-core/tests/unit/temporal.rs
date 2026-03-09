@@ -35,6 +35,10 @@ fn make_memory(created_at: DateTime<Utc>, event_time: Option<DateTime<Utc>>) -> 
         event_time,
         event_time_precision: None,
         project: None,
+        trust_level: 0.5,
+        session_id: None,
+        agent_role: None,
+        metadata: serde_json::json!({}),
     }
 }
 

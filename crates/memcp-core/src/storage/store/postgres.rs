@@ -657,7 +657,8 @@ impl MemoryStore for PostgresMemoryStore {
                  m.extracted_entities, m.extracted_facts, m.extraction_status, \
                  m.is_consolidated_original, m.consolidated_into, m.actor, m.actor_type, m.audience, \
                  m.parent_id, m.chunk_index, m.total_chunks, \
-                 m.event_time, m.event_time_precision, m.project \
+                 m.event_time, m.event_time_precision, m.project, \
+                 m.trust_level, m.session_id, m.agent_role, m.metadata \
                  FROM idempotency_keys ik \
                  JOIN memories m ON m.id = ik.memory_id \
                  WHERE ik.key = $1 AND ik.expires_at > NOW() AND m.deleted_at IS NULL",
@@ -683,7 +684,8 @@ impl MemoryStore for PostgresMemoryStore {
                  extracted_entities, extracted_facts, extraction_status, \
                  is_consolidated_original, consolidated_into, actor, actor_type, audience, \
                  parent_id, chunk_index, total_chunks, \
-                 event_time, event_time_precision, project \
+                 event_time, event_time_precision, project, \
+                 trust_level, session_id, agent_role, metadata \
                  FROM memories \
                  WHERE content_hash = $1 AND deleted_at IS NULL \
                    AND created_at > NOW() - ($2 || ' seconds')::interval \
@@ -713,9 +715,13 @@ impl MemoryStore for PostgresMemoryStore {
             .as_ref()
             .map(|t| serde_json::json!(t));
 
+        // Resolve trust level: explicit value takes precedence, else infer from source/actor_type
+        let resolved_trust = input.trust_level.unwrap_or_else(|| crate::store::infer_trust_level(&input.source, &input.actor_type));
+        let empty_metadata = serde_json::json!({});
+
         sqlx::query(
-            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks, event_time, event_time_precision, project) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
+            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks, event_time, event_time_precision, project, trust_level, session_id, agent_role, metadata) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)",
         )
         .bind(&id)
         .bind(&input.content)
@@ -734,6 +740,10 @@ impl MemoryStore for PostgresMemoryStore {
         .bind(&input.event_time)
         .bind(&input.event_time_precision)
         .bind(&input.project)
+        .bind(resolved_trust)
+        .bind(&input.session_id)
+        .bind(&input.agent_role)
+        .bind(&empty_metadata)
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to insert memory: {}", e)))?;
@@ -787,8 +797,6 @@ impl MemoryStore for PostgresMemoryStore {
             }
         }
 
-        let resolved_trust = input.trust_level.unwrap_or_else(|| crate::store::infer_trust_level(&input.source, &input.actor_type));
-
         Ok(Memory {
             id,
             content: input.content,
@@ -826,7 +834,8 @@ impl MemoryStore for PostgresMemoryStore {
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
-             event_time, event_time_precision, project \
+             event_time, event_time_precision, project, \
+             trust_level, session_id, agent_role, metadata \
              FROM memories WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(id)
@@ -881,6 +890,10 @@ impl MemoryStore for PostgresMemoryStore {
             sets.push(format!("tags = ${}", param_idx));
             param_idx += 1;
         }
+        if input.trust_level.is_some() {
+            sets.push(format!("trust_level = ${}", param_idx));
+            param_idx += 1;
+        }
 
         let sql = format!(
             "UPDATE memories SET {} WHERE id = ${}",
@@ -903,6 +916,9 @@ impl MemoryStore for PostgresMemoryStore {
             let tags_json = serde_json::json!(tags);
             q = q.bind(tags_json);
         }
+        if let Some(trust) = input.trust_level {
+            q = q.bind(trust);
+        }
         q = q.bind(id); // final $N = id
 
         q.execute(&self.pool)
@@ -914,7 +930,8 @@ impl MemoryStore for PostgresMemoryStore {
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
-             event_time, event_time_precision, project \
+             event_time, event_time_precision, project, \
+             trust_level, session_id, agent_role, metadata \
              FROM memories WHERE id = $1",
         )
         .bind(id)
@@ -998,6 +1015,14 @@ impl MemoryStore for PostgresMemoryStore {
             conditions.push(format!("(project = ${} OR project IS NULL)", param_idx));
             param_idx += 1;
         }
+        if filter.session_id.is_some() {
+            conditions.push(format!("session_id = ${}", param_idx));
+            param_idx += 1;
+        }
+        if filter.agent_role.is_some() {
+            conditions.push(format!("agent_role = ${}", param_idx));
+            param_idx += 1;
+        }
 
         let where_clause = if conditions.is_empty() {
             String::new()
@@ -1009,7 +1034,8 @@ impl MemoryStore for PostgresMemoryStore {
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
-             event_time, event_time_precision, project \
+             event_time, event_time_precision, project, \
+             trust_level, session_id, agent_role, metadata \
              FROM memories {} ORDER BY created_at DESC, id ASC LIMIT ${}",
             where_clause, param_idx
         );
@@ -1046,6 +1072,12 @@ impl MemoryStore for PostgresMemoryStore {
         }
         if let Some(ref project) = filter.project {
             q = q.bind(project);
+        }
+        if let Some(ref session_id) = filter.session_id {
+            q = q.bind(session_id);
+        }
+        if let Some(ref agent_role) = filter.agent_role {
+            q = q.bind(agent_role);
         }
         // Fetch one extra to determine if there are more pages
         q = q.bind(limit + 1);
@@ -1310,7 +1342,8 @@ impl PostgresMemoryStore {
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
-             event_time, event_time_precision, project \
+             event_time, event_time_precision, project, \
+             trust_level, session_id, agent_role, metadata \
              FROM memories WHERE embedding_status IN ('pending', 'failed') AND deleted_at IS NULL \
              ORDER BY created_at ASC LIMIT $1",
         )
@@ -1332,7 +1365,8 @@ impl PostgresMemoryStore {
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
-             event_time, event_time_precision, project \
+             event_time, event_time_precision, project, \
+             trust_level, session_id, agent_role, metadata \
              FROM memories \
              WHERE deleted_at IS NULL \
                AND embedding_status = 'complete' \
@@ -1780,6 +1814,7 @@ impl PostgresMemoryStore {
                     m.actor, m.actor_type, m.audience, \
                     m.parent_id, m.chunk_index, m.total_chunks, \
                     m.event_time, m.event_time_precision, m.project, \
+                    m.trust_level, m.session_id, m.agent_role, m.metadata, \
                     (1 - (me.embedding <=> $1)) AS similarity \
              FROM memories m \
              JOIN memory_embeddings me ON me.memory_id = m.id \
@@ -1903,7 +1938,8 @@ impl PostgresMemoryStore {
              last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
-             event_time, event_time_precision, project \
+             event_time, event_time_precision, project, \
+             trust_level, session_id, agent_role, metadata \
              FROM memories WHERE id = ANY($1) AND deleted_at IS NULL",
         )
         .bind(ids)
@@ -3548,6 +3584,7 @@ impl PostgresMemoryStore {
              m.is_consolidated_original, m.consolidated_into, \
              m.actor, m.actor_type, m.audience, m.parent_id, m.chunk_index, m.total_chunks, \
              m.event_time, m.event_time_precision, m.project, \
+             m.trust_level, m.session_id, m.agent_role, m.metadata, \
              COALESCE(s.stability, 1.0) as sal_stability, \
              COALESCE(s.difficulty, 5.0) as sal_difficulty, \
              COALESCE(s.reinforcement_count, 0) as sal_reinforcement_count, \
@@ -3567,6 +3604,7 @@ impl PostgresMemoryStore {
              m.is_consolidated_original, m.consolidated_into, \
              m.actor, m.actor_type, m.audience, m.parent_id, m.chunk_index, m.total_chunks, \
              m.event_time, m.event_time_precision, m.project, \
+             m.trust_level, m.session_id, m.agent_role, m.metadata, \
              COALESCE(s.stability, 1.0) as sal_stability, \
              COALESCE(s.difficulty, 5.0) as sal_difficulty, \
              COALESCE(s.reinforcement_count, 0) as sal_reinforcement_count, \
@@ -3987,7 +4025,8 @@ impl PostgresMemoryStore {
              extracted_entities, extracted_facts, extraction_status, \
              is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
-             event_time, event_time_precision, project \
+             event_time, event_time_precision, project, \
+             trust_level, session_id, agent_role, metadata \
              FROM memories WHERE parent_id = $1 AND deleted_at IS NULL \
              ORDER BY chunk_index ASC",
         )
@@ -4126,6 +4165,7 @@ impl PostgresMemoryStore {
                     m.actor, m.actor_type, m.audience, \
                     m.parent_id, m.chunk_index, m.total_chunks, \
                     m.event_time, m.event_time_precision, m.project, \
+                    m.trust_level, m.session_id, m.agent_role, m.metadata, \
                     (1.0 - (me.embedding <=> $1)) AS similarity \
              FROM memories m \
              JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = TRUE \
@@ -4144,6 +4184,7 @@ impl PostgresMemoryStore {
                     m.actor, m.actor_type, m.audience, \
                     m.parent_id, m.chunk_index, m.total_chunks, \
                     m.event_time, m.event_time_precision, m.project, \
+                    m.trust_level, m.session_id, m.agent_role, m.metadata, \
                     (1.0 - (me.embedding <=> $1)) AS similarity \
              FROM memories m \
              JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = TRUE \
@@ -4213,6 +4254,61 @@ impl PostgresMemoryStore {
         .execute(&self.pool)
         .await
         .map_err(|e| crate::errors::MemcpError::Storage(format!("Failed to update event_time for {}: {}", id, e)))?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Provenance: trust level update with audit trail
+    // -----------------------------------------------------------------------
+
+    /// Update a memory's trust level and append an audit entry to metadata.trust_history.
+    ///
+    /// Reads the current trust_level first, then atomically updates trust_level and appends
+    /// a history entry `{from, to, reason, at}` to the JSONB metadata field.
+    pub async fn update_trust_level(
+        &self,
+        id: &str,
+        new_trust: f32,
+        reason: &str,
+    ) -> Result<(), MemcpError> {
+        // Read current trust_level
+        let current_trust: f32 = sqlx::query_scalar(
+            "SELECT trust_level FROM memories WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to read trust_level: {}", e)))?
+        .ok_or_else(|| MemcpError::NotFound { id: id.to_string() })?;
+
+        // Build the history entry
+        let now = Utc::now();
+        let history_entry = serde_json::json!({
+            "from": current_trust,
+            "to": new_trust,
+            "reason": reason,
+            "at": now.to_rfc3339(),
+        });
+
+        // Atomic update: set trust_level + append to metadata.trust_history
+        sqlx::query(
+            "UPDATE memories SET \
+             trust_level = $2, \
+             metadata = jsonb_set(\
+                 metadata, \
+                 '{trust_history}', \
+                 COALESCE(metadata->'trust_history', '[]'::jsonb) || $3::jsonb \
+             ), \
+             updated_at = NOW() \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(new_trust)
+        .bind(history_entry)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to update trust_level: {}", e)))?;
+
         Ok(())
     }
 }
