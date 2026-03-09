@@ -572,7 +572,7 @@ Plans:
 - **Goal**: Write tests for P1/P2 coverage gaps identified in AUDIT.md. Final quality gate before open-source release.
 - **Status**: Planned
 - **Depends on**: Phase 11 (System Review — provides AUDIT.md gap catalog)
-- **Plans:** 2 plans
+- **Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 16-01-PLAN.md — Unit tests: salience rank(), dedup_parent_chunks(), extraction prompt, consolidation helpers

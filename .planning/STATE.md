@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 11-system-review 11-03-PLAN.md
-last_updated: "2026-03-09T16:01:37.545Z"
+stopped_at: Completed 16-test-coverage 16-01-PLAN.md
+last_updated: "2026-03-09T20:47:00Z"
 progress:
   total_phases: 52
   completed_phases: 30
   total_plans: 122
-  completed_plans: 96
-  percent: 79
+  completed_plans: 97
+  percent: 80
 ---
 
 # Project State
@@ -21,6 +21,7 @@ Phase 14.7-benchmark-schema-isolation — DONE (already implemented, marked retr
 Progress: [████████░░] 93/118 plans (79%)
 
 ## Active Context
+- Last completed: Phase 16-01 -- Pure-Logic Unit Test Coverage (15 new tests for rank(), dedup_parent_chunks(), build_extraction_prompt(), build_synthesis_prompt(), concatenate_memories())
 - Last completed: Phase 11-01 -- Targeted Pre-Audit Code Quality Fixes (clippy hard error fixed, stale wave0_07_5/wave0_07_7 features removed, locomo test ignored with diagnosis, logging TODO resolved, workspace→project rename verified complete)
 - Last completed: Phase 10.2-03 -- CLI Integration + Trust Workload Orchestrator + Security Report (--profile trust, run_trust_workload_cli orchestrator, SecurityReport type, generate_security_section, post_run_audit, e2e test)
 - Last completed: Phase 14.7 -- Benchmark Schema Isolation (new_with_schema(), drop_schema(), --keep-schema CLI flag, SET search_path after_connect hook)
@@ -424,6 +425,7 @@ Resume file: None
 - Phase 07.2: Adopted #[sqlx::test] for ephemeral per-test databases; store-level tests moved from MCP-over-stdio to direct store calls
 - Phase 07.3 (Sidecar Status Indicator) added — daemon health visibility via CLI/skill/status line, inserted before Phase 08
 - Phase 10.2 inserted after Phase 10: Load test trust-weighted retrieval, quarantine, and curation features (URGENT)
+- Phase 16 added: Test Coverage — write tests for P1/P2 gaps identified in AUDIT.md before open-source release. New open-source fork cutoff moved from Phase 11 to Phase 16.
 
 ### Key Decisions
 - Phase 11.1-02: MCP source default changed from 'default' to 'mcp' for provenance correctness
