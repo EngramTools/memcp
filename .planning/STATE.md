@@ -2,25 +2,27 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-stopped_at: Completed 11.1-02-PLAN.md
-last_updated: "2026-03-09T03:20:56.053Z"
+status: in-progress
+stopped_at: Completed 11.2-02-PLAN.md
+last_updated: "2026-03-09T05:15:56.670Z"
 progress:
   total_phases: 51
   completed_phases: 28
   total_plans: 115
-  completed_plans: 89
-  percent: 79
+  completed_plans: 90
+  percent: 78
 ---
 
 # Project State
 
 ## Current Phase
-Phase 11.1-provenance-tagging — COMPLETE (2/2 plans done)
+Phase 11.2-trust-weighted-retrieval-curation-security — IN PROGRESS (2/3 plans done)
 
-Progress: [████████░░] 89/113 plans (79%)
+Progress: [████████░░] 90/115 plans (78%)
 
 ## Active Context
+- Last completed: Phase 11.2-02 -- Curation Security (Suspicious curation action with quarantine mechanics, algorithmic injection detection with trust-gated thresholds, 12 new tests)
+- Last completed: Phase 11.2-01 -- Trust-Weighted Retrieval (trust_weight in search scoring)
 - Last completed: Phase 11.1-02 -- Transport Layer Provenance (MCP/HTTP/CLI provenance fields, auto-store trust_level=0.3 + session_id promotion, source audit fixes mcp/cli defaults)
 - Last completed: Phase 11.1-01 -- Provenance Core Storage (migration 021 with trust_level/session_id/agent_role/metadata columns, infer_trust_level, update_trust_level with JSONB audit trail, 7 new tests, all SELECT/INSERT queries updated)
 - Last completed: Phase 10.1-03 — Load Test Suite Execution + Capacity Report (72-run matrix across 3 R/W profiles, CAPACITY_REPORT.md with Fly.io tier mapping, export bottleneck identified at 10k/cc=500, baseline saved)
@@ -50,8 +52,8 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 **Current focus:** Phase 11.1 — Provenance Tagging
 
 ## Session Continuity
-Last session: 2026-03-09T03:20:56.037Z
-Stopped at: Completed 11.1-02-PLAN.md
+Last session: 2026-03-09T05:15:56.651Z
+Stopped at: Completed 11.2-02-PLAN.md
 Resume file: None
 
 ## Accumulated Context
