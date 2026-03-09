@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 16-test-coverage 16-01-PLAN.md
-last_updated: "2026-03-09T20:47:00Z"
+stopped_at: Completed 16-test-coverage 16-02-PLAN.md
+last_updated: "2026-03-09T20:49:25Z"
 progress:
   total_phases: 52
   completed_phases: 30
   total_plans: 122
-  completed_plans: 97
+  completed_plans: 98
   percent: 80
 ---
 
@@ -21,6 +21,7 @@ Phase 14.7-benchmark-schema-isolation — DONE (already implemented, marked retr
 Progress: [████████░░] 93/118 plans (79%)
 
 ## Active Context
+- Last completed: Phase 16-02 -- Consolidation Similarity Tests (5 integration tests for find_similar_memories() — threshold filtering, self-exclusion, consolidated-original exclusion, limit enforcement)
 - Last completed: Phase 16-01 -- Pure-Logic Unit Test Coverage (15 new tests for rank(), dedup_parent_chunks(), build_extraction_prompt(), build_synthesis_prompt(), concatenate_memories())
 - Last completed: Phase 11-01 -- Targeted Pre-Audit Code Quality Fixes (clippy hard error fixed, stale wave0_07_5/wave0_07_7 features removed, locomo test ignored with diagnosis, logging TODO resolved, workspace→project rename verified complete)
 - Last completed: Phase 10.2-03 -- CLI Integration + Trust Workload Orchestrator + Security Report (--profile trust, run_trust_workload_cli orchestrator, SecurityReport type, generate_security_section, post_run_audit, e2e test)

@@ -572,11 +572,11 @@ Plans:
 - **Goal**: Write tests for P1/P2 coverage gaps identified in AUDIT.md. Final quality gate before open-source release.
 - **Status**: Planned
 - **Depends on**: Phase 11 (System Review — provides AUDIT.md gap catalog)
-- **Plans:** 1/2 plans executed
+- **Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 16-01-PLAN.md — Unit tests: salience rank(), dedup_parent_chunks(), extraction prompt, consolidation helpers
-- [ ] 16-02-PLAN.md — Integration tests: consolidation similarity (find_similar_memories with pgvector)
+- [x] 16-01-PLAN.md — Unit tests: salience rank(), dedup_parent_chunks(), extraction prompt, consolidation helpers
+- [x] 16-02-PLAN.md — Integration tests: consolidation similarity (find_similar_memories with pgvector)
 
 ---
 *Open-source fork cutoff: After Phase 16, fork memcp into a public MIT repo containing phases 01–16 (core memory server + test suite). Phase 12+ (auth, boosting, hosted features) stays in the private memcp repo (or engram repo) — never published to the public fork. See engram Phase 4.5 and /Users/ayoamadi/projects/engram/.planning/ROADMAP.md for strategy.*
