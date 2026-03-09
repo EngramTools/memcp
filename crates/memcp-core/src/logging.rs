@@ -83,9 +83,8 @@ pub fn init_logging(config: &Config) {
             .init();
     }
 
-    // TODO: Add file output layer if config.log_file is set
-    // This requires layering a file appender on top of the stderr layer
-    // For Phase 1, stderr-only is sufficient
+    // File-based logging is not yet implemented. When log_file is configured,
+    // we warn and fall back to stderr. Implementation deferred to a future phase.
     if config.log_file.is_some() {
         tracing::warn!(
             "log_file configuration is not yet implemented, logging to stderr only"
