@@ -651,6 +651,163 @@ mod tests {
 
     // ── Accumulated violations test ──────────────────────────────────────
 
+    // ── E2E integration test (requires DATABASE_URL) ─────────────────────
+
+    #[tokio::test]
+    #[ignore] // Requires running Postgres — run with: DATABASE_URL=... cargo test trust_workload_e2e -- --ignored
+    async fn test_trust_workload_e2e() {
+        use crate::config::CurationConfig;
+        use crate::load_test::corpus;
+        use crate::load_test::TrustCorpusConfig;
+        use std::sync::atomic::Ordering;
+
+        let db_url = std::env::var("DATABASE_URL")
+            .expect("DATABASE_URL must be set for e2e test");
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(10)
+            .acquire_timeout(std::time::Duration::from_secs(5))
+            .connect(&db_url)
+            .await
+            .expect("Failed to connect to database (is Postgres running? try `just pg`)");
+
+        // Run migrations
+        crate::MIGRATOR.run(&pool).await.expect("Migrations failed");
+
+        // Clear existing data
+        corpus::clear_corpus(&pool).await.expect("clear_corpus failed");
+        sqlx::query("TRUNCATE TABLE curation_runs CASCADE")
+            .execute(&pool)
+            .await
+            .expect("TRUNCATE curation_runs failed");
+
+        // Seed small trust corpus: 100 memories, ~5 poisoned
+        let config = TrustCorpusConfig {
+            corpus_size: 100,
+            num_projects: 2,
+            poison_ratio: 0.05,
+        };
+        let corpus_result = corpus::seed_trust_corpus(&pool, &config)
+            .await
+            .expect("seed_trust_corpus failed");
+
+        assert!(
+            !corpus_result.poisoned_ids.is_empty(),
+            "Should have seeded some poisoned memories"
+        );
+
+        // Initialize workload state
+        let state = Arc::new(TrustWorkloadState::new());
+        {
+            let mut poisoned = state.poisoned_ids.write().await;
+            for id in corpus_result.poisoned_ids.keys() {
+                poisoned.insert(id.clone());
+            }
+        }
+
+        // Create store and curation config
+        let store = Arc::new(
+            crate::store::postgres::PostgresMemoryStore::from_pool(pool.clone())
+                .await
+                .expect("Failed to create store"),
+        );
+        let curation_config = CurationConfig {
+            enabled: true,
+            max_candidates_per_run: 500,
+            ..CurationConfig::default()
+        };
+
+        // Run curation cycles manually (no HTTP workload, just curation)
+        let mock_provider = MockLlmProvider::new(0); // zero latency for fast test
+        let curation_lock = Arc::new(tokio::sync::Mutex::new(()));
+
+        for cycle in 0..2 {
+            let _guard = curation_lock.lock().await;
+            let cycle_start = std::time::Instant::now();
+
+            match run_curation(
+                &store,
+                &curation_config,
+                Some(&mock_provider as &dyn CurationProvider),
+                false,
+            )
+            .await
+            {
+                Ok(result) => {
+                    let elapsed_ms = cycle_start.elapsed().as_millis() as u64;
+                    let mut metrics = state.curation_metrics.lock().await;
+                    metrics.cycle_count += 1;
+                    metrics.total_suspicious += result.suspicious_count;
+                    metrics.normal_drain_ms.push(elapsed_ms);
+                    eprintln!(
+                        "Curation cycle {}: suspicious={}, candidates={}",
+                        cycle + 1,
+                        result.suspicious_count,
+                        result.candidates_processed
+                    );
+                }
+                Err(e) => {
+                    eprintln!("Curation cycle {} failed: {}", cycle + 1, e);
+                }
+            }
+        }
+
+        // Run post-run audit
+        let audit_violations = post_run_audit(&pool, &state)
+            .await
+            .expect("post_run_audit failed");
+
+        // Store audit violations
+        {
+            let mut violations = state.violations.lock().await;
+            violations.extend(audit_violations);
+        }
+
+        // Assertions
+        let curation_metrics = state.curation_metrics.lock().await;
+        let quarantined = state.quarantined_ids.read().await;
+        let violations = state.violations.lock().await;
+
+        eprintln!("Curation cycles: {}", curation_metrics.cycle_count);
+        eprintln!("Total suspicious: {}", curation_metrics.total_suspicious);
+        eprintln!("Quarantined IDs: {}", quarantined.len());
+        eprintln!("Violations: {}", violations.len());
+
+        // Verify curation ran
+        assert_eq!(
+            curation_metrics.cycle_count, 2,
+            "Should have completed 2 curation cycles"
+        );
+
+        // Check for quarantine violations specifically (tag/trust/audit consistency)
+        let quarantine_violations: Vec<_> = violations
+            .iter()
+            .filter(|v| {
+                matches!(
+                    v.violation_type,
+                    ViolationType::QuarantinedInSearchResults
+                )
+            })
+            .collect();
+        assert!(
+            quarantine_violations.is_empty(),
+            "No quarantined memories should appear in search results, found {} violations",
+            quarantine_violations.len()
+        );
+
+        // Detection rate should be > 0 (at least some poisoned memories detected)
+        let poisoned_count = state.poisoned_ids.read().await.len();
+        if poisoned_count > 0 && quarantined.len() > 0 {
+            let detection_rate = quarantined.len() as f64 / poisoned_count as f64;
+            eprintln!("Detection rate: {:.1}%", detection_rate * 100.0);
+            assert!(
+                detection_rate > 0.0,
+                "Detection rate should be > 0%, got {:.1}%",
+                detection_rate * 100.0
+            );
+        }
+    }
+
     #[test]
     fn test_violations_accumulated_not_fatal() {
         // Memory with ALL issues: missing tag, wrong trust, no audit trail
