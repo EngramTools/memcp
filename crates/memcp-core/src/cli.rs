@@ -895,7 +895,7 @@ pub async fn cmd_search(
         let results: Vec<serde_json::Value> = scored_hits
             .iter()
             .map(|h| {
-                let mut entry = format_memory_json(&h.memory, verbose || true);
+                let mut entry = format_memory_json(&h.memory, true);
                 if let Some(obj) = entry.as_object_mut() {
                     // Ensure id is always top-level (SCF-03)
                     obj.insert("id".to_string(), json!(h.memory.id));
