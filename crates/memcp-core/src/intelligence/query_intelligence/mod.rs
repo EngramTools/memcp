@@ -4,14 +4,6 @@
 //! Expansion generates alternative query terms; reranking scores search candidates.
 //! Feeds from transport/server + transport/ipc into intelligence/search/.
 
-/// Query intelligence provider trait and supporting types
-///
-/// Provides a pluggable interface for LLM-based query expansion and re-ranking.
-/// Supports Ollama (local, default, no API key) and OpenAI-compatible APIs.
-///
-/// Both features are disabled by default — set expansion_enabled or reranking_enabled
-/// in QueryIntelligenceConfig to opt in.
-
 pub mod ollama;
 pub mod openai;
 pub mod temporal;
@@ -94,6 +86,17 @@ pub struct RankedResult {
 pub trait QueryIntelligenceProvider: Send + Sync {
     /// Expand a query into variants and extract any temporal hints.
     async fn expand(&self, query: &str) -> Result<ExpandedQuery, QueryIntelligenceError>;
+
+    /// Expand with an explicit reference date (instead of Utc::now()).
+    /// Used by benchmarks where the "current date" is the question's date, not wall clock.
+    /// Default implementation delegates to expand() — override for date-aware expansion.
+    async fn expand_with_date(
+        &self,
+        query: &str,
+        _reference_date: &str,
+    ) -> Result<ExpandedQuery, QueryIntelligenceError> {
+        self.expand(query).await
+    }
 
     /// Decompose a query into sub-queries (multi-faceted) or variants (simple).
     ///

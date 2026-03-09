@@ -300,16 +300,16 @@ impl RecallEngine {
         // d. Fetch project summary (only when first=true).
         //    Not added to session_recalls — pinned summary always reappears.
         let summary = if first {
-            match self.store.fetch_project_summary(project).await? {
-                Some((id, content)) => Some(RecalledMemory {
+            self.store
+                .fetch_project_summary(project)
+                .await?
+                .map(|(id, content)| RecalledMemory {
                     memory_id: id,
                     content,
                     relevance: 1.0, // pinned, not relevance-ranked
                     boost_applied: false,
                     boost_score: 0.0,
-                }),
-                None => None,
-            }
+                })
         } else {
             None
         };

@@ -1,8 +1,8 @@
-/// Ollama query intelligence provider
-///
-/// Calls the Ollama /api/chat endpoint with structured JSON output schema.
-/// Supports both query expansion (with temporal hint extraction) and candidate re-ranking.
-/// No API key required — designed for self-hosted Ollama deployments.
+//! Ollama query intelligence provider
+//!
+//! Calls the Ollama /api/chat endpoint with structured JSON output schema.
+//! Supports both query expansion (with temporal hint extraction) and candidate re-ranking.
+//! No API key required — designed for self-hosted Ollama deployments.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

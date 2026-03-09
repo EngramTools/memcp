@@ -1,10 +1,10 @@
-/// Deterministic regex-based temporal hint parser
-///
-/// Parses natural language time expressions from query strings without any LLM call.
-/// Used as a fallback when expansion is disabled, and as a pre-filter to reduce
-/// the candidate set before vector similarity search.
-///
-/// All patterns are matched case-insensitively against the full query string.
+//! Deterministic regex-based temporal hint parser
+//!
+//! Parses natural language time expressions from query strings without any LLM call.
+//! Used as a fallback when expansion is disabled, and as a pre-filter to reduce
+//! the candidate set before vector similarity search.
+//!
+//! All patterns are matched case-insensitively against the full query string.
 
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use regex::Regex;
@@ -86,6 +86,45 @@ pub fn parse_temporal_hint(query: &str, now: DateTime<Utc>) -> Option<TimeRange>
         });
     }
 
+    // --- "N days/weeks/months/years ago" patterns ---
+    // Matches digit ("2 months ago") and word ("two months ago") forms
+    let n_ago_re =
+        Regex::new(r"(\w+)\s+(days?|weeks?|months?|years?)\s+ago").ok()?;
+    if let Some(cap) = n_ago_re.captures(&q) {
+        if let Some(n) = parse_number_word(&cap[1]) {
+            let unit = &cap[2];
+            let (after, before) = if unit.starts_with("day") {
+                // e.g. "3 days ago" → window from 3.5 days ago to 2.5 days ago
+                (now - Duration::days(n + 1), now - Duration::days(n - 1))
+            } else if unit.starts_with("week") {
+                // e.g. "two weeks ago" → window from (n+0.5)*7 to (n-0.5)*7 days ago
+                let center = n * 7;
+                (
+                    now - Duration::days(center + 4),
+                    now - Duration::days(center - 4),
+                )
+            } else if unit.starts_with("month") {
+                // e.g. "two months ago" → window from (n+0.5)*30 to (n-0.5)*30 days ago
+                let center = n * 30;
+                (
+                    now - Duration::days(center + 15),
+                    now - Duration::days(center - 15),
+                )
+            } else {
+                // years
+                let center = n * 365;
+                (
+                    now - Duration::days(center + 60),
+                    now - Duration::days(center - 60),
+                )
+            };
+            return Some(TimeRange {
+                after: Some(after),
+                before: Some(before),
+            });
+        }
+    }
+
     // --- absolute date patterns ---
 
     // "after YYYY-MM-DD"
@@ -140,6 +179,25 @@ pub fn parse_temporal_hint(query: &str, now: DateTime<Utc>) -> Option<TimeRange>
     }
 
     None
+}
+
+/// Parse a number word ("one"–"twelve") or digit string ("2", "10") into i64.
+fn parse_number_word(s: &str) -> Option<i64> {
+    match s.to_lowercase().as_str() {
+        "a" | "one" | "1" => Some(1),
+        "two" | "2" => Some(2),
+        "three" | "3" => Some(3),
+        "four" | "4" => Some(4),
+        "five" | "5" => Some(5),
+        "six" | "6" => Some(6),
+        "seven" | "7" => Some(7),
+        "eight" | "8" => Some(8),
+        "nine" | "9" => Some(9),
+        "ten" | "10" => Some(10),
+        "eleven" | "11" => Some(11),
+        "twelve" | "12" => Some(12),
+        other => other.parse::<i64>().ok(),
+    }
 }
 
 /// Convert a month name (English, case-insensitive) to its number (1–12).

@@ -1,7 +1,7 @@
-/// PostgreSQL-backed implementation of MemoryStore
-///
-/// Uses sqlx with PgPool for connection pooling and production-grade persistence.
-/// Supports optional migration execution on startup.
+//! PostgreSQL-backed implementation of MemoryStore
+//!
+//! Uses sqlx with PgPool for connection pooling and production-grade persistence.
+//! Supports optional migration execution on startup.
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -728,16 +728,16 @@ impl MemoryStore for PostgresMemoryStore {
         .bind(&input.type_hint)
         .bind(&input.source)
         .bind(&tags_json)     // JSONB — bind serde_json::Value directly
-        .bind(&now)           // TIMESTAMPTZ — bind DateTime<Utc> directly
-        .bind(&now)
+        .bind(now)           // TIMESTAMPTZ — bind DateTime<Utc> directly
+        .bind(now)
         .bind(&input.actor)
         .bind(&input.actor_type)
         .bind(&input.audience)
         .bind(&hash)          // content_hash for dedup
         .bind(&input.parent_id)
-        .bind(&input.chunk_index)
-        .bind(&input.total_chunks)
-        .bind(&input.event_time)
+        .bind(input.chunk_index)
+        .bind(input.total_chunks)
+        .bind(input.event_time)
         .bind(&input.event_time_precision)
         .bind(&input.project)
         .bind(resolved_trust)
@@ -901,7 +901,7 @@ impl MemoryStore for PostgresMemoryStore {
             param_idx
         );
 
-        let mut q = sqlx::query(&sql).bind(&now); // $1 = updated_at
+        let mut q = sqlx::query(&sql).bind(now); // $1 = updated_at
         if let Some(ref content) = input.content {
             q = q.bind(content);
         }
@@ -958,7 +958,7 @@ impl MemoryStore for PostgresMemoryStore {
     }
 
     async fn list(&self, filter: ListFilter) -> Result<ListResult, MemcpError> {
-        let limit = filter.limit.min(100).max(1);
+        let limit = filter.limit.clamp(1, 100);
 
         // Build WHERE clause with numbered PostgreSQL parameters
         let mut conditions: Vec<String> = vec!["deleted_at IS NULL".to_string()];
@@ -1272,7 +1272,7 @@ impl MemoryStore for PostgresMemoryStore {
         let _ = sqlx::query(
             "UPDATE memories SET last_accessed_at = $1, access_count = access_count + 1 WHERE id = $2",
         )
-        .bind(&now) // TIMESTAMPTZ — bind DateTime<Utc> directly
+        .bind(now) // TIMESTAMPTZ — bind DateTime<Utc> directly
         .bind(id)
         .execute(&self.pool)
         .await;
@@ -1286,6 +1286,7 @@ impl PostgresMemoryStore {
     ///
     /// The `tier` parameter identifies which embedding tier this belongs to
     /// (e.g., "fast" for local model, "quality" for API model).
+    #[allow(clippy::too_many_arguments)] // All params are semantically distinct; struct refactor deferred
     pub async fn insert_embedding(
         &self,
         id: &str,
@@ -1310,8 +1311,8 @@ impl PostgresMemoryStore {
         .bind(dimension)
         .bind(embedding)
         .bind(is_current)
-        .bind(&now)
-        .bind(&now)
+        .bind(now)
+        .bind(now)
         .bind(tier)
         .execute(&self.pool)
         .await
@@ -1623,7 +1624,7 @@ impl PostgresMemoryStore {
         .bind(difficulty as f32)
         .bind(reinforcement_count)
         .bind(last_reinforced_at)
-        .bind(&now)
+        .bind(now)
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to upsert salience: {}", e)))?;
@@ -1689,8 +1690,8 @@ impl PostgresMemoryStore {
         .bind(new_stability as f32)
         .bind(current.difficulty as f32)
         .bind(new_count)
-        .bind(&now)
-        .bind(&now)
+        .bind(now)
+        .bind(now)
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to reinforce salience: {}", e)))?;
@@ -1774,12 +1775,13 @@ impl PostgresMemoryStore {
 
         // Build WHERE conditions with numbered PostgreSQL parameters.
         // $1 is always the query embedding — build filter params starting at $2.
-        let mut conditions: Vec<String> = Vec::new();
         // Always filter for current embeddings on complete memories and exclude soft-deleted
-        conditions.push("me.is_current = true".to_string());
-        conditions.push("m.embedding_status = 'complete'".to_string());
-        conditions.push("m.deleted_at IS NULL".to_string());
-        conditions.push("(m.tags IS NULL OR NOT (m.tags @> '[\"suspicious\"]'::jsonb))".to_string());
+        let mut conditions: Vec<String> = vec![
+            "me.is_current = true".to_string(),
+            "m.embedding_status = 'complete'".to_string(),
+            "m.deleted_at IS NULL".to_string(),
+            "(m.tags IS NULL OR NOT (m.tags @> '[\"suspicious\"]'::jsonb))".to_string(),
+        ];
 
         let mut param_idx: u32 = 2; // $1 is reserved for query_embedding
 
@@ -1968,6 +1970,7 @@ impl PostgresMemoryStore {
     ///
     /// Salience re-ranking is NOT performed here — the server layer applies it
     /// after fetching salience data from the database.
+    #[allow(clippy::too_many_arguments)] // Search params map to distinct query axes; struct refactor deferred
     pub async fn hybrid_search(
         &self,
         query_text: &str,
@@ -2622,7 +2625,7 @@ impl PostgresMemoryStore {
         )
         .bind(&consolidated_id)
         .bind(content)
-        .bind(&now)
+        .bind(now)
         .execute(&mut *tx)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to insert consolidated memory: {}", e)))?;
@@ -2641,7 +2644,7 @@ impl PostgresMemoryStore {
             .bind(&consolidated_id)
             .bind(source_id)
             .bind(similarity as f32)  // REAL column — use f32
-            .bind(&now)
+            .bind(now)
             .execute(&mut *tx)
             .await
             .map_err(|e| MemcpError::Storage(format!("Failed to insert consolidation link: {}", e)))?;
@@ -3505,8 +3508,8 @@ impl PostgresMemoryStore {
         .bind(new_stability as f32)
         .bind(new_difficulty as f32)
         .bind(current.reinforcement_count)
-        .bind(&now)
-        .bind(&now)
+        .bind(now)
+        .bind(now)
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to apply feedback: {}", e)))?;
@@ -4317,7 +4320,7 @@ impl PostgresMemoryStore {
                     entry
                         .get("reason")
                         .and_then(|r| r.as_str())
-                        .map_or(false, |r| r.contains("quarantined"))
+                        .is_some_and(|r| r.contains("quarantined"))
                 })
             })
             .and_then(|entry| entry.get("from"))

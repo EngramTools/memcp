@@ -1,11 +1,11 @@
-/// Async embedding pipeline with bounded mpsc channel and background worker.
-///
-/// Non-blocking design: store_memory never waits for embedding completion.
-/// Failed embeddings are retried up to 3 times with exponential backoff (1s, 2s, 4s),
-/// then marked as failed for backfill on next startup.
-///
-/// Supports multi-tier embedding via EmbeddingRouter: each job specifies its target
-/// tier, and the worker uses the corresponding provider for that tier.
+//! Async embedding pipeline with bounded mpsc channel and background worker.
+//!
+//! Non-blocking design: store_memory never waits for embedding completion.
+//! Failed embeddings are retried up to 3 times with exponential backoff (1s, 2s, 4s),
+//! then marked as failed for backfill on next startup.
+//!
+//! Supports multi-tier embedding via EmbeddingRouter: each job specifies its target
+//! tier, and the worker uses the corresponding provider for that tier.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -276,7 +276,7 @@ pub async fn backfill(
                 completion_tx: None,
                 tier: "fast".to_string(),
             };
-            if let Err(_) = sender.try_send(job) {
+            if sender.try_send(job).is_err() {
                 tracing::warn!("Embedding queue full during backfill — some memories deferred");
                 return total_queued;
             }

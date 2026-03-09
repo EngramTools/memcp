@@ -1,8 +1,8 @@
-/// OpenAI-compatible query intelligence provider
-///
-/// Calls any OpenAI-compatible Chat Completions API with json_object response format.
-/// The base_url is configurable — supports OpenAI, Kimi Code API, and any compatible endpoint.
-/// Requires an API key.
+//! OpenAI-compatible query intelligence provider
+//!
+//! Calls any OpenAI-compatible Chat Completions API with json_object response format.
+//! The base_url is configurable — supports OpenAI, Kimi Code API, and any compatible endpoint.
+//! Requires an API key.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -179,6 +179,40 @@ impl OpenAIQueryIntelligenceProvider {
 
         Ok(content)
     }
+
+    /// Shared expansion logic used by both expand() and expand_with_date().
+    async fn expand_internal(
+        &self,
+        query: &str,
+        current_date: &str,
+    ) -> Result<ExpandedQuery, QueryIntelligenceError> {
+        let prompt = build_expansion_prompt(query, current_date);
+
+        let content = self.chat(prompt).await?;
+
+        let output: ExpandedQueryOutput = serde_json::from_str(&content).map_err(|e| {
+            QueryIntelligenceError::Generation(format!(
+                "Failed to parse expansion JSON from model output: {} (content: {})",
+                e, &content
+            ))
+        })?;
+
+        if output.variants.is_empty() {
+            return Err(QueryIntelligenceError::Generation(
+                format!("LLM returned no query variants (raw content: {})", &content),
+            ));
+        }
+
+        let time_range = output.time_range.map(|tr| TimeRange {
+            after: parse_datetime_opt(tr.after),
+            before: parse_datetime_opt(tr.before),
+        });
+
+        Ok(ExpandedQuery {
+            variants: output.variants,
+            time_range,
+        })
+    }
 }
 
 /// Parse an optional RFC-3339 string to DateTime<Utc>, returning None on failure.
@@ -255,32 +289,15 @@ impl QueryIntelligenceProvider for OpenAIQueryIntelligenceProvider {
 
     async fn expand(&self, query: &str) -> Result<ExpandedQuery, QueryIntelligenceError> {
         let current_date = Utc::now().format("%Y-%m-%d").to_string();
-        let prompt = build_expansion_prompt(query, &current_date);
+        self.expand_internal(query, &current_date).await
+    }
 
-        let content = self.chat(prompt).await?;
-
-        let output: ExpandedQueryOutput = serde_json::from_str(&content).map_err(|e| {
-            QueryIntelligenceError::Generation(format!(
-                "Failed to parse expansion JSON from model output: {} (content: {})",
-                e, &content
-            ))
-        })?;
-
-        if output.variants.is_empty() {
-            return Err(QueryIntelligenceError::Generation(
-                format!("LLM returned no query variants (raw content: {})", &content),
-            ));
-        }
-
-        let time_range = output.time_range.map(|tr| TimeRange {
-            after: parse_datetime_opt(tr.after),
-            before: parse_datetime_opt(tr.before),
-        });
-
-        Ok(ExpandedQuery {
-            variants: output.variants,
-            time_range,
-        })
+    async fn expand_with_date(
+        &self,
+        query: &str,
+        reference_date: &str,
+    ) -> Result<ExpandedQuery, QueryIntelligenceError> {
+        self.expand_internal(query, reference_date).await
     }
 
     async fn rerank(

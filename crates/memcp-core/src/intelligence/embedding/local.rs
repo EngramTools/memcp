@@ -1,8 +1,8 @@
-/// Local embedding provider using fastembed
-///
-/// Provides offline embedding generation using configurable fastembed models.
-/// No API key required — model weights are downloaded and cached locally.
-/// All CPU-bound fastembed calls are wrapped in spawn_blocking to avoid blocking async runtime.
+//! Local embedding provider using fastembed
+//!
+//! Provides offline embedding generation using configurable fastembed models.
+//! No API key required — model weights are downloaded and cached locally.
+//! All CPU-bound fastembed calls are wrapped in spawn_blocking to avoid blocking async runtime.
 
 use async_trait::async_trait;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};

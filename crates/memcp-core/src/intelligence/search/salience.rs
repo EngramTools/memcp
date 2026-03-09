@@ -1,14 +1,14 @@
-/// Salience scoring for memory re-ranking
-///
-/// Salience is a weighted sum of four independent dimensions, each independently
-/// min-max normalized across the result set before weighting:
-///   1. Recency   — exponential decay from last_updated
-///   2. Access    — log-scale access frequency
-///   3. Semantic  — cosine similarity from the query embedding (from RRF / vector search)
-///   4. Reinforce — FSRS retrievability (standalone formula, no external crate)
-///
-/// All scoring functions are pure — no I/O, no database writes.
-/// Decay is computed at query time only (never written back) — SRCH-05.
+//! Salience scoring for memory re-ranking
+//!
+//! Salience is a weighted sum of four independent dimensions, each independently
+//! min-max normalized across the result set before weighting:
+//!   1. Recency   — exponential decay from last_updated
+//!   2. Access    — log-scale access frequency
+//!   3. Semantic  — cosine similarity from the query embedding (from RRF / vector search)
+//!   4. Reinforce — FSRS retrievability (standalone formula, no external crate)
+//!
+//! All scoring functions are pure — no I/O, no database writes.
+//! Decay is computed at query time only (never written back) — SRCH-05.
 
 use crate::config::SalienceConfig;
 use crate::store::Memory;
@@ -137,7 +137,7 @@ impl<'a> SalienceScorer<'a> {
     /// 2. Normalize each dimension independently via min-max
     /// 3. Weighted sum: salience = w_r*recency + w_a*access + w_s*semantic + w_re*reinforce
     /// 4. Sort hits by salience descending
-    pub fn rank(&self, hits: &mut Vec<ScoredHit>, salience_inputs: &[SalienceInput]) {
+    pub fn rank(&self, hits: &mut [ScoredHit], salience_inputs: &[SalienceInput]) {
         if hits.is_empty() {
             return;
         }

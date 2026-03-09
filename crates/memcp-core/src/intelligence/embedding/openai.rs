@@ -1,9 +1,9 @@
-/// OpenAI embedding provider
-///
-/// Calls the OpenAI Embeddings API using reqwest.
-/// Model is configurable via EmbeddingConfig::openai_model.
-/// Defaults to text-embedding-3-small (1536 dimensions).
-/// Requires MEMCP_EMBEDDING__OPENAI_API_KEY env var or openai_api_key in config.
+//! OpenAI embedding provider
+//!
+//! Calls the OpenAI Embeddings API using reqwest.
+//! Model is configurable via EmbeddingConfig::openai_model.
+//! Defaults to text-embedding-3-small (1536 dimensions).
+//! Requires MEMCP_EMBEDDING__OPENAI_API_KEY env var or openai_api_key in config.
 
 use async_trait::async_trait;
 
