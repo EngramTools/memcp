@@ -75,17 +75,17 @@ async fn execute_curation(
     run_id: &str,
     dry_run: bool,
 ) -> Result<CurationResult, CurationError> {
-    // 4. Build clusters via embedding similarity
-    let clusters = build_clusters(store, candidates, config).await?;
+    // 4. Sort candidates by priority (P1 first, then P2, then Normal)
+    let mut sorted_candidates = candidates.to_vec();
+    sorted_candidates.sort_by_key(|(m, _)| priority_score(m));
 
-    // 5. Choose provider
+    // 5. Build clusters via embedding similarity (P1 seeds become cluster nuclei first)
+    let clusters = build_clusters(store, &sorted_candidates, config).await?;
+
+    // 6. Choose provider per-cluster based on priority
     let algorithmic = AlgorithmicCurator::new(config.clone());
-    let provider: &dyn CurationProvider = match llm_provider {
-        Some(p) => p,
-        None => &algorithmic,
-    };
 
-    // 6. Review clusters and execute actions
+    // 7. Review clusters and execute actions
     let mut merged_count = 0usize;
     let mut flagged_count = 0usize;
     let mut strengthened_count = 0usize;
@@ -94,6 +94,18 @@ async fn execute_curation(
     let mut proposed_actions: Vec<CurationAction> = Vec::new();
 
     for cluster in &clusters {
+        // Priority-aware provider selection:
+        // P1/P2 clusters (high-priority) get LLM review when available.
+        // Normal clusters use algorithmic only (saves LLM budget for risky memories).
+        let provider: &dyn CurationProvider = if cluster_has_high_priority(cluster) {
+            match llm_provider {
+                Some(p) => p,
+                None => &algorithmic,
+            }
+        } else {
+            &algorithmic
+        };
+
         let actions = provider
             .review_cluster(cluster)
             .await
