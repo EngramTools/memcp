@@ -1,7 +1,7 @@
-/// Regex-based content filter using RegexSet for efficient multi-pattern matching.
-///
-/// All patterns are compiled once at startup. Invalid patterns cause a startup error.
-/// Uses RegexSet for single-pass matching against all patterns.
+//! Regex-based content filter using RegexSet for efficient multi-pattern matching.
+//!
+//! All patterns are compiled once at startup. Invalid patterns cause a startup error.
+//! Uses RegexSet for single-pass matching against all patterns.
 
 use regex::RegexSet;
 use crate::errors::MemcpError;

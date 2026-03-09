@@ -3,17 +3,6 @@
 //! Groups similar memories and merges them into consolidated entries.
 //! Triggered after embedding pipeline completes. Feeds from storage/ + intelligence/embedding/.
 
-/// Memory consolidation module.
-///
-/// Non-destructive memory deduplication pipeline:
-/// 1. After a memory is embedded, check pgvector for similar memories.
-/// 2. If similarity exceeds threshold (default 0.92), synthesize a consolidated memory via LLM.
-/// 3. Link originals to the consolidated memory via the memory_consolidations table.
-/// 4. Mark originals as `is_consolidated_original = TRUE` so search suppresses them.
-///
-/// Consolidation is triggered via an mpsc channel from the embedding pipeline.
-/// The background worker processes jobs asynchronously — store_memory never blocks.
-
 pub mod similarity;
 
 use std::sync::Arc;

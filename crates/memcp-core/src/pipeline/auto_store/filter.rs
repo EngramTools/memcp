@@ -1,7 +1,7 @@
-/// Filter strategy trait and implementations for auto-store sidecar.
-///
-/// Decides whether a parsed log entry is worth storing as a memory.
-/// Four modes: LLM-based, heuristic keyword matching, category-aware, or no filtering.
+//! Filter strategy trait and implementations for auto-store sidecar.
+//!
+//! Decides whether a parsed log entry is worth storing as a memory.
+//! Four modes: LLM-based, heuristic keyword matching, category-aware, or no filtering.
 
 use async_trait::async_trait;
 use regex::Regex;

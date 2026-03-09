@@ -1,7 +1,7 @@
-/// Log parser trait and implementations for auto-store sidecar.
-///
-/// Pluggable parser interface — ships with Claude Code and Openclaw parsers,
-/// easy to add more formats.
+//! Log parser trait and implementations for auto-store sidecar.
+//!
+//! Pluggable parser interface — ships with Claude Code and Openclaw parsers,
+//! easy to add more formats.
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;

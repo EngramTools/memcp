@@ -4,12 +4,6 @@
 //! optional summarization, and stores memories via storage/. Watches directories
 //! for new files. Feeds from pipeline/content_filter/ and pipeline/summarization/.
 
-/// Auto-store sidecar — automatic memory ingestion from conversation logs.
-///
-/// Watches configured log files, parses new entries, filters for relevance,
-/// deduplicates, and stores as memories. Runs as a background tokio task
-/// in the main server process.
-
 pub mod filter;
 pub mod parser;
 pub mod watcher;
@@ -50,6 +44,7 @@ impl AutoStoreWorker {
     /// 4. Filters for relevance (LLM, heuristic, or none)
     /// 5. Stores as a memory with type_hint="auto" and source from the parser
     /// 6. Enqueues to embedding and extraction pipelines
+    #[allow(clippy::too_many_arguments)] // Config struct refactor deferred — internal function, not public API
     pub fn spawn(
         config: AutoStoreConfig,
         chunking_config: ChunkingConfig,
@@ -135,6 +130,7 @@ pub fn content_hash(content: &str) -> u64 {
 }
 
 /// Main worker loop.
+#[allow(clippy::too_many_arguments)] // Config struct refactor deferred — internal function, not public API
 async fn run_worker(
     watch_paths: Vec<String>,
     poll_interval: Duration,

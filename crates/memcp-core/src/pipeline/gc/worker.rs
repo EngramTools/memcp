@@ -1,4 +1,4 @@
-/// GC worker — implements salience-based pruning, TTL expiry, dry-run, and hard purge.
+//! GC worker — implements salience-based pruning, TTL expiry, dry-run, and hard purge.
 
 use anyhow::Result;
 
@@ -33,7 +33,7 @@ pub async fn run_gc(
     }
 
     // Step 3: Compute budget and fetch candidates
-    let prune_budget = (live_count - config.min_memory_floor as i64).max(0) as i64;
+    let prune_budget = (live_count - config.min_memory_floor as i64).max(0);
     let candidates = store
         .get_gc_candidates(config.salience_threshold, config.min_age_days, prune_budget)
         .await?;

@@ -4,11 +4,6 @@
 //! Feeds from storage/ (memories with extraction_status=pending),
 //! feeds into storage/ (updates extracted_entities, extracted_facts columns).
 
-/// Extraction provider trait and supporting types
-///
-/// Provides a pluggable interface for entity and fact extraction from memory content.
-/// Supports Ollama (local, default, no API key) and OpenAI API.
-
 pub mod ollama;
 pub mod openai;
 pub mod pipeline;

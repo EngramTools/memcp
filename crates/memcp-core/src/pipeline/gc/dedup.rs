@@ -1,13 +1,13 @@
-/// Async semantic deduplication worker.
-///
-/// Runs post-embedding to detect and merge near-duplicate memories.
-/// Near-duplicates (cosine similarity >= threshold) are merged:
-///   - Existing memory metadata updated (access_count, last_accessed_at, dedup_sources)
-///   - New (incoming) memory soft-deleted
-///   - Merge tracked in daemon_status.gc_dedup_merges
-///
-/// Fail-open: errors are logged, never cause data loss.
-/// Zero ingest latency impact — all processing is fully async.
+//! Async semantic deduplication worker.
+//!
+//! Runs post-embedding to detect and merge near-duplicate memories.
+//! Near-duplicates (cosine similarity >= threshold) are merged:
+//!   - Existing memory metadata updated (access_count, last_accessed_at, dedup_sources)
+//!   - New (incoming) memory soft-deleted
+//!   - Merge tracked in daemon_status.gc_dedup_merges
+//!
+//! Fail-open: errors are logged, never cause data loss.
+//! Zero ingest latency impact — all processing is fully async.
 
 use std::sync::Arc;
 use tokio::sync::mpsc;

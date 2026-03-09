@@ -1,7 +1,7 @@
-/// Semantic topic exclusion filter using embedding cosine similarity.
-///
-/// Embeds excluded topics at construction time and compares incoming content
-/// embeddings via cosine similarity. Uses the existing EmbeddingProvider.
+//! Semantic topic exclusion filter using embedding cosine similarity.
+//!
+//! Embeds excluded topics at construction time and compares incoming content
+//! embeddings via cosine similarity. Uses the existing EmbeddingProvider.
 
 use std::sync::Arc;
 

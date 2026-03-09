@@ -1,9 +1,9 @@
-/// File watcher for auto-store sidecar.
-///
-/// Uses the `notify` crate for filesystem events with byte-offset tailing.
-/// Falls back to polling if fs events are unreliable.
-/// Gracefully handles missing files (log warning, retry on next poll).
-/// Supports both specific file paths and directory paths (watches for new `.jsonl` files).
+//! File watcher for auto-store sidecar.
+//!
+//! Uses the `notify` crate for filesystem events with byte-offset tailing.
+//! Falls back to polling if fs events are unreliable.
+//! Gracefully handles missing files (log warning, retry on next poll).
+//! Supports both specific file paths and directory paths (watches for new `.jsonl` files).
 
 use std::collections::HashMap;
 use std::collections::HashSet;

@@ -4,12 +4,6 @@
 //! to exclude unwanted content at ingestion time. Used by transport/server (MCP store)
 //! and pipeline/auto_store/ (sidecar ingestion).
 
-/// Content filtering module for ingestion-time topic exclusion.
-///
-/// Two-tier system: regex patterns (fast, deterministic) then semantic
-/// topic exclusion (embedding-based cosine similarity). CompositeFilter
-/// short-circuits on first Drop verdict.
-
 pub mod regex_filter;
 pub mod semantic_filter;
 

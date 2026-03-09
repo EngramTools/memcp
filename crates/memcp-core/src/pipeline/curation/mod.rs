@@ -167,7 +167,7 @@ pub fn create_curation_provider(
                     config.openai_model.clone(),
                 ))))
             }
-            "ollama" | _ => Ok(Some(Arc::new(ollama::OllamaCurationProvider::new(
+            _ => Ok(Some(Arc::new(ollama::OllamaCurationProvider::new(
                 config.ollama_base_url.clone(),
                 config.ollama_model.clone(),
             )))),

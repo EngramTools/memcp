@@ -431,11 +431,7 @@ async fn build_clusters(
         // Cap cluster size — split large clusters into groups
         if cluster.len() > config.max_merge_group_size {
             for chunk in cluster.chunks(config.max_merge_group_size) {
-                if chunk.len() > 1 {
-                    clusters.push(chunk.to_vec());
-                } else {
-                    clusters.push(chunk.to_vec());
-                }
+                clusters.push(chunk.to_vec());
             }
         } else {
             clusters.push(cluster);

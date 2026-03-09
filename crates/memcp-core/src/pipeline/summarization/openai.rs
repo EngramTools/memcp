@@ -1,8 +1,8 @@
-/// OpenAI-compatible summarization provider.
-///
-/// Calls /chat/completions with a system prompt for summarization.
-/// Supports any OpenAI-compatible API: OpenAI, Kimi/Moonshot, local vLLM, etc.
-/// Returns the model's text response as the summary.
+//! OpenAI-compatible summarization provider.
+//!
+//! Calls /chat/completions with a system prompt for summarization.
+//! Supports any OpenAI-compatible API: OpenAI, Kimi/Moonshot, local vLLM, etc.
+//! Returns the model's text response as the summary.
 
 use async_trait::async_trait;
 use serde::Deserialize;

@@ -94,7 +94,7 @@ impl AlgorithmicCurator {
         let low_salience = member.stability < self.config.stale_salience_threshold;
         let old_enough = age_days > self.config.stale_age_days as i64;
         let unreinforced = member.reinforcement_count == 0
-            || member.last_reinforced_at.map_or(true, |t| {
+            || member.last_reinforced_at.is_none_or(|t| {
                 (Utc::now() - t).num_days() > self.config.stale_age_days as i64
             });
         low_salience && old_enough && unreinforced

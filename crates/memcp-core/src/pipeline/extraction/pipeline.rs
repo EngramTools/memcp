@@ -1,8 +1,8 @@
-/// Async extraction pipeline with bounded mpsc channel and background worker.
-///
-/// Non-blocking design: store_memory never waits for extraction completion.
-/// Failed extractions are retried up to 3 times with exponential backoff (1s, 2s, 4s),
-/// then marked as failed.
+//! Async extraction pipeline with bounded mpsc channel and background worker.
+//!
+//! Non-blocking design: store_memory never waits for extraction completion.
+//! Failed extractions are retried up to 3 times with exponential backoff (1s, 2s, 4s),
+//! then marked as failed.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -96,7 +96,7 @@ impl ExtractionPipeline {
     /// Uses try_send — if the channel is full, the job is dropped and a warning is logged.
     /// The backfill process will pick up missed memories on next startup.
     pub fn enqueue(&self, job: ExtractionJob) {
-        if let Err(_) = self.sender.try_send(job) {
+        if self.sender.try_send(job).is_err() {
             tracing::warn!(
                 "Extraction queue full — memory stored, extraction deferred to backfill"
             );

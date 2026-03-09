@@ -4,11 +4,6 @@
 //! Used by auto-store sidecar to compress assistant responses.
 //! Feeds into pipeline/auto_store/ (summarized content for storage).
 
-/// Summarization provider trait and supporting types.
-///
-/// Provides a pluggable interface for summarizing AI assistant responses
-/// before storage. Supports Ollama (local, default) and OpenAI.
-
 pub mod ollama;
 pub mod openai;
 
@@ -74,7 +69,7 @@ pub fn create_summarization_provider(
                 config.prompt_template.clone(),
             ))
         }
-        "ollama" | _ => Arc::new(ollama::OllamaSummarizationProvider::new(
+        _ => Arc::new(ollama::OllamaSummarizationProvider::new(
             config.ollama_base_url.clone(),
             config.ollama_model.clone(),
             config.max_input_chars,

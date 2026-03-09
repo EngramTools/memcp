@@ -1,7 +1,7 @@
-/// OpenAI extraction provider
-///
-/// Calls the OpenAI Chat Completions API with json_object response format.
-/// Uses gpt-4o-mini by default — requires MEMCP_EXTRACTION__OPENAI_API_KEY.
+//! OpenAI extraction provider
+//!
+//! Calls the OpenAI Chat Completions API with json_object response format.
+//! Uses gpt-4o-mini by default — requires MEMCP_EXTRACTION__OPENAI_API_KEY.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

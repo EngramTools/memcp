@@ -1,8 +1,8 @@
-/// Ollama extraction provider
-///
-/// Calls the Ollama /api/chat endpoint with structured JSON output schema.
-/// Uses llama3.2:3b by default — no API key required for self-hosted deployments.
-/// Supports MEMCP_EXTRACTION__OLLAMA_MODEL and MEMCP_EXTRACTION__OLLAMA_BASE_URL.
+//! Ollama extraction provider
+//!
+//! Calls the Ollama /api/chat endpoint with structured JSON output schema.
+//! Uses llama3.2:3b by default — no API key required for self-hosted deployments.
+//! Supports MEMCP_EXTRACTION__OLLAMA_MODEL and MEMCP_EXTRACTION__OLLAMA_BASE_URL.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

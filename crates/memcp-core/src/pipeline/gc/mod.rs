@@ -4,12 +4,6 @@
 //! Soft-delete via deleted_at, hard purge after grace period.
 //! Feeds from storage/ (candidate queries), runs as daemon worker via transport/daemon.
 
-/// Garbage collection module for memory hygiene.
-///
-/// Provides salience-based pruning, TTL expiry, dry-run support, hard purge,
-/// and async semantic deduplication (post-embedding near-duplicate merging).
-/// GC runs both automatically (daemon schedule) and on-demand (CLI `memcp gc`).
-
 pub mod dedup;
 pub mod worker;
 

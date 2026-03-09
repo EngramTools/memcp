@@ -1,8 +1,8 @@
-/// Similarity search for consolidation candidate finding.
-///
-/// Queries pgvector for memories with cosine similarity above a threshold.
-/// Excludes the source memory itself and any memories already marked as originals
-/// (to avoid cascading consolidations).
+//! Similarity search for consolidation candidate finding.
+//!
+//! Queries pgvector for memories with cosine similarity above a threshold.
+//! Excludes the source memory itself and any memories already marked as originals
+//! (to avoid cascading consolidations).
 
 use crate::errors::MemcpError;
 

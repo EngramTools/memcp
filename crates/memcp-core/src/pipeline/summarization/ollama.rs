@@ -1,7 +1,7 @@
-/// Ollama summarization provider.
-///
-/// Calls /api/chat with a system prompt for summarization.
-/// Returns the model's text response as the summary.
+//! Ollama summarization provider.
+//!
+//! Calls /api/chat with a system prompt for summarization.
+//! Returns the model's text response as the summary.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
