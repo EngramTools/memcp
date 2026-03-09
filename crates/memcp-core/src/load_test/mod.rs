@@ -12,11 +12,82 @@ pub mod client;
 pub mod corpus;
 pub mod metrics;
 pub mod report;
+pub mod trust;
 
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+// ─── Trust Corpus Types ──────────────────────────────────────────────────────
+
+/// Configuration for seeding a trust-distributed corpus with poisoned memories.
+#[derive(Debug, Clone)]
+pub struct TrustCorpusConfig {
+    /// Total number of memories to seed (clean + poisoned).
+    pub corpus_size: usize,
+    /// Number of project namespaces to distribute across.
+    pub num_projects: usize,
+    /// Fraction of corpus that is poisoned (default 0.05 = 5%).
+    pub poison_ratio: f64,
+}
+
+impl Default for TrustCorpusConfig {
+    fn default() -> Self {
+        Self {
+            corpus_size: 1000,
+            num_projects: 3,
+            poison_ratio: 0.05,
+        }
+    }
+}
+
+impl TrustCorpusConfig {
+    /// Number of poisoned memories to seed.
+    pub fn poison_count(&self) -> usize {
+        (self.corpus_size as f64 * self.poison_ratio).round() as usize
+    }
+
+    /// Number of clean memories to seed.
+    pub fn clean_count(&self) -> usize {
+        self.corpus_size - self.poison_count()
+    }
+}
+
+/// Tracking info for a single poisoned memory after seeding.
+#[derive(Debug, Clone)]
+pub struct PoisonedMemoryInfo {
+    /// Number of algorithmic regex signals expected.
+    pub signal_count: u8,
+    /// Names of expected signals (e.g., "override_instruction").
+    pub expected_signals: Vec<String>,
+    /// Trust level assigned to this memory.
+    pub trust_level: f32,
+    /// Content of the poisoned memory.
+    pub content: String,
+}
+
+/// Result of seeding a trust-distributed corpus.
+#[derive(Debug, Clone)]
+pub struct TrustCorpusResult {
+    /// Poisoned memory IDs mapped to their tracking info.
+    pub poisoned_ids: HashMap<String, PoisonedMemoryInfo>,
+    /// All clean memory IDs.
+    pub clean_ids: Vec<String>,
+    /// Trust distribution summary for clean memories.
+    pub trust_distribution: TrustDistributionSummary,
+}
+
+/// Summary of trust level distribution across clean memories.
+#[derive(Debug, Clone)]
+pub struct TrustDistributionSummary {
+    /// Count of high-trust memories (>= 0.7).
+    pub high_count: usize,
+    /// Count of medium-trust memories (0.3 - 0.7).
+    pub medium_count: usize,
+    /// Count of low-trust memories (< 0.3).
+    pub low_count: usize,
+}
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
