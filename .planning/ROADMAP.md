@@ -568,8 +568,18 @@ Plans:
 - [ ] 11-03-PLAN.md — Open-source packaging: MIT license, README, CONTRIBUTING, CHANGELOG, deployment guide [Wave 3]
 - [ ] 11-04-PLAN.md — AUDIT.md: unwrap audit, API surface review, test coverage gaps [Wave 3]
 
+## Phase 16: Test Coverage
+- **Goal**: Write tests for P1/P2 coverage gaps identified in AUDIT.md. Final quality gate before open-source release.
+- **Status**: Planned
+- **Depends on**: Phase 11 (System Review — provides AUDIT.md gap catalog)
+- **Plans:** 2 plans
+
+Plans:
+- [ ] 16-01-PLAN.md — Unit tests: salience rank(), dedup_parent_chunks(), extraction prompt, consolidation helpers
+- [ ] 16-02-PLAN.md — Integration tests: consolidation similarity (find_similar_memories with pgvector)
+
 ---
-*Open-source fork cutoff: After Phase 11, fork memcp into a public MIT repo containing phases 01–11 (core memory server). Phase 12+ stays in the private memcp repo (or engram repo) — never published to the public fork. See engram Phase 4.5 and /Users/ayoamadi/projects/engram/.planning/ROADMAP.md for strategy.*
+*Open-source fork cutoff: After Phase 16, fork memcp into a public MIT repo containing phases 01–16 (core memory server + test suite). Phase 12+ (auth, boosting, hosted features) stays in the private memcp repo (or engram repo) — never published to the public fork. See engram Phase 4.5 and /Users/ayoamadi/projects/engram/.planning/ROADMAP.md for strategy.*
 
 *Rationale: BSL doesn't prevent AI-assisted reimplementation in another language. Keeping competitive features in a private repo is stronger practical defense. Core memory server (01–11) is genuinely useful open-source; auth, boosting, and hosted features are the competitive moat.*
 
