@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 11.2-01-PLAN.md
-last_updated: "2026-03-09T05:22:44.545Z"
+stopped_at: Completed 11.2-03-PLAN.md
+last_updated: "2026-03-09T05:30:06.855Z"
 progress:
   total_phases: 51
   completed_phases: 28
@@ -16,11 +16,12 @@ progress:
 # Project State
 
 ## Current Phase
-Phase 11.2-trust-weighted-retrieval-curation-security — IN PROGRESS (2/3 plans done)
+Phase 11.2-trust-weighted-retrieval-curation-security — COMPLETE (3/3 plans done)
 
-Progress: [████████░░] 90/115 plans (78%)
+Progress: [████████░░] 92/118 plans (78%)
 
 ## Active Context
+- Last completed: Phase 11.2-03 -- LLM Instruction-Detection + Priority Curation (REVIEW_SYSTEM_PROMPT with suspicious action, priority queue P1/P2/Normal ordering, per-cluster LLM routing, 8 new tests)
 - Last completed: Phase 11.2-02 -- Curation Security (Suspicious curation action with quarantine mechanics, algorithmic injection detection with trust-gated thresholds, 12 new tests)
 - Last completed: Phase 11.2-01 -- Trust-Weighted Retrieval (trust_weight in search scoring)
 - Last completed: Phase 11.1-02 -- Transport Layer Provenance (MCP/HTTP/CLI provenance fields, auto-store trust_level=0.3 + session_id promotion, source audit fixes mcp/cli defaults)
@@ -52,8 +53,8 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 **Current focus:** Phase 11.1 — Provenance Tagging
 
 ## Session Continuity
-Last session: 2026-03-09T05:22:44.539Z
-Stopped at: Completed 11.2-01-PLAN.md
+Last session: 2026-03-09T05:30:06.850Z
+Stopped at: Completed 11.2-03-PLAN.md
 Resume file: None
 
 ## Accumulated Context
