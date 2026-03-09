@@ -185,7 +185,8 @@ pub async fn search_handler(
         for hit in &mut scored_hits {
             let norm_rrf = (hit.rrf_score - min_rrf) / rrf_range;
             let norm_sal = (hit.salience_score - min_sal) / sal_range;
-            hit.composite_score = 0.5 * norm_rrf + 0.5 * norm_sal;
+            let trust = hit.memory.trust_level as f64;
+            hit.composite_score = 0.5 * norm_rrf + 0.5 * (norm_sal * trust);
         }
     }
 

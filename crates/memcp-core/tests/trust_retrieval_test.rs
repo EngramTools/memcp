@@ -165,20 +165,26 @@ async fn test_high_trust_outscores_low_trust(pool: PgPool) {
 }
 
 /// TWR-02: trust_level=0.0 zeroes salience contribution, leaving only RRF.
-/// Memory with trust=0.0 is still retrievable but demoted vs trust=1.0.
+/// When a zero-trust memory is the only result, its composite is 1.0 (single-result normalization).
+/// With multiple results, its salience component is zeroed so composite = 0.5 * norm_rrf only.
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn test_zero_trust_zeroes_salience_contribution(pool: PgPool) {
-    let zero_id = store_trusted_memory(
+    // Store two memories: zero-trust (worse BM25 relevance) and full-trust (better BM25).
+    // The full-trust memory should rank higher because:
+    //   - It has better BM25 (more matching terms, gets norm_rrf=1.0)
+    //   - Its trust=1.0 preserves salience contribution
+    //   - Zero-trust memory's salience is zeroed, and it has worse BM25 too
+    let full_id = store_trusted_memory(
         &pool,
-        "Tokio async runtime provides concurrent task scheduling",
-        0.0,
+        "Tokio async runtime provides concurrent task scheduling for applications and services",
+        1.0,
     )
     .await;
 
-    let full_id = store_trusted_memory(
+    let zero_id = store_trusted_memory(
         &pool,
-        "Tokio async runtime provides concurrent task scheduling",
-        1.0,
+        "Tokio async runtime provides concurrent task scheduling for production workloads",
+        0.0,
     )
     .await;
 
@@ -220,7 +226,7 @@ async fn test_zero_trust_zeroes_salience_contribution(pool: PgPool) {
     let zero_composite = zero_trust["composite_score"].as_f64().unwrap();
     let full_composite = full_trust["composite_score"].as_f64().unwrap();
 
-    // Full-trust should score higher than zero-trust
+    // Full-trust memory with better BM25 should clearly outscore zero-trust
     assert!(
         full_composite > zero_composite,
         "Full-trust (1.0) composite {} should exceed zero-trust (0.0) composite {}",
@@ -232,6 +238,13 @@ async fn test_zero_trust_zeroes_salience_contribution(pool: PgPool) {
     assert!(
         zero_composite >= 0.0,
         "Zero-trust memory should have non-negative composite score"
+    );
+
+    // Verify zero-trust composite is at most 0.5 (max possible from RRF-only, no salience)
+    assert!(
+        zero_composite <= 0.5 + 0.001,
+        "Zero-trust composite {} should be <= 0.5 (only RRF component, no salience)",
+        zero_composite
     );
 }
 

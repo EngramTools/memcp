@@ -1605,7 +1605,8 @@ Callable from code_execution_20260120 sandboxes.")]
                             if let Some(r) = ranked.iter().find(|r| r.id == hit.memory.id) {
                                 let llm_score = 1.0 / (1.0 + r.llm_rank as f64);
                                 let norm_salience = (hit.salience_score - min_salience) / salience_range;
-                                hit.salience_score = 0.7 * llm_score + 0.3 * norm_salience;
+                                let trust = hit.memory.trust_level as f64;
+                                hit.salience_score = 0.7 * llm_score + 0.3 * (norm_salience * trust);
                             }
                         }
                         // Re-sort top_n portion only
@@ -1647,8 +1648,9 @@ Callable from code_execution_20260120 sandboxes.")]
             for hit in &mut scored_hits {
                 let norm_rrf = (hit.rrf_score - min_rrf) / rrf_range;
                 let norm_sal = (hit.salience_score - min_sal) / sal_range;
-                // 50% RRF (retrieval relevance) + 50% salience (memory importance)
-                hit.composite_score = 0.5 * norm_rrf + 0.5 * norm_sal;
+                let trust = hit.memory.trust_level as f64;
+                // 50% RRF (retrieval relevance) + 50% trust-weighted salience (memory importance)
+                hit.composite_score = 0.5 * norm_rrf + 0.5 * (norm_sal * trust);
             }
         }
 
