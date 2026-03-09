@@ -46,6 +46,8 @@ pub struct ClusterMember {
     pub stability: f64,
     pub reinforcement_count: i32,
     pub last_reinforced_at: Option<DateTime<Utc>>,
+    /// Trust level from provenance (0.0–1.0). Used for trust-gated detection thresholds.
+    pub trust_level: f32,
 }
 
 /// Action the curator decides for a memory or cluster.
@@ -72,6 +74,12 @@ pub enum CurationAction {
         memory_id: String,
         reason: String,
     },
+    /// Suspicious — quarantine a potentially poisoned memory.
+    Suspicious {
+        memory_id: String,
+        reason: String,
+        signals: Vec<String>,
+    },
 }
 
 /// Result of a complete curation run.
@@ -82,6 +90,7 @@ pub struct CurationResult {
     pub flagged_stale_count: usize,
     pub strengthened_count: usize,
     pub skipped_count: usize,
+    pub suspicious_count: usize,
     pub candidates_processed: usize,
     pub clusters_found: usize,
     pub skipped_reason: Option<String>,
@@ -99,6 +108,7 @@ impl CurationResult {
             flagged_stale_count: 0,
             strengthened_count: 0,
             skipped_count: 0,
+            suspicious_count: 0,
             candidates_processed: 0,
             clusters_found: 0,
             skipped_reason: Some(reason.into()),

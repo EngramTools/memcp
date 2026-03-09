@@ -458,7 +458,24 @@ Plans:
 
 ## Phase 09: Documentation & QA Playbook
 - **Goal**: README overhaul, config reference, architecture guide. Must cover both standalone and engram-bundled usage. Includes a scripted QA playbook (CLI + MCP flows against real Postgres) designed to be run by both humans and an AI QA agent.
-- **Status**: Not planned
+- **Status**: Planned
+- **Requirements:** [TWR-01, TWR-02, TWR-03, TWR-04, TWR-05, TWR-06, TWR-07, TWR-08]
+- **Plans:** 3 plans
+
+Requirements:
+- TWR-01: Trust multiplier in composite scoring — score = 0.5 * RRF + 0.5 * (salience * trust_level)
+- TWR-02: Trust multiplier in LLM re-ranking — 0.7 * llm_rank + 0.3 * (salience * trust)
+- TWR-03: Suspicious curation action — quarantine with tag + trust=0.05 + audit trail
+- TWR-04: Quarantined memories excluded from all search via skip_tags
+- TWR-05: Un-quarantine restores previous trust_level from trust_history
+- TWR-06: Algorithmic instruction detection with trust-gated thresholds (1/2/3 signals)
+- TWR-07: LLM prompt instruction-detection dimension + parse suspicious action
+- TWR-08: Priority queue ordering — P1 (low trust+new) before P2 before Normal
+
+Plans:
+- [ ] 11.2-01-PLAN.md — Trust-weighted composite scoring + LLM re-ranking [Wave 1]
+- [ ] 11.2-02-PLAN.md — Suspicious curation action + quarantine + instruction detection [Wave 1]
+- [ ] 11.2-03-PLAN.md — LLM instruction-detection prompt + priority queue scheduling [Wave 2, depends on 02]
 - **Depends on**: Phases 08.4, 08.5, 08.6, 08.7, 08.8
 - **Note**: QA playbook absorbed from dropped Phase 08.1. Playbook should be structured for AI agent execution (machine-parseable assertions, clear pass/fail criteria) as well as human walkthroughs.
 
@@ -520,7 +537,24 @@ Plans:
 ## Phase 11.2–11.3: Trust-Weighted Retrieval & Brain Curation Security — from engram Phase 22
 
 - **Goal**: Trust-weighted retrieval and brain curation security extension. Completes OWASP ASI06 defense.
-- **Status**: Not planned
+- **Status**: Planned
+- **Requirements:** [TWR-01, TWR-02, TWR-03, TWR-04, TWR-05, TWR-06, TWR-07, TWR-08]
+- **Plans:** 3 plans
+
+Requirements:
+- TWR-01: Trust multiplier in composite scoring — score = 0.5 * RRF + 0.5 * (salience * trust_level)
+- TWR-02: Trust multiplier in LLM re-ranking — 0.7 * llm_rank + 0.3 * (salience * trust)
+- TWR-03: Suspicious curation action — quarantine with tag + trust=0.05 + audit trail
+- TWR-04: Quarantined memories excluded from all search via skip_tags
+- TWR-05: Un-quarantine restores previous trust_level from trust_history
+- TWR-06: Algorithmic instruction detection with trust-gated thresholds (1/2/3 signals)
+- TWR-07: LLM prompt instruction-detection dimension + parse suspicious action
+- TWR-08: Priority queue ordering — P1 (low trust+new) before P2 before Normal
+
+Plans:
+- [ ] 11.2-01-PLAN.md — Trust-weighted composite scoring + LLM re-ranking [Wave 1]
+- [ ] 11.2-02-PLAN.md — Suspicious curation action + quarantine + instruction detection [Wave 1]
+- [ ] 11.2-03-PLAN.md — LLM instruction-detection prompt + priority queue scheduling [Wave 2, depends on 02]
 - **Depends on**: Phase 11.1
 - **Driven by**: engram Phase 22 (Agent Role Guardrails & Memory Safety)
 - **11.2**: Trust-weighted retrieval — low-trust memories demoted in recall ranking even if semantically relevant
@@ -530,7 +564,24 @@ Plans:
 
 ## Phase 11: System Review
 - **Goal**: Codebase audit for quality/gaps before open-source release
-- **Status**: Not planned
+- **Status**: Planned
+- **Requirements:** [TWR-01, TWR-02, TWR-03, TWR-04, TWR-05, TWR-06, TWR-07, TWR-08]
+- **Plans:** 3 plans
+
+Requirements:
+- TWR-01: Trust multiplier in composite scoring — score = 0.5 * RRF + 0.5 * (salience * trust_level)
+- TWR-02: Trust multiplier in LLM re-ranking — 0.7 * llm_rank + 0.3 * (salience * trust)
+- TWR-03: Suspicious curation action — quarantine with tag + trust=0.05 + audit trail
+- TWR-04: Quarantined memories excluded from all search via skip_tags
+- TWR-05: Un-quarantine restores previous trust_level from trust_history
+- TWR-06: Algorithmic instruction detection with trust-gated thresholds (1/2/3 signals)
+- TWR-07: LLM prompt instruction-detection dimension + parse suspicious action
+- TWR-08: Priority queue ordering — P1 (low trust+new) before P2 before Normal
+
+Plans:
+- [ ] 11.2-01-PLAN.md — Trust-weighted composite scoring + LLM re-ranking [Wave 1]
+- [ ] 11.2-02-PLAN.md — Suspicious curation action + quarantine + instruction detection [Wave 1]
+- [ ] 11.2-03-PLAN.md — LLM instruction-detection prompt + priority queue scheduling [Wave 2, depends on 02]
 - **Depends on**: Phase 10.1, Phase 11.1–11.3 (memory safety — must be audited as part of this review)
 
 ---
@@ -540,7 +591,24 @@ Plans:
 
 ## Phase 12: Auth & API Keys
 - **Goal**: API key authentication for the MCP interface. NOT full multi-tenant isolation inside memcp — engram uses container-per-tenant, so each memcp instance runs single-tenant. This phase adds the auth layer so a memcp instance rejects unauthorized callers.
-- **Status**: Not planned
+- **Status**: Planned
+- **Requirements:** [TWR-01, TWR-02, TWR-03, TWR-04, TWR-05, TWR-06, TWR-07, TWR-08]
+- **Plans:** 3 plans
+
+Requirements:
+- TWR-01: Trust multiplier in composite scoring — score = 0.5 * RRF + 0.5 * (salience * trust_level)
+- TWR-02: Trust multiplier in LLM re-ranking — 0.7 * llm_rank + 0.3 * (salience * trust)
+- TWR-03: Suspicious curation action — quarantine with tag + trust=0.05 + audit trail
+- TWR-04: Quarantined memories excluded from all search via skip_tags
+- TWR-05: Un-quarantine restores previous trust_level from trust_history
+- TWR-06: Algorithmic instruction detection with trust-gated thresholds (1/2/3 signals)
+- TWR-07: LLM prompt instruction-detection dimension + parse suspicious action
+- TWR-08: Priority queue ordering — P1 (low trust+new) before P2 before Normal
+
+Plans:
+- [ ] 11.2-01-PLAN.md — Trust-weighted composite scoring + LLM re-ranking [Wave 1]
+- [ ] 11.2-02-PLAN.md — Suspicious curation action + quarantine + instruction detection [Wave 1]
+- [ ] 11.2-03-PLAN.md — LLM instruction-detection prompt + priority queue scheduling [Wave 2, depends on 02]
 - **Depends on**: Phase 11 + public fork (Phase 12 code stays PRIVATE — never enters public memcp repo)
 - **Note**: Full tenant isolation (row-level security, tenant IDs) is NOT needed. Container-per-tenant means isolation happens at the infrastructure level. This phase is about: API key validation, key rotation, and authenticated identity on stored memories.
 
@@ -634,7 +702,24 @@ Plans:
 
 ## Phase 14.7: Benchmark Schema Isolation
 - **Goal**: Postgres schema isolation for benchmark runs. Benchmarks create and use a dedicated `benchmark` schema instead of operating on `public`, preventing accidental data loss and enabling clean per-run isolation. Schema is ephemeral by default (dropped after run), with `--keep-schema` for post-run inspection.
-- **Status**: Not planned
+- **Status**: Planned
+- **Requirements:** [TWR-01, TWR-02, TWR-03, TWR-04, TWR-05, TWR-06, TWR-07, TWR-08]
+- **Plans:** 3 plans
+
+Requirements:
+- TWR-01: Trust multiplier in composite scoring — score = 0.5 * RRF + 0.5 * (salience * trust_level)
+- TWR-02: Trust multiplier in LLM re-ranking — 0.7 * llm_rank + 0.3 * (salience * trust)
+- TWR-03: Suspicious curation action — quarantine with tag + trust=0.05 + audit trail
+- TWR-04: Quarantined memories excluded from all search via skip_tags
+- TWR-05: Un-quarantine restores previous trust_level from trust_history
+- TWR-06: Algorithmic instruction detection with trust-gated thresholds (1/2/3 signals)
+- TWR-07: LLM prompt instruction-detection dimension + parse suspicious action
+- TWR-08: Priority queue ordering — P1 (low trust+new) before P2 before Normal
+
+Plans:
+- [ ] 11.2-01-PLAN.md — Trust-weighted composite scoring + LLM re-ranking [Wave 1]
+- [ ] 11.2-02-PLAN.md — Suspicious curation action + quarantine + instruction detection [Wave 1]
+- [ ] 11.2-03-PLAN.md — LLM instruction-detection prompt + priority queue scheduling [Wave 2, depends on 02]
 - **Depends on**: Phase 14.6
 - **Note**: Uses Postgres `SET search_path` on connection pool — industry standard approach. No conflict with future Phase 12 multi-tenancy (RLS on public schema rows, orthogonal to schema isolation). Scope: benchmark binary only — tests stay on #[sqlx::test] ephemeral DBs.
 

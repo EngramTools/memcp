@@ -145,6 +145,7 @@ mod tests {
             } else {
                 None
             },
+            trust_level: 0.5,
         }
     }
 

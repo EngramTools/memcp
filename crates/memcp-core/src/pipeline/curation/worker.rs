@@ -90,6 +90,7 @@ async fn execute_curation(
     let mut flagged_count = 0usize;
     let mut strengthened_count = 0usize;
     let mut skipped_count = 0usize;
+    let mut suspicious_count = 0usize;
     let mut proposed_actions: Vec<CurationAction> = Vec::new();
 
     for cluster in &clusters {
@@ -303,6 +304,27 @@ async fn execute_curation(
                     strengthened_count += 1;
                 }
 
+                CurationAction::Suspicious { memory_id, reason, signals } => {
+                    if dry_run {
+                        proposed_actions.push(CurationAction::Suspicious { memory_id, reason, signals });
+                        suspicious_count += 1;
+                        continue;
+                    }
+                    let _ = store.add_memory_tag(&memory_id, "suspicious").await;
+                    let _ = store
+                        .update_trust_level(
+                            &memory_id,
+                            0.05,
+                            &format!("quarantined: {} [signals: {}]", reason, signals.join(", ")),
+                        )
+                        .await;
+                    let details = serde_json::json!({ "reason": reason, "signals": signals });
+                    let _ = store
+                        .record_curation_action(run_id, "suspicious", &[memory_id], None, None, Some(details))
+                        .await;
+                    suspicious_count += 1;
+                }
+
                 CurationAction::Skip { .. } => {
                     skipped_count += 1;
                 }
@@ -334,6 +356,7 @@ async fn execute_curation(
         flagged_stale_count: flagged_count,
         strengthened_count,
         skipped_count,
+        suspicious_count,
         candidates_processed: candidates.len(),
         clusters_found: clusters.len(),
         skipped_reason: None,
@@ -438,5 +461,6 @@ fn to_cluster_member(memory: &Memory, salience: &SalienceRow) -> ClusterMember {
         stability: salience.stability,
         reinforcement_count: salience.reinforcement_count,
         last_reinforced_at: salience.last_reinforced_at,
+        trust_level: memory.trust_level,
     }
 }

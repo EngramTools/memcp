@@ -1779,6 +1779,7 @@ impl PostgresMemoryStore {
         conditions.push("me.is_current = true".to_string());
         conditions.push("m.embedding_status = 'complete'".to_string());
         conditions.push("m.deleted_at IS NULL".to_string());
+        conditions.push("(m.tags IS NULL OR NOT (m.tags @> '[\"suspicious\"]'::jsonb))".to_string());
 
         let mut param_idx: u32 = 2; // $1 is reserved for query_embedding
 
@@ -2107,6 +2108,7 @@ impl PostgresMemoryStore {
             "m.embedding_status = 'complete'".to_string(),
             "m.deleted_at IS NULL".to_string(),
             "m.is_consolidated_original = FALSE".to_string(),
+            "(m.tags IS NULL OR NOT (m.tags @> '[\"suspicious\"]'::jsonb))".to_string(),
         ];
 
         let mut param_idx: u32 = 3; // $1=query_embedding, $2=tier
@@ -2423,6 +2425,7 @@ impl PostgresMemoryStore {
                 FROM memories
                 WHERE is_consolidated_original = FALSE
                   AND deleted_at IS NULL
+                  AND (tags IS NULL OR NOT (tags @> '[\"suspicious\"]'::jsonb))
                   AND (
                     tags @> $1::jsonb
                     OR extracted_entities @> $1::jsonb
@@ -2473,6 +2476,7 @@ impl PostgresMemoryStore {
             WHERE content @@@ $1
               AND is_consolidated_original = FALSE
               AND deleted_at IS NULL
+              AND (tags IS NULL OR NOT (tags @> '[\"suspicious\"]'::jsonb))
             ORDER BY bm25_rank
             LIMIT $2"
         } else {
@@ -2488,6 +2492,7 @@ impl PostgresMemoryStore {
             WHERE to_tsvector('english', content) @@ plainto_tsquery('english', $1)
               AND is_consolidated_original = FALSE
               AND deleted_at IS NULL
+              AND (tags IS NULL OR NOT (tags @> '[\"suspicious\"]'::jsonb))
             ORDER BY bm25_rank
             LIMIT $2"
         };
@@ -4265,6 +4270,70 @@ impl PostgresMemoryStore {
     ///
     /// Reads the current trust_level first, then atomically updates trust_level and appends
     /// a history entry `{from, to, reason, at}` to the JSONB metadata field.
+    /// Remove a tag from a memory's tag array.
+    pub async fn remove_memory_tag(
+        &self,
+        memory_id: &str,
+        tag: &str,
+    ) -> Result<(), MemcpError> {
+        sqlx::query(
+            "UPDATE memories SET tags = tags - $2::text, updated_at = NOW() WHERE id = $1",
+        )
+        .bind(memory_id)
+        .bind(tag)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            MemcpError::Storage(format!("Failed to remove tag from memory: {}", e))
+        })?;
+        Ok(())
+    }
+
+    /// Un-quarantine a memory: remove "suspicious" tag and restore previous trust_level
+    /// from the trust_history audit trail.
+    pub async fn unquarantine_memory(
+        &self,
+        memory_id: &str,
+    ) -> Result<(), MemcpError> {
+        // Read metadata to find the quarantine entry in trust_history
+        let metadata: serde_json::Value = sqlx::query_scalar(
+            "SELECT metadata FROM memories WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(memory_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to read metadata: {}", e)))?
+        .ok_or_else(|| MemcpError::NotFound {
+            id: memory_id.to_string(),
+        })?;
+
+        // Find the most recent quarantine entry's "from" value
+        let previous_trust = metadata
+            .get("trust_history")
+            .and_then(|h| h.as_array())
+            .and_then(|arr| {
+                // Find the last entry where reason contains "quarantined" or to=0.05
+                arr.iter().rev().find(|entry| {
+                    entry
+                        .get("reason")
+                        .and_then(|r| r.as_str())
+                        .map_or(false, |r| r.contains("quarantined"))
+                })
+            })
+            .and_then(|entry| entry.get("from"))
+            .and_then(|f| f.as_f64())
+            .unwrap_or(0.5) as f32; // fallback to 0.5 if no history found
+
+        // Restore trust level
+        self.update_trust_level(memory_id, previous_trust, "unquarantined")
+            .await?;
+
+        // Remove suspicious tag
+        self.remove_memory_tag(memory_id, "suspicious").await?;
+
+        Ok(())
+    }
+
     pub async fn update_trust_level(
         &self,
         id: &str,
