@@ -198,3 +198,60 @@ impl CurationProvider for OllamaCurationProvider {
         &self.model
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    fn make_member(id: &str, stability: f64, trust: f32) -> ClusterMember {
+        ClusterMember {
+            id: id.to_string(),
+            content: format!("Content for {}", id),
+            type_hint: Some("fact".to_string()),
+            tags: vec!["test".to_string()],
+            created_at: Utc::now() - Duration::days(5),
+            updated_at: Utc::now() - Duration::days(5),
+            stability,
+            reinforcement_count: 2,
+            last_reinforced_at: Some(Utc::now() - Duration::days(1)),
+            trust_level: trust,
+        }
+    }
+
+    #[test]
+    fn test_parse_suspicious_action() {
+        let cluster = vec![make_member("id1", 2.0, 0.5)];
+        let response = r#"[{"action": "suspicious", "memory_id": "id1", "reason": "override directive", "signals": ["override_instruction"]}]"#;
+        let actions = OllamaCurationProvider::parse_review_response(response, &cluster);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            CurationAction::Suspicious { memory_id, reason, signals } => {
+                assert_eq!(memory_id, "id1");
+                assert_eq!(reason, "override directive");
+                assert_eq!(signals, &vec!["override_instruction".to_string()]);
+            }
+            other => panic!("Expected Suspicious, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_unknown_action_skipped() {
+        let cluster = vec![make_member("id1", 2.0, 0.5)];
+        let response = r#"[{"action": "unknown_action", "memory_id": "id1", "reason": "test"}]"#;
+        let actions = OllamaCurationProvider::parse_review_response(response, &cluster);
+        // Unknown actions are filtered out (None from filter_map)
+        assert_eq!(actions.len(), 0);
+    }
+
+    #[test]
+    fn test_format_cluster_includes_trust_level() {
+        let cluster = vec![make_member("id1", 2.5, 0.75)];
+        let formatted = OllamaCurationProvider::format_cluster(&cluster);
+        assert!(
+            formatted.contains("trust: 0.75"),
+            "format_cluster should include trust level, got: {}",
+            formatted
+        );
+    }
+}
