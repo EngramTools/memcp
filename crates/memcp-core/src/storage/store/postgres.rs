@@ -18,9 +18,8 @@ use uuid::Uuid;
 use crate::config::{IdempotencyConfig, SearchConfig};
 use crate::errors::MemcpError;
 use crate::store::{
-    decode_search_keyset_cursor, encode_search_keyset_cursor,
-    CreateMemory, ListFilter, ListResult, Memory, MemoryStore,
-    SearchFilter, SearchHit, SearchResult, UpdateMemory,
+    decode_search_keyset_cursor, encode_search_keyset_cursor, CreateMemory, ListFilter, ListResult,
+    Memory, MemoryStore, SearchFilter, SearchHit, SearchResult, UpdateMemory,
 };
 
 /// FSRS state row fetched from memory_salience table.
@@ -57,6 +56,19 @@ pub struct RelatedContext {
     pub shared_tags: Vec<String>,
 }
 
+/// Candidate memory returned by query-based recall (vector search).
+///
+/// Includes trust_level so the recall engine can apply trust weighting
+/// without a second round-trip.
+#[derive(Debug, Clone)]
+pub struct RecallCandidate {
+    pub memory_id: String,
+    pub content: String,
+    pub relevance: f32,
+    pub tags: Option<serde_json::Value>,
+    pub trust_level: f32,
+}
+
 /// Candidate memory returned by query-less recall (no vector search).
 ///
 /// Co-fetches salience data in a single query so the recall engine can
@@ -70,6 +82,7 @@ pub struct QuerylessCandidate {
     pub stability: f64,
     pub last_reinforced_at: Option<chrono::DateTime<Utc>>,
     pub tags: Option<serde_json::Value>,
+    pub trust_level: f32,
 }
 
 /// A curation run record from the curation_runs table.
@@ -156,7 +169,14 @@ impl PostgresMemoryStore {
         search_config: &SearchConfig,
         max_connections: u32,
     ) -> Result<Self, MemcpError> {
-        Self::new_with_schema_internal(database_url, run_migrations, search_config, None, max_connections).await
+        Self::new_with_schema_internal(
+            database_url,
+            run_migrations,
+            search_config,
+            None,
+            max_connections,
+        )
+        .await
     }
 
     /// Create a new PostgresMemoryStore with optional schema isolation.
@@ -174,7 +194,8 @@ impl PostgresMemoryStore {
         search_config: &SearchConfig,
         schema: Option<&str>,
     ) -> Result<Self, MemcpError> {
-        Self::new_with_schema_internal(database_url, run_migrations, search_config, schema, 10).await
+        Self::new_with_schema_internal(database_url, run_migrations, search_config, schema, 10)
+            .await
     }
 
     /// Internal constructor with full parameter control.
@@ -199,11 +220,15 @@ impl PostgresMemoryStore {
         if let Some(name) = schema {
             let mut conn = sqlx::postgres::PgConnection::connect(database_url)
                 .await
-                .map_err(|e| MemcpError::Storage(format!("Failed to connect for schema creation: {}", e)))?;
+                .map_err(|e| {
+                    MemcpError::Storage(format!("Failed to connect for schema creation: {}", e))
+                })?;
             sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", name))
                 .execute(&mut conn)
                 .await
-                .map_err(|e| MemcpError::Storage(format!("Failed to create schema '{}': {}", name, e)))?;
+                .map_err(|e| {
+                    MemcpError::Storage(format!("Failed to create schema '{}': {}", name, e))
+                })?;
             conn.close().await.ok();
         }
 
@@ -212,9 +237,9 @@ impl PostgresMemoryStore {
         let pool = {
             let mut opts = PgPoolOptions::new()
                 .max_connections(max_connections) // configurable: daemon uses resource_caps.max_db_connections
-                .min_connections(1)               // keep at least one warm connection
-                .idle_timeout(Duration::from_secs(300))    // 5 min idle cleanup
-                .max_lifetime(Duration::from_secs(1800));  // 30 min max connection age
+                .min_connections(1) // keep at least one warm connection
+                .idle_timeout(Duration::from_secs(300)) // 5 min idle cleanup
+                .max_lifetime(Duration::from_secs(1800)); // 30 min max connection age
 
             if let Some(ref schema_name) = schema_owned {
                 let s = schema_name.clone();
@@ -285,16 +310,21 @@ impl PostgresMemoryStore {
     /// Used by the benchmark binary to clean up the ephemeral benchmark schema after a run.
     pub async fn drop_schema(&self) -> Result<(), MemcpError> {
         if let Some(ref schema_name) = self.schema {
-            sqlx::query(&format!("DROP SCHEMA IF EXISTS \"{}\" CASCADE", schema_name))
-                .execute(&self.pool)
-                .await
-                .map_err(|e| MemcpError::Storage(format!(
-                    "Failed to drop schema '{}': {}", schema_name, e
-                )))?;
+            sqlx::query(&format!(
+                "DROP SCHEMA IF EXISTS \"{}\" CASCADE",
+                schema_name
+            ))
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                MemcpError::Storage(format!("Failed to drop schema '{}': {}", schema_name, e))
+            })?;
             tracing::info!(schema = %schema_name, "Dropped benchmark schema");
             Ok(())
         } else {
-            Err(MemcpError::Storage("No schema set — cannot drop".to_string()))
+            Err(MemcpError::Storage(
+                "No schema set — cannot drop".to_string(),
+            ))
         }
     }
 
@@ -324,7 +354,10 @@ impl PostgresMemoryStore {
     /// Create a PostgresMemoryStore from an existing pool with an explicit IdempotencyConfig.
     ///
     /// Used in production paths where the full Config is available.
-    pub async fn from_pool_with_idempotency(pool: PgPool, idempotency_config: IdempotencyConfig) -> Result<Self, MemcpError> {
+    pub async fn from_pool_with_idempotency(
+        pool: PgPool,
+        idempotency_config: IdempotencyConfig,
+    ) -> Result<Self, MemcpError> {
         let search_config = SearchConfig::default();
         let paradedb_available = Self::detect_paradedb(&pool).await;
         let use_paradedb = if search_config.bm25_backend == "paradedb" {
@@ -448,15 +481,23 @@ impl PostgresMemoryStore {
     /// Creates a partial index filtered by `tier` so that each tier's embeddings
     /// use a dimension-appropriate HNSW index. The partial index allows pgvector
     /// to use the correct vector cast for each tier's dimension.
-    pub async fn ensure_hnsw_index_for_tier(&self, tier: &str, dimension: usize) -> Result<(), MemcpError> {
+    pub async fn ensure_hnsw_index_for_tier(
+        &self,
+        tier: &str,
+        dimension: usize,
+    ) -> Result<(), MemcpError> {
         let index_name = format!("idx_memory_embeddings_hnsw_{}", tier);
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE indexname = $1)",
-        )
-        .bind(&index_name)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| MemcpError::Storage(format!("Failed to check HNSW index for tier {}: {}", tier, e)))?;
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_indexes WHERE indexname = $1)")
+                .bind(&index_name)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| {
+                    MemcpError::Storage(format!(
+                        "Failed to check HNSW index for tier {}: {}",
+                        tier, e
+                    ))
+                })?;
 
         if !exists {
             let sql = format!(
@@ -466,13 +507,19 @@ impl PostgresMemoryStore {
                  WITH (m = 16, ef_construction = 64)",
                 index_name, dimension, tier
             );
-            sqlx::query(&sql)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| MemcpError::Storage(format!("Failed to create HNSW index for tier {}: {}", tier, e)))?;
+            sqlx::query(&sql).execute(&self.pool).await.map_err(|e| {
+                MemcpError::Storage(format!(
+                    "Failed to create HNSW index for tier {}: {}",
+                    tier, e
+                ))
+            })?;
             tracing::info!(tier, dimension, "Created HNSW index for embedding tier");
         } else {
-            tracing::debug!(tier, dimension, "HNSW index for tier already exists, skipping");
+            tracing::debug!(
+                tier,
+                dimension,
+                "HNSW index for tier already exists, skipping"
+            );
         }
 
         Ok(())
@@ -515,7 +562,7 @@ impl PostgresMemoryStore {
                AND m.deleted_at IS NULL \
                AND (ms.stability >= $2 OR ms.reinforcement_count >= $3) \
              ORDER BY ms.stability DESC \
-             LIMIT $4"
+             LIMIT $4",
         )
         .bind(current_tier)
         .bind(min_stability)
@@ -532,10 +579,14 @@ impl PostgresMemoryStore {
     ///
     /// Sets `is_current = false` so that a new embedding in the target tier
     /// can take over. Used during promotion from fast to quality tier.
-    pub async fn deactivate_tier_embedding(&self, memory_id: &str, tier: &str) -> Result<(), MemcpError> {
+    pub async fn deactivate_tier_embedding(
+        &self,
+        memory_id: &str,
+        tier: &str,
+    ) -> Result<(), MemcpError> {
         sqlx::query(
             "UPDATE memory_embeddings SET is_current = false, updated_at = NOW() \
-             WHERE memory_id = $1 AND tier = $2 AND is_current = true"
+             WHERE memory_id = $1 AND tier = $2 AND is_current = true",
         )
         .bind(memory_id)
         .bind(tier)
@@ -605,24 +656,50 @@ fn content_hash(content: &str) -> String {
 /// (e.g., rows from JOIN queries that don't select these columns).
 fn row_to_memory(row: &PgRow) -> Result<Memory, MemcpError> {
     Ok(Memory {
-        id: row.try_get("id").map_err(|e| MemcpError::Storage(e.to_string()))?,
-        content: row.try_get("content").map_err(|e| MemcpError::Storage(e.to_string()))?,
-        type_hint: row.try_get("type_hint").map_err(|e| MemcpError::Storage(e.to_string()))?,
-        source: row.try_get("source").map_err(|e| MemcpError::Storage(e.to_string()))?,
-        tags: row.try_get("tags").map_err(|e| MemcpError::Storage(e.to_string()))?,
-        created_at: row.try_get("created_at").map_err(|e| MemcpError::Storage(e.to_string()))?,
-        updated_at: row.try_get("updated_at").map_err(|e| MemcpError::Storage(e.to_string()))?,
-        last_accessed_at: row.try_get("last_accessed_at").map_err(|e| MemcpError::Storage(e.to_string()))?,
-        access_count: row.try_get("access_count").map_err(|e| MemcpError::Storage(e.to_string()))?,
-        embedding_status: row.try_get("embedding_status").map_err(|e| MemcpError::Storage(e.to_string()))?,
+        id: row
+            .try_get("id")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?,
+        content: row
+            .try_get("content")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?,
+        type_hint: row
+            .try_get("type_hint")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?,
+        source: row
+            .try_get("source")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?,
+        tags: row
+            .try_get("tags")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?,
+        created_at: row
+            .try_get("created_at")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?,
+        updated_at: row
+            .try_get("updated_at")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?,
+        last_accessed_at: row
+            .try_get("last_accessed_at")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?,
+        access_count: row
+            .try_get("access_count")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?,
+        embedding_status: row
+            .try_get("embedding_status")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?,
         extracted_entities: row.try_get("extracted_entities").unwrap_or(None),
         extracted_facts: row.try_get("extracted_facts").unwrap_or(None),
-        extraction_status: row.try_get("extraction_status").unwrap_or_else(|_| "pending".to_string()),
+        extraction_status: row
+            .try_get("extraction_status")
+            .unwrap_or_else(|_| "pending".to_string()),
         is_consolidated_original: row.try_get("is_consolidated_original").unwrap_or(false),
         consolidated_into: row.try_get("consolidated_into").unwrap_or(None),
         actor: row.try_get("actor").unwrap_or(None),
-        actor_type: row.try_get("actor_type").unwrap_or_else(|_| "agent".to_string()),
-        audience: row.try_get("audience").unwrap_or_else(|_| "global".to_string()),
+        actor_type: row
+            .try_get("actor_type")
+            .unwrap_or_else(|_| "agent".to_string()),
+        audience: row
+            .try_get("audience")
+            .unwrap_or_else(|_| "global".to_string()),
         parent_id: row.try_get("parent_id").unwrap_or(None),
         chunk_index: row.try_get("chunk_index").unwrap_or(None),
         total_chunks: row.try_get("total_chunks").unwrap_or(None),
@@ -632,7 +709,9 @@ fn row_to_memory(row: &PgRow) -> Result<Memory, MemcpError> {
         trust_level: row.try_get("trust_level").unwrap_or(0.5),
         session_id: row.try_get("session_id").unwrap_or(None),
         agent_role: row.try_get("agent_role").unwrap_or(None),
-        metadata: row.try_get("metadata").unwrap_or_else(|_| serde_json::json!({})),
+        metadata: row
+            .try_get("metadata")
+            .unwrap_or_else(|_| serde_json::json!({})),
     })
 }
 
@@ -696,10 +775,14 @@ impl MemoryStore for PostgresMemoryStore {
             .bind(window.to_string())
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| MemcpError::Storage(format!("Failed to query content hash dedup: {}", e)))?;
+            .map_err(|e| {
+                MemcpError::Storage(format!("Failed to query content hash dedup: {}", e))
+            })?;
 
             if let Some(row) = existing_row {
-                let existing_id: String = row.try_get("id").map_err(|e| MemcpError::Storage(e.to_string()))?;
+                let existing_id: String = row
+                    .try_get("id")
+                    .map_err(|e| MemcpError::Storage(e.to_string()))?;
                 tracing::info!(content_hash = %hash, existing_id = %existing_id, "store: content-hash dedup hit, returning existing memory");
                 return row_to_memory(&row);
             }
@@ -710,13 +793,13 @@ impl MemoryStore for PostgresMemoryStore {
         let now = input.created_at.unwrap_or_else(Utc::now);
 
         // Convert tags Vec<String> to serde_json::Value for JSONB binding
-        let tags_json: Option<serde_json::Value> = input
-            .tags
-            .as_ref()
-            .map(|t| serde_json::json!(t));
+        let tags_json: Option<serde_json::Value> =
+            input.tags.as_ref().map(|t| serde_json::json!(t));
 
         // Resolve trust level: explicit value takes precedence, else infer from source/actor_type
-        let resolved_trust = input.trust_level.unwrap_or_else(|| crate::store::infer_trust_level(&input.source, &input.actor_type));
+        let resolved_trust = input
+            .trust_level
+            .unwrap_or_else(|| crate::store::infer_trust_level(&input.source, &input.actor_type));
         let empty_metadata = serde_json::json!({});
 
         sqlx::query(
@@ -998,7 +1081,9 @@ impl MemoryStore for PostgresMemoryStore {
             // Cursor comparison uses 3 params: created_at < $N OR (created_at = $N+1 AND id > $N+2)
             conditions.push(format!(
                 "(created_at < ${} OR (created_at = ${} AND id > ${}))",
-                param_idx, param_idx + 1, param_idx + 2
+                param_idx,
+                param_idx + 1,
+                param_idx + 2
             ));
             param_idx += 3;
         }
@@ -1183,7 +1268,9 @@ impl MemoryStore for PostgresMemoryStore {
             .await
             .map_err(|e| MemcpError::Storage(e.to_string()))?;
 
-        let count: i64 = row.try_get("count").map_err(|e| MemcpError::Storage(e.to_string()))?;
+        let count: i64 = row
+            .try_get("count")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?;
         Ok(count as u64)
     }
 
@@ -1332,13 +1419,18 @@ impl PostgresMemoryStore {
             .bind(memory_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| MemcpError::Storage(format!("Failed to update embedding status: {}", e)))?;
+            .map_err(|e| {
+                MemcpError::Storage(format!("Failed to update embedding status: {}", e))
+            })?;
 
         Ok(())
     }
 
     /// Retrieve memories that need embedding (status 'pending' or 'failed'), ordered oldest first.
-    pub async fn get_pending_memories(&self, limit: i64) -> Result<Vec<crate::store::Memory>, MemcpError> {
+    pub async fn get_pending_memories(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<crate::store::Memory>, MemcpError> {
         let rows = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
@@ -1361,7 +1453,10 @@ impl PostgresMemoryStore {
     /// Used by the enrichment daemon worker to find candidates for retroactive
     /// neighbor-based tag enrichment. Returns the most recently created memories first,
     /// so new memories get enriched before older ones.
-    pub async fn get_unenriched_memories(&self, limit: i64) -> Result<Vec<crate::store::Memory>, MemcpError> {
+    pub async fn get_unenriched_memories(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<crate::store::Memory>, MemcpError> {
         let rows = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
@@ -1471,15 +1566,13 @@ impl PostgresMemoryStore {
                 .filter_map(|r| r.try_get::<String, _>("memory_id").ok())
                 .collect();
 
-            sqlx::query(
-                "UPDATE memories SET embedding_status = 'pending' WHERE id = ANY($1)",
-            )
-            .bind(&memory_ids)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| {
-                MemcpError::Storage(format!("Failed to reset memory embedding_status: {}", e))
-            })?;
+            sqlx::query("UPDATE memories SET embedding_status = 'pending' WHERE id = ANY($1)")
+                .bind(&memory_ids)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| {
+                    MemcpError::Storage(format!("Failed to reset memory embedding_status: {}", e))
+                })?;
         }
 
         Ok(count)
@@ -1518,9 +1611,7 @@ impl PostgresMemoryStore {
         sqlx::query("UPDATE memories SET embedding_status = 'pending'")
             .execute(&self.pool)
             .await
-            .map_err(|e| {
-                MemcpError::Storage(format!("Failed to reset embedding status: {}", e))
-            })?;
+            .map_err(|e| MemcpError::Storage(format!("Failed to reset embedding status: {}", e)))?;
 
         Ok(count)
     }
@@ -1651,7 +1742,8 @@ impl PostgresMemoryStore {
         let current = row_map.get(memory_id).cloned().unwrap_or_default();
 
         // 2. Compute days elapsed since last reinforcement (or 365 if never reinforced)
-        let days_elapsed = current.last_reinforced_at
+        let days_elapsed = current
+            .last_reinforced_at
             .map(|dt| {
                 let duration = Utc::now().signed_duration_since(dt);
                 (duration.num_seconds() as f64 / 86_400.0).max(0.0)
@@ -1659,10 +1751,8 @@ impl PostgresMemoryStore {
             .unwrap_or(365.0);
 
         // 3. Compute current retrievability (how fresh is the memory right now?)
-        let retrievability = crate::search::salience::fsrs_retrievability(
-            current.stability,
-            days_elapsed,
-        );
+        let retrievability =
+            crate::search::salience::fsrs_retrievability(current.stability, days_elapsed);
 
         // 4. Update stability — faded memories (low retrievability) get bigger boosts
         //    multiplier: 1.5 for "good", 2.0 for "easy"
@@ -1735,10 +1825,7 @@ impl PostgresMemoryStore {
     ///
     /// Offset-based pagination (filter.offset > 0) is deprecated — use filter.cursor instead.
     /// A deprecation warning is emitted to tracing when offset > 0 without a cursor.
-    pub async fn search_similar(
-        &self,
-        filter: &SearchFilter,
-    ) -> Result<SearchResult, MemcpError> {
+    pub async fn search_similar(&self, filter: &SearchFilter) -> Result<SearchResult, MemcpError> {
         // Deprecation warning: offset-based pagination is superseded by cursor-based.
         if filter.offset > 0 && filter.cursor.is_none() {
             tracing::warn!(
@@ -1750,9 +1837,11 @@ impl PostgresMemoryStore {
 
         // Acquire an explicit connection — SET hnsw.iterative_scan is session-scoped
         // and must run on the same connection as the search query.
-        let mut conn = self.pool.acquire().await.map_err(|e| {
-            MemcpError::Storage(format!("Failed to acquire connection: {}", e))
-        })?;
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to acquire connection: {}", e)))?;
 
         // Determine if any optional filters are present
         let has_filters = filter.created_after.is_some()
@@ -1824,7 +1913,9 @@ impl PostgresMemoryStore {
              {} AND m.is_consolidated_original = FALSE \
              ORDER BY me.embedding <=> $1 ASC \
              LIMIT ${} OFFSET ${}",
-            where_clause, param_idx, param_idx + 1
+            where_clause,
+            param_idx,
+            param_idx + 1
         );
 
         // Count query: same JOIN and WHERE but no ORDER BY / LIMIT / OFFSET
@@ -1911,7 +2002,8 @@ impl PostgresMemoryStore {
             next_offset < total_matches as i64
         };
         let next_cursor = if has_more {
-            hits.last().map(|hit| encode_search_keyset_cursor(hit.similarity, &hit.memory.id))
+            hits.last()
+                .map(|hit| encode_search_keyset_cursor(hit.similarity, &hit.memory.id))
         } else {
             None
         };
@@ -2068,7 +2160,11 @@ impl PostgresMemoryStore {
         // e.g. --source claude-code --source openclaw matches both; "openclaw" matches "openclaw/vita"
         if let Some(sources) = source {
             if !sources.is_empty() {
-                hits.retain(|hit| sources.iter().any(|src| hit.memory.source.starts_with(src.as_str())));
+                hits.retain(|hit| {
+                    sources
+                        .iter()
+                        .any(|src| hit.memory.source.starts_with(src.as_str()))
+                });
             }
         }
 
@@ -2081,8 +2177,7 @@ impl PostgresMemoryStore {
         // None project means no filter — return all.
         if let Some(ws) = project {
             hits.retain(|hit| {
-                hit.memory.project.as_deref() == Some(ws)
-                    || hit.memory.project.is_none()
+                hit.memory.project.as_deref() == Some(ws) || hit.memory.project.is_none()
             });
         }
 
@@ -2169,7 +2264,11 @@ impl PostgresMemoryStore {
             .map_err(|e| MemcpError::Storage(format!("Tier vector search failed: {}", e)))?;
 
         // Convert to (id, rank) pairs (1-indexed)
-        Ok(ids.into_iter().enumerate().map(|(i, id)| (id, (i + 1) as i64)).collect())
+        Ok(ids
+            .into_iter()
+            .enumerate()
+            .map(|(i, id)| (id, (i + 1) as i64))
+            .collect())
     }
 
     /// Multi-tier hybrid search: runs BM25 + symbolic once, vector search per tier, then RRF-merges.
@@ -2209,14 +2308,23 @@ impl PostgresMemoryStore {
         let mut all_vector_results: Vec<(String, i64)> = Vec::new();
         if vector_k.is_some() {
             for (tier_name, embedding) in tier_embeddings {
-                let tier_results = self.search_vector_for_tier(
-                    embedding, tier_name, candidate_limit, created_after, created_before,
-                    tags, audience,
-                ).await?;
+                let tier_results = self
+                    .search_vector_for_tier(
+                        embedding,
+                        tier_name,
+                        candidate_limit,
+                        created_after,
+                        created_before,
+                        tags,
+                        audience,
+                    )
+                    .await?;
 
                 // Merge into all_vector_results: keep best rank per memory_id
                 for (id, rank) in tier_results {
-                    if let Some(existing) = all_vector_results.iter_mut().find(|(eid, _)| eid == &id) {
+                    if let Some(existing) =
+                        all_vector_results.iter_mut().find(|(eid, _)| eid == &id)
+                    {
                         if rank < existing.1 {
                             existing.1 = rank;
                         }
@@ -2267,7 +2375,11 @@ impl PostgresMemoryStore {
         // Post-filter by source prefix
         if let Some(sources) = source {
             if !sources.is_empty() {
-                hits.retain(|hit| sources.iter().any(|src| hit.memory.source.starts_with(src.as_str())));
+                hits.retain(|hit| {
+                    sources
+                        .iter()
+                        .any(|src| hit.memory.source.starts_with(src.as_str()))
+                });
             }
         }
 
@@ -2279,8 +2391,7 @@ impl PostgresMemoryStore {
         // Post-filter by project: keep project-scoped AND global (NULL project) memories.
         if let Some(ws) = project {
             hits.retain(|hit| {
-                hit.memory.project.as_deref() == Some(ws)
-                    || hit.memory.project.is_none()
+                hit.memory.project.as_deref() == Some(ws) || hit.memory.project.is_none()
             });
         }
 
@@ -2323,31 +2434,34 @@ impl PostgresMemoryStore {
         // Fetch a larger candidate pool for application-level pagination.
         // When using a cursor, we need additional candidates beyond the current page.
         let candidate_limit = if cursor_position.is_some() {
-            limit * 5  // larger pool to find enough results after cursor position
+            limit * 5 // larger pool to find enough results after cursor position
         } else {
-            limit * 3  // standard oversampling for first page
+            limit * 3 // standard oversampling for first page
         };
 
         // Get raw hits from hybrid_search
-        let raw_hits = self.hybrid_search(
-            query_text,
-            query_embedding,
-            candidate_limit,
-            created_after,
-            created_before,
-            tags,
-            bm25_k,
-            vector_k,
-            symbolic_k,
-            source,
-            audience,
-            project,
-        ).await?;
+        let raw_hits = self
+            .hybrid_search(
+                query_text,
+                query_embedding,
+                candidate_limit,
+                created_after,
+                created_before,
+                tags,
+                bm25_k,
+                vector_k,
+                symbolic_k,
+                source,
+                audience,
+                project,
+            )
+            .await?;
 
         // Sort by rrf_score DESC for stable ordering, then by id ASC for tie-breaking
         let mut sorted_hits: Vec<crate::search::HybridRawHit> = raw_hits;
         sorted_hits.sort_by(|a, b| {
-            b.rrf_score.partial_cmp(&a.rrf_score)
+            b.rrf_score
+                .partial_cmp(&a.rrf_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then(a.memory.id.cmp(&b.memory.id))
         });
@@ -2355,39 +2469,51 @@ impl PostgresMemoryStore {
         // Apply cursor filtering: skip items at or before the cursor position
         // Cursor encodes the LAST item of the previous page (score, id).
         // Skip items where: score > last_score, OR (score == last_score AND id <= last_id).
-        let filtered: Vec<crate::search::HybridRawHit> = if let Some((last_score, ref last_id)) = cursor_position {
-            sorted_hits.into_iter().filter(|hit| {
-                let score = hit.rrf_score;
-                if (score - last_score).abs() < f64::EPSILON {
-                    // Same score: only include items with id > last_id (tie-breaking by id)
-                    hit.memory.id.as_str() > last_id.as_str()
-                } else {
-                    // Different score: include items with lower rrf_score (come after in DESC order)
-                    score < last_score
-                }
-            }).collect()
-        } else {
-            sorted_hits
-        };
+        let filtered: Vec<crate::search::HybridRawHit> =
+            if let Some((last_score, ref last_id)) = cursor_position {
+                sorted_hits
+                    .into_iter()
+                    .filter(|hit| {
+                        let score = hit.rrf_score;
+                        if (score - last_score).abs() < f64::EPSILON {
+                            // Same score: only include items with id > last_id (tie-breaking by id)
+                            hit.memory.id.as_str() > last_id.as_str()
+                        } else {
+                            // Different score: include items with lower rrf_score (come after in DESC order)
+                            score < last_score
+                        }
+                    })
+                    .collect()
+            } else {
+                sorted_hits
+            };
 
         // Take limit + 1 to detect if there are more results
         let has_more = filtered.len() as i64 > limit;
-        let take = if has_more { limit as usize } else { filtered.len() };
+        let take = if has_more {
+            limit as usize
+        } else {
+            filtered.len()
+        };
 
         let page: Vec<crate::search::HybridRawHit> = filtered.into_iter().take(take).collect();
 
         // Build next_cursor from the last item on this page
         let next_cursor = if has_more {
-            page.last().map(|hit| encode_search_keyset_cursor(hit.rrf_score, &hit.memory.id))
+            page.last()
+                .map(|hit| encode_search_keyset_cursor(hit.rrf_score, &hit.memory.id))
         } else {
             None
         };
 
         // Convert to SearchHit (using rrf_score as similarity proxy at the store layer)
-        let hits: Vec<SearchHit> = page.into_iter().map(|hit| SearchHit {
-            similarity: hit.rrf_score,
-            memory: hit.memory,
-        }).collect();
+        let hits: Vec<SearchHit> = page
+            .into_iter()
+            .map(|hit| SearchHit {
+                similarity: hit.rrf_score,
+                memory: hit.memory,
+            })
+            .collect();
 
         let total_matches = hits.len() as u64 + if has_more { 1 } else { 0 };
 
@@ -2449,11 +2575,17 @@ impl PostgresMemoryStore {
             .await
             .map_err(|e| MemcpError::Storage(format!("Symbolic search failed: {}", e)))?;
 
-        rows.iter().map(|row| {
-            let id: String = row.try_get("id").map_err(|e| MemcpError::Storage(e.to_string()))?;
-            let rank: i64 = row.try_get("symbolic_rank").map_err(|e| MemcpError::Storage(e.to_string()))?;
-            Ok((id, rank))
-        }).collect::<Result<Vec<_>, MemcpError>>()
+        rows.iter()
+            .map(|row| {
+                let id: String = row
+                    .try_get("id")
+                    .map_err(|e| MemcpError::Storage(e.to_string()))?;
+                let rank: i64 = row
+                    .try_get("symbolic_rank")
+                    .map_err(|e| MemcpError::Storage(e.to_string()))?;
+                Ok((id, rank))
+            })
+            .collect::<Result<Vec<_>, MemcpError>>()
     }
 
     /// Search for memories matching the query using BM25 full-text ranking.
@@ -2507,11 +2639,17 @@ impl PostgresMemoryStore {
             .await
             .map_err(|e| MemcpError::Storage(format!("BM25 search failed: {}", e)))?;
 
-        rows.iter().map(|row| {
-            let id: String = row.try_get("id").map_err(|e| MemcpError::Storage(e.to_string()))?;
-            let rank: i64 = row.try_get("bm25_rank").map_err(|e| MemcpError::Storage(e.to_string()))?;
-            Ok((id, rank))
-        }).collect::<Result<Vec<_>, MemcpError>>()
+        rows.iter()
+            .map(|row| {
+                let id: String = row
+                    .try_get("id")
+                    .map_err(|e| MemcpError::Storage(e.to_string()))?;
+                let rank: i64 = row
+                    .try_get("bm25_rank")
+                    .map_err(|e| MemcpError::Storage(e.to_string()))?;
+                Ok((id, rank))
+            })
+            .collect::<Result<Vec<_>, MemcpError>>()
     }
 
     // -------------------------------------------------------------------------
@@ -2557,7 +2695,9 @@ impl PostgresMemoryStore {
             .bind(status)
             .execute(&self.pool)
             .await
-            .map_err(|e| MemcpError::Storage(format!("Failed to update extraction status: {}", e)))?;
+            .map_err(|e| {
+                MemcpError::Storage(format!("Failed to update extraction status: {}", e))
+            })?;
 
         Ok(())
     }
@@ -2579,8 +2719,12 @@ impl PostgresMemoryStore {
 
         rows.iter()
             .map(|row| {
-                let id: String = row.try_get("id").map_err(|e| MemcpError::Storage(e.to_string()))?;
-                let content: String = row.try_get("content").map_err(|e| MemcpError::Storage(e.to_string()))?;
+                let id: String = row
+                    .try_get("id")
+                    .map_err(|e| MemcpError::Storage(e.to_string()))?;
+                let content: String = row
+                    .try_get("content")
+                    .map_err(|e| MemcpError::Storage(e.to_string()))?;
                 Ok((id, content))
             })
             .collect::<Result<Vec<_>, MemcpError>>()
@@ -2643,11 +2787,13 @@ impl PostgresMemoryStore {
             .bind(&link_id)
             .bind(&consolidated_id)
             .bind(source_id)
-            .bind(similarity as f32)  // REAL column — use f32
+            .bind(similarity as f32) // REAL column — use f32
             .bind(now)
             .execute(&mut *tx)
             .await
-            .map_err(|e| MemcpError::Storage(format!("Failed to insert consolidation link: {}", e)))?;
+            .map_err(|e| {
+                MemcpError::Storage(format!("Failed to insert consolidation link: {}", e))
+            })?;
 
             // Mark original as consolidated
             sqlx::query(
@@ -2658,7 +2804,9 @@ impl PostgresMemoryStore {
             .bind(source_id)
             .execute(&mut *tx)
             .await
-            .map_err(|e| MemcpError::Storage(format!("Failed to mark original as consolidated: {}", e)))?;
+            .map_err(|e| {
+                MemcpError::Storage(format!("Failed to mark original as consolidated: {}", e))
+            })?;
         }
 
         // Commit the transaction atomically
@@ -2675,12 +2823,13 @@ impl PostgresMemoryStore {
 
     /// Count live (non-soft-deleted) memories.
     pub async fn count_live_memories(&self) -> Result<i64, MemcpError> {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL"
-        )
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| MemcpError::Storage(format!("Failed to count live memories: {}", e)))?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| {
+                    MemcpError::Storage(format!("Failed to count live memories: {}", e))
+                })?;
         Ok(count)
     }
 
@@ -2727,18 +2876,28 @@ impl PostgresMemoryStore {
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to fetch GC candidates: {}", e)))?;
 
-        rows.iter().map(|row| {
-            let id: String = row.try_get("id").map_err(|e| MemcpError::Storage(e.to_string()))?;
-            let snippet: String = row.try_get("snippet").map_err(|e| MemcpError::Storage(e.to_string()))?;
-            let stability: f64 = row.try_get::<f64, _>("stability").map_err(|e| MemcpError::Storage(e.to_string()))?;
-            let age_days: i64 = row.try_get("age_days").map_err(|e| MemcpError::Storage(e.to_string()))?;
-            Ok(crate::gc::GcCandidate {
-                id,
-                content_snippet: snippet,
-                stability,
-                age_days,
+        rows.iter()
+            .map(|row| {
+                let id: String = row
+                    .try_get("id")
+                    .map_err(|e| MemcpError::Storage(e.to_string()))?;
+                let snippet: String = row
+                    .try_get("snippet")
+                    .map_err(|e| MemcpError::Storage(e.to_string()))?;
+                let stability: f64 = row
+                    .try_get::<f64, _>("stability")
+                    .map_err(|e| MemcpError::Storage(e.to_string()))?;
+                let age_days: i64 = row
+                    .try_get("age_days")
+                    .map_err(|e| MemcpError::Storage(e.to_string()))?;
+                Ok(crate::gc::GcCandidate {
+                    id,
+                    content_snippet: snippet,
+                    stability,
+                    age_days,
+                })
             })
-        }).collect::<Result<Vec<_>, MemcpError>>()
+            .collect::<Result<Vec<_>, MemcpError>>()
     }
 
     /// Fetch IDs of TTL-expired memories (expires_at < NOW(), not yet soft-deleted).
@@ -2753,9 +2912,12 @@ impl PostgresMemoryStore {
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to fetch expired memories: {}", e)))?;
 
-        rows.iter().map(|row| {
-            row.try_get("id").map_err(|e| MemcpError::Storage(e.to_string()))
-        }).collect::<Result<Vec<_>, MemcpError>>()
+        rows.iter()
+            .map(|row| {
+                row.try_get("id")
+                    .map_err(|e| MemcpError::Storage(e.to_string()))
+            })
+            .collect::<Result<Vec<_>, MemcpError>>()
     }
 
     /// Soft-delete a batch of memories by setting deleted_at = NOW().
@@ -2783,7 +2945,10 @@ impl PostgresMemoryStore {
     /// Used by the GC worker to cascade soft-deletes to chunks when a parent
     /// memory is garbage-collected. FK ON DELETE CASCADE only triggers on
     /// hard-delete (DELETE), not on UPDATE of deleted_at.
-    pub async fn soft_delete_chunks_by_parents(&self, parent_ids: &[String]) -> Result<usize, MemcpError> {
+    pub async fn soft_delete_chunks_by_parents(
+        &self,
+        parent_ids: &[String],
+    ) -> Result<usize, MemcpError> {
         if parent_ids.is_empty() {
             return Ok(0);
         }
@@ -2794,7 +2959,9 @@ impl PostgresMemoryStore {
         .bind(parent_ids)
         .execute(&self.pool)
         .await
-        .map_err(|e| MemcpError::Storage(format!("Failed to soft-delete chunks by parent: {}", e)))?;
+        .map_err(|e| {
+            MemcpError::Storage(format!("Failed to soft-delete chunks by parent: {}", e))
+        })?;
 
         Ok(result.rows_affected() as usize)
     }
@@ -2822,7 +2989,8 @@ impl PostgresMemoryStore {
             return Ok(0);
         }
 
-        let ids: Vec<String> = rows.iter()
+        let ids: Vec<String> = rows
+            .iter()
             .filter_map(|r| r.try_get::<String, _>("id").ok())
             .collect();
 
@@ -2863,7 +3031,12 @@ impl PostgresMemoryStore {
         let result = sqlx::query("DELETE FROM idempotency_keys WHERE expires_at < NOW()")
             .execute(&self.pool)
             .await
-            .map_err(|e| MemcpError::Storage(format!("Failed to clean up expired idempotency keys: {}", e)))?;
+            .map_err(|e| {
+                MemcpError::Storage(format!(
+                    "Failed to clean up expired idempotency keys: {}",
+                    e
+                ))
+            })?;
         Ok(result.rows_affected() as usize)
     }
 
@@ -2961,7 +3134,10 @@ impl PostgresMemoryStore {
                 let tags = serde_json::from_value::<Vec<String>>(value).unwrap_or_default();
                 // Dedup on read — accumulate_session_tags appends without deduplication.
                 let mut seen = std::collections::HashSet::new();
-                let deduped = tags.into_iter().filter(|t| seen.insert(t.clone())).collect();
+                let deduped = tags
+                    .into_iter()
+                    .filter(|t| seen.insert(t.clone()))
+                    .collect();
                 Ok(deduped)
             }
         }
@@ -2980,7 +3156,10 @@ impl PostgresMemoryStore {
             return Ok(());
         }
         let tags_json = serde_json::Value::Array(
-            new_tags.iter().map(|t| serde_json::Value::String(t.clone())).collect(),
+            new_tags
+                .iter()
+                .map(|t| serde_json::Value::String(t.clone()))
+                .collect(),
         );
         sqlx::query(
             "UPDATE sessions SET session_tags = COALESCE(session_tags, '[]'::jsonb) || $2::jsonb WHERE session_id = $1",
@@ -3056,7 +3235,7 @@ impl PostgresMemoryStore {
         max_memories: usize,
         extraction_enabled: bool,
         project: Option<&str>,
-    ) -> Result<Vec<(String, String, f32, Option<serde_json::Value>)>, MemcpError> {
+    ) -> Result<Vec<RecallCandidate>, MemcpError> {
         // Serialize embedding to pgvector literal format: '[0.1,0.2,...]'
         let emb_str = format!(
             "[{}]",
@@ -3070,20 +3249,26 @@ impl PostgresMemoryStore {
 
         // Build optional project filter clause. When project is Some, add
         // AND (m.project = $5 OR m.project IS NULL) — returns both scoped and global memories.
-        let project_clause = if project.is_some() { " AND (m.project = $5 OR m.project IS NULL)" } else { "" };
+        let project_clause = if project.is_some() {
+            " AND (m.project = $5 OR m.project IS NULL)"
+        } else {
+            ""
+        };
 
         if extraction_enabled {
             // Extraction-on tier: query against extracted_facts.
             // DISTINCT ON (m.id) picks the highest-relevance fact per memory.
             // Outer query sorts and caps at max_memories.
-            let sql = format!("
-                SELECT memory_id, content, relevance, tags FROM (
+            let sql = format!(
+                "
+                SELECT memory_id, content, relevance, tags, trust_level FROM (
                     SELECT DISTINCT ON (m.id)
                         m.id AS memory_id,
                         ef.fact AS content,
                         (1.0 - (me.embedding <=> $1::vector)) AS relevance,
                         COALESCE(ms.stability, 1.0) AS stability,
-                        m.tags AS tags
+                        m.tags AS tags,
+                        m.trust_level
                     FROM memories m
                     JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = true
                     LEFT JOIN memory_salience ms ON ms.memory_id = m.id
@@ -3099,7 +3284,8 @@ impl PostgresMemoryStore {
                 ) sub
                 ORDER BY relevance DESC, stability DESC
                 LIMIT $4
-            ");
+            "
+            );
             let mut q = sqlx::query(&sql)
                 .bind(&emb_str)
                 .bind(session_id)
@@ -3108,10 +3294,9 @@ impl PostgresMemoryStore {
             if let Some(ws) = project {
                 q = q.bind(ws);
             }
-            let rows = q
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| MemcpError::Storage(format!("recall_candidates (extraction) failed: {}", e)))?;
+            let rows = q.fetch_all(&self.pool).await.map_err(|e| {
+                MemcpError::Storage(format!("recall_candidates (extraction) failed: {}", e))
+            })?;
 
             let results = rows
                 .iter()
@@ -3119,23 +3304,28 @@ impl PostgresMemoryStore {
                     let memory_id: String = row.get("memory_id");
                     let content: String = row.get("content");
                     // pgvector cosine distance returns FLOAT8; read as f64 then downcast
-                    let relevance: f32 = row.try_get::<f64, _>("relevance").map(|v| v as f32)
+                    let relevance: f32 = row
+                        .try_get::<f64, _>("relevance")
+                        .map(|v| v as f32)
                         .or_else(|_| row.try_get::<f32, _>("relevance"))
                         .unwrap_or(0.0);
                     let tags: Option<serde_json::Value> = row.try_get("tags").ok().flatten();
-                    (memory_id, content, relevance, tags)
+                    let trust_level: f32 = row.try_get::<f32, _>("trust_level").unwrap_or(0.5);
+                    RecallCandidate { memory_id, content, relevance, tags, trust_level }
                 })
                 .collect();
             Ok(results)
         } else {
             // Extraction-off tier: filter to fact/summary type_hint memories.
-            let sql = format!("
+            let sql = format!(
+                "
                 SELECT
                     m.id AS memory_id,
                     m.content,
                     (1.0 - (me.embedding <=> $1::vector)) AS relevance,
                     COALESCE(ms.stability, 1.0) AS stability,
-                    m.tags AS tags
+                    m.tags AS tags,
+                    m.trust_level
                 FROM memories m
                 JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = true
                 LEFT JOIN memory_salience ms ON ms.memory_id = m.id
@@ -3147,7 +3337,8 @@ impl PostgresMemoryStore {
                   AND (1.0 - (me.embedding <=> $1::vector)) >= $3{project_clause}
                 ORDER BY relevance DESC, stability DESC
                 LIMIT $4
-            ");
+            "
+            );
             let mut q = sqlx::query(&sql)
                 .bind(&emb_str)
                 .bind(session_id)
@@ -3156,10 +3347,9 @@ impl PostgresMemoryStore {
             if let Some(ws) = project {
                 q = q.bind(ws);
             }
-            let rows = q
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| MemcpError::Storage(format!("recall_candidates (no-extraction) failed: {}", e)))?;
+            let rows = q.fetch_all(&self.pool).await.map_err(|e| {
+                MemcpError::Storage(format!("recall_candidates (no-extraction) failed: {}", e))
+            })?;
 
             let results = rows
                 .iter()
@@ -3167,11 +3357,14 @@ impl PostgresMemoryStore {
                     let memory_id: String = row.get("memory_id");
                     let content: String = row.get("content");
                     // pgvector cosine distance returns FLOAT8; read as f64 then downcast
-                    let relevance: f32 = row.try_get::<f64, _>("relevance").map(|v| v as f32)
+                    let relevance: f32 = row
+                        .try_get::<f64, _>("relevance")
+                        .map(|v| v as f32)
                         .or_else(|_| row.try_get::<f32, _>("relevance"))
                         .unwrap_or(0.0);
                     let tags: Option<serde_json::Value> = row.try_get("tags").ok().flatten();
-                    (memory_id, content, relevance, tags)
+                    let trust_level: f32 = row.try_get::<f32, _>("trust_level").unwrap_or(0.5);
+                    RecallCandidate { memory_id, content, relevance, tags, trust_level }
                 })
                 .collect();
             Ok(results)
@@ -3196,7 +3389,7 @@ impl PostgresMemoryStore {
         max_memories: usize,
         extraction_enabled: bool,
         project: Option<&str>,
-    ) -> Result<Vec<(String, String, f32, Option<serde_json::Value>)>, MemcpError> {
+    ) -> Result<Vec<RecallCandidate>, MemcpError> {
         if tier_embeddings.is_empty() {
             // No embeddings available — return empty (caller should fall back or warn)
             return Ok(vec![]);
@@ -3205,36 +3398,68 @@ impl PostgresMemoryStore {
         if tier_embeddings.len() == 1 {
             // Single tier — delegate directly to recall_candidates
             let embedding = tier_embeddings.values().next().unwrap();
-            return self.recall_candidates(embedding, session_id, min_relevance, max_memories, extraction_enabled, project).await;
+            return self
+                .recall_candidates(
+                    embedding,
+                    session_id,
+                    min_relevance,
+                    max_memories,
+                    extraction_enabled,
+                    project,
+                )
+                .await;
         }
 
         // Multi-tier: query each tier separately and merge by best relevance.
-        // Tuple: (content, relevance, tags)
-        let mut merged: HashMap<String, (String, f32, Option<serde_json::Value>)> = HashMap::new();
+        // Tuple: (content, relevance, tags, trust_level)
+        let mut merged: HashMap<String, (String, f32, Option<serde_json::Value>, f32)> =
+            HashMap::new();
 
         for embedding in tier_embeddings.values() {
-            let tier_results = self.recall_candidates(
-                embedding, session_id, min_relevance, max_memories, extraction_enabled, project
-            ).await?;
+            let tier_results = self
+                .recall_candidates(
+                    embedding,
+                    session_id,
+                    min_relevance,
+                    max_memories,
+                    extraction_enabled,
+                    project,
+                )
+                .await?;
 
-            for (memory_id, content, relevance, tags) in tier_results {
+            for candidate in tier_results {
                 merged
-                    .entry(memory_id)
-                    .and_modify(|(_, best_rel, _)| {
-                        if relevance > *best_rel {
-                            *best_rel = relevance;
+                    .entry(candidate.memory_id)
+                    .and_modify(|(_, best_rel, _, _)| {
+                        if candidate.relevance > *best_rel {
+                            *best_rel = candidate.relevance;
                         }
                     })
-                    .or_insert((content, relevance, tags));
+                    .or_insert((
+                        candidate.content,
+                        candidate.relevance,
+                        candidate.tags,
+                        candidate.trust_level,
+                    ));
             }
         }
 
         // Sort by relevance descending and cap at max_memories
-        let mut results: Vec<(String, String, f32, Option<serde_json::Value>)> = merged
+        let mut results: Vec<RecallCandidate> = merged
             .into_iter()
-            .map(|(id, (content, rel, tags))| (id, content, rel, tags))
+            .map(|(id, (content, rel, tags, trust))| RecallCandidate {
+                memory_id: id,
+                content,
+                relevance: rel,
+                tags,
+                trust_level: trust,
+            })
             .collect();
-        results.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.relevance
+                .partial_cmp(&a.relevance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(max_memories);
 
         Ok(results)
@@ -3261,7 +3486,8 @@ impl PostgresMemoryStore {
             ""
         };
 
-        let sql = format!("
+        let sql = format!(
+            "
             SELECT
                 m.id AS memory_id,
                 m.content,
@@ -3269,7 +3495,8 @@ impl PostgresMemoryStore {
                 m.access_count,
                 COALESCE(ms.stability, 1.0) AS stability,
                 ms.last_reinforced_at,
-                m.tags
+                m.tags,
+                m.trust_level
             FROM memories m
             LEFT JOIN memory_salience ms ON ms.memory_id = m.id
             LEFT JOIN session_recalls sr ON sr.session_id = $1 AND sr.memory_id = m.id
@@ -3280,19 +3507,17 @@ impl PostgresMemoryStore {
               {project_clause}
             ORDER BY COALESCE(ms.stability, 1.0) DESC, m.updated_at DESC
             LIMIT $2
-        ");
+        "
+        );
 
-        let mut q = sqlx::query(&sql)
-            .bind(session_id)
-            .bind(limit);
+        let mut q = sqlx::query(&sql).bind(session_id).bind(limit);
         if let Some(ws) = project {
             q = q.bind(ws);
         }
 
-        let rows = q
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| MemcpError::Storage(format!("recall_candidates_queryless failed: {}", e)))?;
+        let rows = q.fetch_all(&self.pool).await.map_err(|e| {
+            MemcpError::Storage(format!("recall_candidates_queryless failed: {}", e))
+        })?;
 
         let results = rows
             .iter()
@@ -3302,8 +3527,10 @@ impl PostgresMemoryStore {
                 let updated_at: chrono::DateTime<Utc> = row.get("updated_at");
                 let access_count: i64 = row.get("access_count");
                 let stability: f64 = row.try_get::<f64, _>("stability").unwrap_or(1.0);
-                let last_reinforced_at: Option<chrono::DateTime<Utc>> = row.get("last_reinforced_at");
+                let last_reinforced_at: Option<chrono::DateTime<Utc>> =
+                    row.get("last_reinforced_at");
                 let tags: Option<serde_json::Value> = row.get("tags");
+                let trust_level: f32 = row.try_get::<f32, _>("trust_level").unwrap_or(0.5);
                 QuerylessCandidate {
                     memory_id,
                     content,
@@ -3312,6 +3539,7 @@ impl PostgresMemoryStore {
                     stability,
                     last_reinforced_at,
                     tags,
+                    trust_level,
                 }
             })
             .collect();
@@ -3334,7 +3562,8 @@ impl PostgresMemoryStore {
             ""
         };
 
-        let sql = format!("
+        let sql = format!(
+            "
             SELECT m.id, m.content
             FROM memories m
             WHERE m.deleted_at IS NULL
@@ -3342,7 +3571,8 @@ impl PostgresMemoryStore {
               {project_clause}
             ORDER BY m.updated_at DESC
             LIMIT 1
-        ");
+        "
+        );
 
         let mut q = sqlx::query(&sql);
         if let Some(ws) = project {
@@ -3398,11 +3628,9 @@ impl PostgresMemoryStore {
         let source_jsonb = serde_json::to_string(&source_entry)
             .map_err(|e| MemcpError::Storage(format!("Failed to serialize dedup source: {}", e)))?;
 
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| MemcpError::Storage(format!("Failed to begin dedup transaction: {}", e)))?;
+        let mut tx = self.pool.begin().await.map_err(|e| {
+            MemcpError::Storage(format!("Failed to begin dedup transaction: {}", e))
+        })?;
 
         // Update existing memory: bump access_count, refresh last_accessed_at, append to dedup_sources
         sqlx::query(
@@ -3417,7 +3645,10 @@ impl PostgresMemoryStore {
         .execute(&mut *tx)
         .await
         .map_err(|e| {
-            MemcpError::Storage(format!("Failed to update existing memory in dedup merge: {}", e))
+            MemcpError::Storage(format!(
+                "Failed to update existing memory in dedup merge: {}",
+                e
+            ))
         })?;
 
         // Soft-delete the incoming duplicate
@@ -3426,12 +3657,15 @@ impl PostgresMemoryStore {
             .execute(&mut *tx)
             .await
             .map_err(|e| {
-                MemcpError::Storage(format!("Failed to soft-delete duplicate in dedup merge: {}", e))
+                MemcpError::Storage(format!(
+                    "Failed to soft-delete duplicate in dedup merge: {}",
+                    e
+                ))
             })?;
 
-        tx.commit()
-            .await
-            .map_err(|e| MemcpError::Storage(format!("Failed to commit dedup merge transaction: {}", e)))?;
+        tx.commit().await.map_err(|e| {
+            MemcpError::Storage(format!("Failed to commit dedup merge transaction: {}", e))
+        })?;
 
         Ok(())
     }
@@ -3552,7 +3786,12 @@ impl PostgresMemoryStore {
             .bind(parent_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| MemcpError::Storage(format!("Failed to delete chunks for parent {}: {}", parent_id, e)))?;
+            .map_err(|e| {
+                MemcpError::Storage(format!(
+                    "Failed to delete chunks for parent {}: {}",
+                    parent_id, e
+                ))
+            })?;
         Ok(result.rows_affected())
     }
 
@@ -3571,9 +3810,7 @@ impl PostgresMemoryStore {
         )
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| {
-            MemcpError::Storage(format!("Failed to get last curation time: {}", e))
-        })?;
+        .map_err(|e| MemcpError::Storage(format!("Failed to get last curation time: {}", e)))?;
         Ok(row)
     }
 
@@ -3638,20 +3875,14 @@ impl PostgresMemoryStore {
                 .fetch_all(&self.pool)
                 .await
         }
-        .map_err(|e| {
-            MemcpError::Storage(format!("Failed to get memories for curation: {}", e))
-        })?;
+        .map_err(|e| MemcpError::Storage(format!("Failed to get memories for curation: {}", e)))?;
 
         let mut results = Vec::with_capacity(rows.len());
         for row in &rows {
             let memory = row_to_memory(row)?;
             let salience = SalienceRow {
-                stability: row
-                    .try_get::<f64, _>("sal_stability")
-                    .unwrap_or(1.0),
-                difficulty: row
-                    .try_get::<f64, _>("sal_difficulty")
-                    .unwrap_or(5.0),
+                stability: row.try_get::<f64, _>("sal_stability").unwrap_or(1.0),
+                difficulty: row.try_get::<f64, _>("sal_difficulty").unwrap_or(5.0),
                 reinforcement_count: row
                     .try_get::<i32, _>("sal_reinforcement_count")
                     .unwrap_or(0),
@@ -3706,18 +3937,12 @@ impl PostgresMemoryStore {
         .bind(skipped_count)
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            MemcpError::Storage(format!("Failed to complete curation run: {}", e))
-        })?;
+        .map_err(|e| MemcpError::Storage(format!("Failed to complete curation run: {}", e)))?;
         Ok(())
     }
 
     /// Mark a curation run as failed.
-    pub async fn fail_curation_run(
-        &self,
-        run_id: &str,
-        error: &str,
-    ) -> Result<(), MemcpError> {
+    pub async fn fail_curation_run(&self, run_id: &str, error: &str) -> Result<(), MemcpError> {
         sqlx::query(
             "UPDATE curation_runs SET status = 'failed', completed_at = NOW(), \
              error_message = $2 WHERE id = $1::uuid",
@@ -3762,10 +3987,7 @@ impl PostgresMemoryStore {
     }
 
     /// Get recent curation runs for the log command.
-    pub async fn get_curation_runs(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<CurationRunRow>, MemcpError> {
+    pub async fn get_curation_runs(&self, limit: usize) -> Result<Vec<CurationRunRow>, MemcpError> {
         let rows = sqlx::query(
             "SELECT id, started_at, completed_at, status, mode, \
              window_start, window_end, \
@@ -3776,37 +3998,47 @@ impl PostgresMemoryStore {
         .bind(limit as i64)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| {
-            MemcpError::Storage(format!("Failed to get curation runs: {}", e))
-        })?;
+        .map_err(|e| MemcpError::Storage(format!("Failed to get curation runs: {}", e)))?;
 
         rows.iter()
             .map(|row| {
                 Ok(CurationRunRow {
-                    id: row.try_get::<uuid::Uuid, _>("id")
+                    id: row
+                        .try_get::<uuid::Uuid, _>("id")
                         .map(|u| u.to_string())
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    started_at: row.try_get("started_at")
+                    started_at: row
+                        .try_get("started_at")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    completed_at: row.try_get("completed_at")
+                    completed_at: row
+                        .try_get("completed_at")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    status: row.try_get("status")
+                    status: row
+                        .try_get("status")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    mode: row.try_get("mode")
+                    mode: row
+                        .try_get("mode")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    window_start: row.try_get("window_start")
+                    window_start: row
+                        .try_get("window_start")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    window_end: row.try_get("window_end")
+                    window_end: row
+                        .try_get("window_end")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    merged_count: row.try_get("merged_count")
+                    merged_count: row
+                        .try_get("merged_count")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    flagged_stale_count: row.try_get("flagged_stale_count")
+                    flagged_stale_count: row
+                        .try_get("flagged_stale_count")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    strengthened_count: row.try_get("strengthened_count")
+                    strengthened_count: row
+                        .try_get("strengthened_count")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    skipped_count: row.try_get("skipped_count")
+                    skipped_count: row
+                        .try_get("skipped_count")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    error_message: row.try_get("error_message")
+                    error_message: row
+                        .try_get("error_message")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
                 })
             })
@@ -3826,30 +4058,36 @@ impl PostgresMemoryStore {
         .bind(run_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| {
-            MemcpError::Storage(format!("Failed to get curation actions: {}", e))
-        })?;
+        .map_err(|e| MemcpError::Storage(format!("Failed to get curation actions: {}", e)))?;
 
         rows.iter()
             .map(|row| {
                 Ok(CurationActionRow {
-                    id: row.try_get::<uuid::Uuid, _>("id")
+                    id: row
+                        .try_get::<uuid::Uuid, _>("id")
                         .map(|u| u.to_string())
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    run_id: row.try_get::<uuid::Uuid, _>("run_id")
+                    run_id: row
+                        .try_get::<uuid::Uuid, _>("run_id")
                         .map(|u| u.to_string())
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    action_type: row.try_get("action_type")
+                    action_type: row
+                        .try_get("action_type")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    target_memory_ids: row.try_get("target_memory_ids")
+                    target_memory_ids: row
+                        .try_get("target_memory_ids")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    merged_memory_id: row.try_get("merged_memory_id")
+                    merged_memory_id: row
+                        .try_get("merged_memory_id")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    original_salience: row.try_get("original_salience")
+                    original_salience: row
+                        .try_get("original_salience")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    details: row.try_get("details")
+                    details: row
+                        .try_get("details")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
-                    created_at: row.try_get("created_at")
+                    created_at: row
+                        .try_get("created_at")
                         .map_err(|e| MemcpError::Storage(e.to_string()))?,
                 })
             })
@@ -3859,10 +4097,7 @@ impl PostgresMemoryStore {
     /// Undo all actions from a curation run.
     /// Restores soft-deleted originals, hard-deletes merged memories,
     /// restores original salience values, marks run as 'undone'.
-    pub async fn undo_curation_run(
-        &self,
-        run_id: &str,
-    ) -> Result<usize, MemcpError> {
+    pub async fn undo_curation_run(&self, run_id: &str) -> Result<usize, MemcpError> {
         let actions = self.get_curation_actions(run_id).await?;
         if actions.is_empty() {
             return Err(MemcpError::Storage(format!(
@@ -3924,10 +4159,7 @@ impl PostgresMemoryStore {
                         .execute(&self.pool)
                         .await
                         .map_err(|e| {
-                            MemcpError::Storage(format!(
-                                "Failed to remove stale tag: {}",
-                                e
-                            ))
+                            MemcpError::Storage(format!("Failed to remove stale tag: {}", e))
                         })?;
                     }
                     reversed += 1;
@@ -3952,10 +4184,7 @@ impl PostgresMemoryStore {
                         .execute(&self.pool)
                         .await
                         .map_err(|e| {
-                            MemcpError::Storage(format!(
-                                "Failed to remove strengthen tag: {}",
-                                e
-                            ))
+                            MemcpError::Storage(format!("Failed to remove strengthen tag: {}", e))
                         })?;
                     }
                     reversed += 1;
@@ -3965,15 +4194,11 @@ impl PostgresMemoryStore {
         }
 
         // Mark run as undone
-        sqlx::query(
-            "UPDATE curation_runs SET status = 'undone' WHERE id = $1::uuid",
-        )
-        .bind(run_id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| {
-            MemcpError::Storage(format!("Failed to mark run as undone: {}", e))
-        })?;
+        sqlx::query("UPDATE curation_runs SET status = 'undone' WHERE id = $1::uuid")
+            .bind(run_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to mark run as undone: {}", e)))?;
 
         Ok(reversed)
     }
@@ -3995,18 +4220,12 @@ impl PostgresMemoryStore {
         .bind(stability)
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            MemcpError::Storage(format!("Failed to update memory stability: {}", e))
-        })?;
+        .map_err(|e| MemcpError::Storage(format!("Failed to update memory stability: {}", e)))?;
         Ok(())
     }
 
     /// Add a tag to a memory's tag array.
-    pub async fn add_memory_tag(
-        &self,
-        memory_id: &str,
-        tag: &str,
-    ) -> Result<(), MemcpError> {
+    pub async fn add_memory_tag(&self, memory_id: &str, tag: &str) -> Result<(), MemcpError> {
         sqlx::query(
             "UPDATE memories SET tags = \
              CASE WHEN tags IS NULL THEN jsonb_build_array($2::text) \
@@ -4019,14 +4238,15 @@ impl PostgresMemoryStore {
         .bind(tag)
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            MemcpError::Storage(format!("Failed to add tag to memory: {}", e))
-        })?;
+        .map_err(|e| MemcpError::Storage(format!("Failed to add tag to memory: {}", e)))?;
         Ok(())
     }
 
     /// Get all chunks for a parent memory, ordered by chunk_index.
-    pub async fn get_chunks_by_parent(&self, parent_id: &str) -> Result<Vec<crate::store::Memory>, MemcpError> {
+    pub async fn get_chunks_by_parent(
+        &self,
+        parent_id: &str,
+    ) -> Result<Vec<crate::store::Memory>, MemcpError> {
         let rows = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, \
              last_accessed_at, access_count, embedding_status, \
@@ -4041,7 +4261,12 @@ impl PostgresMemoryStore {
         .bind(parent_id)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| MemcpError::Storage(format!("Failed to get chunks for parent {}: {}", parent_id, e)))?;
+        .map_err(|e| {
+            MemcpError::Storage(format!(
+                "Failed to get chunks for parent {}: {}",
+                parent_id, e
+            ))
+        })?;
 
         rows.iter().map(row_to_memory).collect()
     }
@@ -4064,16 +4289,23 @@ impl PostgresMemoryStore {
         }
 
         // Tags to skip when building the hint — too common to be useful for navigation.
-        const SKIP_TAGS: &[&str] = &["auto-stored", "summarized", "merged", "stale", "curated:strengthened"];
+        const SKIP_TAGS: &[&str] = &[
+            "auto-stored",
+            "summarized",
+            "merged",
+            "stale",
+            "curated:strengthened",
+        ];
 
         // Step A: Fetch tags for all requested memory IDs in one query.
-        let rows = sqlx::query(
-            "SELECT id, tags FROM memories WHERE id = ANY($1) AND deleted_at IS NULL"
-        )
-        .bind(memory_ids)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| MemcpError::Storage(format!("get_related_context tag fetch failed: {}", e)))?;
+        let rows =
+            sqlx::query("SELECT id, tags FROM memories WHERE id = ANY($1) AND deleted_at IS NULL")
+                .bind(memory_ids)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| {
+                    MemcpError::Storage(format!("get_related_context tag fetch failed: {}", e))
+                })?;
 
         let mut result: HashMap<String, RelatedContext> = HashMap::new();
 
@@ -4095,7 +4327,13 @@ impl PostgresMemoryStore {
                 .unwrap_or_default();
 
             if interesting_tags.is_empty() {
-                result.insert(memory_id, RelatedContext { related_count: 0, shared_tags: vec![] });
+                result.insert(
+                    memory_id,
+                    RelatedContext {
+                        related_count: 0,
+                        shared_tags: vec![],
+                    },
+                );
                 continue;
             }
 
@@ -4106,20 +4344,28 @@ impl PostgresMemoryStore {
                  WHERE m2.id != $1 \
                    AND m2.deleted_at IS NULL \
                    AND m2.tags IS NOT NULL \
-                   AND m2.tags ?| $2::text[]"
+                   AND m2.tags ?| $2::text[]",
             )
             .bind(&memory_id)
             .bind(&interesting_tags)
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| MemcpError::Storage(format!("get_related_context count failed for {}: {}", memory_id, e)))?;
+            .map_err(|e| {
+                MemcpError::Storage(format!(
+                    "get_related_context count failed for {}: {}",
+                    memory_id, e
+                ))
+            })?;
 
             let related_count: i64 = count_row.get("related_count");
 
-            result.insert(memory_id, RelatedContext {
-                related_count,
-                shared_tags: interesting_tags,
-            });
+            result.insert(
+                memory_id,
+                RelatedContext {
+                    related_count,
+                    shared_tags: interesting_tags,
+                },
+            );
         }
 
         Ok(result)
@@ -4274,30 +4520,19 @@ impl PostgresMemoryStore {
     /// Reads the current trust_level first, then atomically updates trust_level and appends
     /// a history entry `{from, to, reason, at}` to the JSONB metadata field.
     /// Remove a tag from a memory's tag array.
-    pub async fn remove_memory_tag(
-        &self,
-        memory_id: &str,
-        tag: &str,
-    ) -> Result<(), MemcpError> {
-        sqlx::query(
-            "UPDATE memories SET tags = tags - $2::text, updated_at = NOW() WHERE id = $1",
-        )
-        .bind(memory_id)
-        .bind(tag)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| {
-            MemcpError::Storage(format!("Failed to remove tag from memory: {}", e))
-        })?;
+    pub async fn remove_memory_tag(&self, memory_id: &str, tag: &str) -> Result<(), MemcpError> {
+        sqlx::query("UPDATE memories SET tags = tags - $2::text, updated_at = NOW() WHERE id = $1")
+            .bind(memory_id)
+            .bind(tag)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("Failed to remove tag from memory: {}", e)))?;
         Ok(())
     }
 
     /// Un-quarantine a memory: remove "suspicious" tag and restore previous trust_level
     /// from the trust_history audit trail.
-    pub async fn unquarantine_memory(
-        &self,
-        memory_id: &str,
-    ) -> Result<(), MemcpError> {
+    pub async fn unquarantine_memory(&self, memory_id: &str) -> Result<(), MemcpError> {
         // Read metadata to find the quarantine entry in trust_history
         let metadata: serde_json::Value = sqlx::query_scalar(
             "SELECT metadata FROM memories WHERE id = $1 AND deleted_at IS NULL",

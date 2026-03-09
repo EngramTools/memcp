@@ -4,17 +4,6 @@
 //! Called from the binary crate's main.rs dispatcher. Uses storage/ for DB access,
 //! intelligence/ for search/recall, and transport/ipc for daemon communication.
 
-/// CLI subcommand handlers for memcp
-///
-/// Each `cmd_*` function takes primitive args (not the Commands enum from main.rs)
-/// and performs its operation against the PostgresMemoryStore directly.
-///
-/// Design principles:
-/// - JSON output to stdout (machine-parseable for agents)
-/// - Warnings/errors to stderr
-/// - Short-lived: connect, execute, exit (no long-running state)
-/// - Search uses BM25+symbolic only (no embedding model loaded in CLI process)
-
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -25,14 +14,14 @@ use sqlx::Row;
 
 use crate::config::Config;
 use crate::gc;
-use crate::ipc::{embed_via_daemon, embed_multi_via_daemon, rerank_via_daemon};
+use crate::ipc::{embed_multi_via_daemon, embed_via_daemon, rerank_via_daemon};
 use crate::pipeline::temporal::extract_event_time;
-use crate::search::salience::{SalienceInput, dedup_parent_chunks};
+use crate::search::salience::{dedup_parent_chunks, SalienceInput};
 use crate::search::{SalienceScorer, ScoredHit};
 use crate::store::postgres::PostgresMemoryStore;
 use crate::store::{
-    decode_search_keyset_cursor, encode_search_keyset_cursor,
-    CreateMemory, ListFilter, Memory, MemoryStore, UpdateMemory,
+    decode_search_keyset_cursor, encode_search_keyset_cursor, CreateMemory, ListFilter, Memory,
+    MemoryStore, UpdateMemory,
 };
 
 // ---------------------------------------------------------------------------
@@ -42,7 +31,10 @@ use crate::store::{
 /// Connect to the database and optionally run migrations.
 ///
 /// CLI commands use `run_migrations = !skip_migrate` (migrations run by default).
-pub async fn connect_store(config: &Config, skip_migrate: bool) -> Result<Arc<PostgresMemoryStore>> {
+pub async fn connect_store(
+    config: &Config,
+    skip_migrate: bool,
+) -> Result<Arc<PostgresMemoryStore>> {
     let run_migrations = !skip_migrate;
     let store = PostgresMemoryStore::new(&config.database_url, run_migrations)
         .await
@@ -57,11 +49,9 @@ pub async fn connect_store(config: &Config, skip_migrate: bool) -> Result<Arc<Po
 /// Check if the daemon is alive by reading the daemon_status singleton row.
 /// Returns true if last_heartbeat is within the last 30 seconds.
 async fn check_daemon_alive(store: &PostgresMemoryStore) -> bool {
-    let result = sqlx::query(
-        "SELECT last_heartbeat FROM daemon_status WHERE id = 1"
-    )
-    .fetch_optional(store.pool())
-    .await;
+    let result = sqlx::query("SELECT last_heartbeat FROM daemon_status WHERE id = 1")
+        .fetch_optional(store.pool())
+        .await;
 
     match result {
         Ok(Some(row)) => {
@@ -201,10 +191,7 @@ fn parse_datetime(s: &str) -> Result<DateTime<Utc>> {
         return Ok(dt);
     }
     if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        let dt = date
-            .and_hms_opt(0, 0, 0)
-            .expect("valid time")
-            .and_utc();
+        let dt = date.and_hms_opt(0, 0, 0).expect("valid time").and_utc();
         return Ok(dt);
     }
     Err(anyhow::anyhow!(
@@ -218,8 +205,16 @@ fn parse_datetime(s: &str) -> Result<DateTime<Utc>> {
 /// Returns the first non-empty project from the chain, or None if all are absent/empty.
 pub fn resolve_project(cli_flag: Option<String>, config: &Config) -> Option<String> {
     cli_flag
-        .or_else(|| std::env::var("MEMCP_PROJECT").ok().filter(|s| !s.is_empty()))
-        .or_else(|| std::env::var("MEMCP_WORKSPACE").ok().filter(|s| !s.is_empty()))
+        .or_else(|| {
+            std::env::var("MEMCP_PROJECT")
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
+        .or_else(|| {
+            std::env::var("MEMCP_WORKSPACE")
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
         .or_else(|| config.project.default_project.clone())
 }
 
@@ -321,7 +316,11 @@ pub async fn dispatch_remote_get(
         // Try to parse an error message from JSON.
         let msg = serde_json::from_str::<serde_json::Value>(&body_text)
             .ok()
-            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(|s| s.to_string()))
+            .and_then(|v| {
+                v.get("error")
+                    .and_then(|e| e.as_str())
+                    .map(|s| s.to_string())
+            })
             .unwrap_or_else(|| body_text.clone());
         anyhow::bail!("Remote memcp error ({}): {}", status.as_u16(), msg);
     }
@@ -337,6 +336,7 @@ pub async fn dispatch_remote_get(
 ///
 /// Enforces max_memories resource cap if configured. Exits with error when cap exceeded.
 /// Content is required — provide as positional arg or via --stdin (resolved by caller).
+#[allow(clippy::too_many_arguments)] // CLI handler args map to command-line flags; struct refactor deferred
 pub async fn cmd_store(
     store: &Arc<PostgresMemoryStore>,
     config: &Config,
@@ -354,13 +354,15 @@ pub async fn cmd_store(
     session_id: Option<String>,
     agent_role: Option<String>,
 ) -> Result<()> {
-    let content = content.ok_or_else(|| anyhow::anyhow!(
-        "Content is required — provide as argument or use --stdin"
-    ))?;
+    let content = content.ok_or_else(|| {
+        anyhow::anyhow!("Content is required — provide as argument or use --stdin")
+    })?;
 
     // Resource cap: max_memories — hard reject at hard_cap_percent
     if let Some(max) = config.resource_caps.max_memories {
-        let count = store.count_live_memories().await
+        let count = store
+            .count_live_memories()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to check memory count: {}", e))?;
         let ratio = count as f64 / max as f64;
         let hard_cap = config.resource_limits.hard_cap_percent as f64 / 100.0;
@@ -371,8 +373,10 @@ pub async fn cmd_store(
         // Capacity warning
         let warn_threshold = config.resource_limits.warn_percent as f64 / 100.0;
         if ratio >= warn_threshold {
-            eprintln!("Warning: Memory usage at {}%. Upgrade storage at engram.host/upgrade",
-                (ratio * 100.0).round());
+            eprintln!(
+                "Warning: Memory usage at {}%. Upgrade storage at engram.host/upgrade",
+                (ratio * 100.0).round()
+            );
         }
     }
 
@@ -432,7 +436,10 @@ pub async fn cmd_store(
                 Ok(m) => {
                     if m.embedding_status == "complete" || m.embedding_status == "failed" {
                         if let serde_json::Value::Object(ref mut map) = response_json {
-                            map.insert("embedding_status".to_string(), serde_json::json!(m.embedding_status));
+                            map.insert(
+                                "embedding_status".to_string(),
+                                serde_json::json!(m.embedding_status),
+                            );
                         }
                         break;
                     }
@@ -442,10 +449,7 @@ pub async fn cmd_store(
         }
     }
 
-    println!(
-        "{}",
-        serde_json::to_string(&response_json)?
-    );
+    println!("{}", serde_json::to_string(&response_json)?);
 
     warn_if_no_daemon(store).await;
     Ok(())
@@ -457,6 +461,7 @@ pub async fn cmd_store(
 /// If content changes, embedding_status is reset to "pending" so the daemon re-embeds.
 /// Note: Content filtering is skipped here — consistent with cmd_store. Content filtering
 /// is a server-layer concern only (MCP serve mode).
+#[allow(clippy::too_many_arguments)] // CLI handler args map to command-line flags; struct refactor deferred
 pub async fn cmd_update(
     store: &Arc<PostgresMemoryStore>,
     config: &Config,
@@ -544,7 +549,10 @@ pub async fn cmd_update(
 /// Unknown field names are silently ignored — same behaviour as the MCP path in server.rs.
 /// Apply field projection with one-level dot-notation support.
 /// See server.rs apply_field_projection for full documentation.
-fn apply_field_projection(obj: serde_json::Value, fields: &Option<Vec<String>>) -> serde_json::Value {
+fn apply_field_projection(
+    obj: serde_json::Value,
+    fields: &Option<Vec<String>>,
+) -> serde_json::Value {
     match fields {
         None => obj,
         Some(requested) if requested.is_empty() => obj,
@@ -558,21 +566,18 @@ fn apply_field_projection(obj: serde_json::Value, fields: &Option<Vec<String>>) 
                         if child_key.contains('.') {
                             continue;
                         }
-                        if let Some(parent_val) = map.get(parent_key) {
-                            if let serde_json::Value::Object(nested) = parent_val {
-                                if let Some(child_val) = nested.get(child_key) {
-                                    let entry = result.entry(parent_key.to_string())
-                                        .or_insert_with(|| serde_json::json!({}));
-                                    if let serde_json::Value::Object(ref mut m) = entry {
-                                        m.insert(child_key.to_string(), child_val.clone());
-                                    }
+                        if let Some(serde_json::Value::Object(nested)) = map.get(parent_key) {
+                            if let Some(child_val) = nested.get(child_key) {
+                                let entry = result
+                                    .entry(parent_key.to_string())
+                                    .or_insert_with(|| serde_json::json!({}));
+                                if let serde_json::Value::Object(ref mut m) = entry {
+                                    m.insert(child_key.to_string(), child_val.clone());
                                 }
                             }
                         }
-                    } else {
-                        if let Some(val) = map.get(field.as_str()) {
-                            result.insert(field.clone(), val.clone());
-                        }
+                    } else if let Some(val) = map.get(field.as_str()) {
+                        result.insert(field.clone(), val.clone());
                     }
                 }
                 serde_json::Value::Object(result)
@@ -594,6 +599,7 @@ fn apply_field_projection(obj: serde_json::Value, fields: &Option<Vec<String>>) 
 /// - `--json` (json=true): raw JSON matching MCP serve envelope (`{ results, total }`)
 /// - `--compact` (compact=true): one line per result with id, score, snippet, tags
 /// - default: human-friendly list with all key fields
+#[allow(clippy::too_many_arguments)] // CLI handler args map to command-line flags; struct refactor deferred
 pub async fn cmd_search(
     store: &Arc<PostgresMemoryStore>,
     config: &Config,
@@ -649,7 +655,11 @@ pub async fn cmd_search(
     // Attempt to obtain embedding from daemon for vector leg (SCF-01).
     // When multi-model is configured, request per-tier embeddings for dual-query search.
     let tags_for_search = tags.clone().filter(|t| !t.is_empty());
-    let fetch_limit = if cursor_position.is_some() { limit * 5 } else { limit };
+    let fetch_limit = if cursor_position.is_some() {
+        limit * 5
+    } else {
+        limit
+    };
 
     let raw_hits = if config.embedding.is_multi_model() {
         // Multi-model path: request all-tier embeddings and use hybrid_search_multi_tier.
@@ -657,7 +667,8 @@ pub async fn cmd_search(
             Some(tier_vecs) => {
                 // Convert Vec<f32> -> pgvector::Vector for each tier
                 let tier_embeddings: std::collections::HashMap<String, pgvector::Vector> =
-                    tier_vecs.into_iter()
+                    tier_vecs
+                        .into_iter()
                         .map(|(tier, vec)| (tier, pgvector::Vector::from(vec)))
                         .collect();
                 store
@@ -734,7 +745,10 @@ pub async fn cmd_search(
 
     // Apply type_hint filter post-search (symbolic leg doesn't filter by type_hint column).
     let raw_hits: Vec<_> = if let Some(ref th) = type_hint {
-        raw_hits.into_iter().filter(|h| h.memory.type_hint == *th).collect()
+        raw_hits
+            .into_iter()
+            .filter(|h| h.memory.type_hint == *th)
+            .collect()
     } else {
         raw_hits
     };
@@ -772,10 +786,7 @@ pub async fn cmd_search(
     let salience_inputs: Vec<SalienceInput> = scored_hits
         .iter()
         .map(|h| {
-            let row = salience_data
-                .get(&h.memory.id)
-                .cloned()
-                .unwrap_or_default();
+            let row = salience_data.get(&h.memory.id).cloned().unwrap_or_default();
             let days_since = row
                 .last_reinforced_at
                 .map(|t| (Utc::now() - t).num_seconds() as f64 / 86400.0)
@@ -812,19 +823,28 @@ pub async fn cmd_search(
 
             if let Some(ranked) = rerank_via_daemon(&query, &candidates).await {
                 // Blend: 0.7 * llm_rank_score + 0.3 * normalized_salience
-                let max_s = scored_hits.iter().map(|h| h.salience_score).fold(f64::MIN, f64::max);
-                let min_s = scored_hits.iter().map(|h| h.salience_score).fold(f64::MAX, f64::min);
+                let max_s = scored_hits
+                    .iter()
+                    .map(|h| h.salience_score)
+                    .fold(f64::MIN, f64::max);
+                let min_s = scored_hits
+                    .iter()
+                    .map(|h| h.salience_score)
+                    .fold(f64::MAX, f64::min);
                 let range = (max_s - min_s).max(1e-6);
 
                 for hit in scored_hits[..top_n].iter_mut() {
-                    if let Some((_, llm_rank)) = ranked.iter().find(|(id, _)| id == &hit.memory.id) {
+                    if let Some((_, llm_rank)) = ranked.iter().find(|(id, _)| id == &hit.memory.id)
+                    {
                         let llm_score = 1.0 / (1.0 + *llm_rank as f64);
                         let norm_salience = (hit.salience_score - min_s) / range;
                         hit.salience_score = 0.7 * llm_score + 0.3 * norm_salience;
                     }
                 }
                 scored_hits[..top_n].sort_by(|a, b| {
-                    b.salience_score.partial_cmp(&a.salience_score).unwrap_or(std::cmp::Ordering::Equal)
+                    b.salience_score
+                        .partial_cmp(&a.salience_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 });
             }
             // If rerank_via_daemon returns None: daemon offline or no QI provider — silently skip (fail-open).
@@ -834,7 +854,10 @@ pub async fn cmd_search(
 
     // Apply salience threshold filtering AFTER re-ranking, BEFORE cursor/take (mirrors MCP path).
     let mut scored_hits: Vec<ScoredHit> = if effective_min > 0.0 {
-        scored_hits.into_iter().filter(|h| h.salience_score >= effective_min).collect()
+        scored_hits
+            .into_iter()
+            .filter(|h| h.salience_score >= effective_min)
+            .collect()
     } else {
         scored_hits
     };
@@ -843,12 +866,24 @@ pub async fn cmd_search(
     if scored_hits.len() == 1 {
         scored_hits[0].composite_score = 1.0;
     } else if scored_hits.len() > 1 {
-        let max_rrf = scored_hits.iter().map(|h| h.rrf_score).fold(f64::MIN, f64::max);
-        let min_rrf = scored_hits.iter().map(|h| h.rrf_score).fold(f64::MAX, f64::min);
+        let max_rrf = scored_hits
+            .iter()
+            .map(|h| h.rrf_score)
+            .fold(f64::MIN, f64::max);
+        let min_rrf = scored_hits
+            .iter()
+            .map(|h| h.rrf_score)
+            .fold(f64::MAX, f64::min);
         let rrf_range = (max_rrf - min_rrf).max(1e-9);
 
-        let max_sal = scored_hits.iter().map(|h| h.salience_score).fold(f64::MIN, f64::max);
-        let min_sal = scored_hits.iter().map(|h| h.salience_score).fold(f64::MAX, f64::min);
+        let max_sal = scored_hits
+            .iter()
+            .map(|h| h.salience_score)
+            .fold(f64::MIN, f64::max);
+        let min_sal = scored_hits
+            .iter()
+            .map(|h| h.salience_score)
+            .fold(f64::MAX, f64::min);
         let sal_range = (max_sal - min_sal).max(1e-9);
 
         for hit in &mut scored_hits {
@@ -865,26 +900,35 @@ pub async fn cmd_search(
     // Cursor encodes (salience_score, id) of the LAST item on the previous page.
     // Skip items where: score > last_score OR (score == last_score AND id <= last_id).
     let scored_hits: Vec<ScoredHit> = if let Some((last_score, ref last_id)) = cursor_position {
-        scored_hits.into_iter().filter(|h| {
-            let score = h.salience_score;
-            if (score - last_score).abs() < f64::EPSILON {
-                h.memory.id.as_str() > last_id.as_str()
-            } else {
-                score < last_score
-            }
-        }).collect()
+        scored_hits
+            .into_iter()
+            .filter(|h| {
+                let score = h.salience_score;
+                if (score - last_score).abs() < f64::EPSILON {
+                    h.memory.id.as_str() > last_id.as_str()
+                } else {
+                    score < last_score
+                }
+            })
+            .collect()
     } else {
         scored_hits
     };
 
     // Take limit items, detect if more remain.
     let has_more = scored_hits.len() as i64 > limit;
-    let take = if has_more { limit as usize } else { scored_hits.len() };
+    let take = if has_more {
+        limit as usize
+    } else {
+        scored_hits.len()
+    };
     let scored_hits: Vec<ScoredHit> = scored_hits.into_iter().take(take).collect();
 
     // Build next_cursor from the last item's (salience_score, id) — keyset cursor.
     let next_cursor: Option<String> = if has_more {
-        scored_hits.last().map(|h| encode_search_keyset_cursor(h.salience_score, &h.memory.id))
+        scored_hits
+            .last()
+            .map(|h| encode_search_keyset_cursor(h.salience_score, &h.memory.id))
     } else {
         None
     };
@@ -900,7 +944,10 @@ pub async fn cmd_search(
                     // Ensure id is always top-level (SCF-03)
                     obj.insert("id".to_string(), json!(h.memory.id));
                     obj.insert("salience_score".to_string(), json!(h.salience_score));
-                    obj.insert("composite_score".to_string(), json!((h.composite_score * 1000.0).round() / 1000.0));
+                    obj.insert(
+                        "composite_score".to_string(),
+                        json!((h.composite_score * 1000.0).round() / 1000.0),
+                    );
                     obj.insert("rrf_score".to_string(), json!(h.rrf_score));
                     obj.insert("match_source".to_string(), json!(h.match_source));
                 }
@@ -930,16 +977,15 @@ pub async fn cmd_search(
                 println!("{}", serde_json::to_string(&projected)?);
             } else {
                 let id_short = &h.memory.id[..8.min(h.memory.id.len())];
-                let snippet: String = h.memory.content
-                    .chars()
-                    .take(80)
-                    .collect();
+                let snippet: String = h.memory.content.chars().take(80).collect();
                 let snippet = if h.memory.content.len() > 80 {
                     format!("{}…", snippet)
                 } else {
                     snippet
                 };
-                let tags_str = h.memory.tags
+                let tags_str = h
+                    .memory
+                    .tags
                     .as_ref()
                     .and_then(|v| v.as_array())
                     .map(|arr| {
@@ -972,7 +1018,10 @@ pub async fn cmd_search(
                     // Ensure id is always top-level (SCF-03)
                     obj.insert("id".to_string(), json!(h.memory.id));
                     obj.insert("salience_score".to_string(), json!(h.salience_score));
-                    obj.insert("composite_score".to_string(), json!((h.composite_score * 1000.0).round() / 1000.0));
+                    obj.insert(
+                        "composite_score".to_string(),
+                        json!((h.composite_score * 1000.0).round() / 1000.0),
+                    );
                     obj.insert("rrf_score".to_string(), json!(h.rrf_score));
                     obj.insert("match_source".to_string(), json!(h.match_source));
                 }
@@ -1053,7 +1102,10 @@ fn parse_duration(s: &str) -> Result<chrono::Duration> {
 
     let (num_str, unit) = s.split_at(s.len() - 1);
     let num: i64 = num_str.parse().map_err(|_| {
-        anyhow::anyhow!("Invalid duration '{}'. Use format like '30m', '1h', '2h', '1d'", s)
+        anyhow::anyhow!(
+            "Invalid duration '{}'. Use format like '30m', '1h', '2h', '1d'",
+            s
+        )
     })?;
 
     match unit {
@@ -1061,12 +1113,14 @@ fn parse_duration(s: &str) -> Result<chrono::Duration> {
         "h" => Ok(chrono::Duration::hours(num)),
         "d" => Ok(chrono::Duration::days(num)),
         _ => Err(anyhow::anyhow!(
-            "Unknown duration unit '{}'. Use 'm' (minutes), 'h' (hours), or 'd' (days)", unit
+            "Unknown duration unit '{}'. Use 'm' (minutes), 'h' (hours), or 'd' (days)",
+            unit
         )),
     }
 }
 
 /// List memories with optional filters and cursor-based pagination.
+#[allow(clippy::too_many_arguments)] // CLI handler args map to command-line flags; struct refactor deferred
 pub async fn cmd_list(
     store: &Arc<PostgresMemoryStore>,
     type_hint: Option<String>,
@@ -1130,17 +1184,16 @@ pub async fn cmd_get(store: &Arc<PostgresMemoryStore>, id: &str) -> Result<()> {
 
 /// Delete a memory by ID (permanent).
 pub async fn cmd_delete(store: &Arc<PostgresMemoryStore>, id: &str) -> Result<()> {
-    store.delete(id).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+    store
+        .delete(id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
     println!("{}", serde_json::to_string(&json!({ "deleted": id }))?);
     Ok(())
 }
 
 /// Reinforce a memory to boost its salience.
-pub async fn cmd_reinforce(
-    store: &Arc<PostgresMemoryStore>,
-    id: &str,
-    rating: &str,
-) -> Result<()> {
+pub async fn cmd_reinforce(store: &Arc<PostgresMemoryStore>, id: &str, rating: &str) -> Result<()> {
     let row = store
         .reinforce_salience(id, rating)
         .await
@@ -1187,8 +1240,16 @@ pub async fn build_status(
     .fetch_optional(store.pool())
     .await;
 
-    let (alive, daemon_info, last_ingest_at, ingest_count_today, watched_file_count,
-         embedding_model, embedding_dimension, gc_info) = match daemon_row {
+    let (
+        alive,
+        daemon_info,
+        last_ingest_at,
+        ingest_count_today,
+        watched_file_count,
+        embedding_model,
+        embedding_dimension,
+        gc_info,
+    ) = match daemon_row {
         Ok(Some(row)) => {
             let heartbeat: Option<DateTime<Utc>> = row.get("last_heartbeat");
             let alive = heartbeat
@@ -1220,40 +1281,65 @@ pub async fn build_status(
                 "version": row.get::<Option<String>, _>("version"),
                 "worker_states": row.get::<Option<serde_json::Value>, _>("worker_states"),
             });
-            (alive, info, last_ingest, ingest_today.unwrap_or(0), watched.unwrap_or(0),
-             model, dimension, gc)
+            (
+                alive,
+                info,
+                last_ingest,
+                ingest_today.unwrap_or(0),
+                watched.unwrap_or(0),
+                model,
+                dimension,
+                gc,
+            )
         }
-        _ => (false, json!({"alive": false}), None, 0, 0, None, None,
-              json!({ "last_run_at": null, "pruned_total": 0, "dedup_merges": 0, "filter_stats": {} })),
+        _ => (
+            false,
+            json!({"alive": false}),
+            None,
+            0,
+            0,
+            None,
+            None,
+            json!({ "last_run_at": null, "pruned_total": 0, "dedup_merges": 0, "filter_stats": {} }),
+        ),
     };
 
     // Pending work counts (exclude soft-deleted)
-    let pending_embed: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE embedding_status = 'pending' AND deleted_at IS NULL")
+    let pending_embed: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM memories WHERE embedding_status = 'pending' AND deleted_at IS NULL",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap_or(0);
+
+    let pending_extract: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM memories WHERE extraction_status = 'pending' AND deleted_at IS NULL",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap_or(0);
+
+    let total_memories: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL")
             .fetch_one(store.pool())
             .await
             .unwrap_or(0);
-
-    let pending_extract: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE extraction_status = 'pending' AND deleted_at IS NULL")
-            .fetch_one(store.pool())
-            .await
-            .unwrap_or(0);
-
-    let total_memories: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL")
-        .fetch_one(store.pool())
-        .await
-        .unwrap_or(0);
 
     // Deep health check (when --check is passed)
     let checks = if check {
         // 1. Database reachable (already connected, but verify with a ping)
-        let db_ok = sqlx::query("SELECT 1").fetch_one(store.pool()).await.is_ok();
+        let db_ok = sqlx::query("SELECT 1")
+            .fetch_one(store.pool())
+            .await
+            .is_ok();
 
         // 2. Ollama responding (if summarization is configured)
         let ollama_ok = if config.summarization.enabled {
             let url = format!("{}/api/version", config.summarization.ollama_base_url);
-            reqwest::get(&url).await.map(|r| r.status().is_success()).unwrap_or(false)
+            reqwest::get(&url)
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false)
         } else {
             true // not configured = not a failure
         };
@@ -1263,7 +1349,9 @@ pub async fn build_status(
             .unwrap_or_default()
             .join("fastembed_cache");
         let model_cache_ok = cache_dir.exists()
-            && std::fs::read_dir(&cache_dir).map(|mut d| d.next().is_some()).unwrap_or(false);
+            && std::fs::read_dir(&cache_dir)
+                .map(|mut d| d.next().is_some())
+                .unwrap_or(false);
 
         // 4. Watch paths exist
         let watch_paths_ok = if config.auto_store.enabled {
@@ -1323,10 +1411,19 @@ pub async fn build_status(
         "curation": curation_stats,
     });
     if let Some(checks) = checks {
-        output.as_object_mut().unwrap().insert("checks".to_string(), checks);
+        output
+            .as_object_mut()
+            .unwrap()
+            .insert("checks".to_string(), checks);
     }
 
-    Ok((output, alive, last_ingest_at, pending_embed as i32 + pending_extract as i32, total_memories as i32))
+    Ok((
+        output,
+        alive,
+        last_ingest_at,
+        pending_embed as i32 + pending_extract as i32,
+        total_memories as i32,
+    ))
 }
 
 /// Show daemon status and pending work counts.
@@ -1343,11 +1440,12 @@ pub async fn cmd_status(
         let icon = if alive { "\u{2705}" } else { "\u{274c}" };
         if alive {
             // Uptime
-            let uptime_str = output.get("daemon")
+            let uptime_str = output
+                .get("daemon")
                 .and_then(|d| d.get("started_at"))
                 .and_then(|v| v.as_str())
                 .and_then(|s| s.parse::<DateTime<Utc>>().ok())
-                .map(|t| format_relative_time(t))
+                .map(format_relative_time)
                 .unwrap_or_else(|| "?".to_string());
 
             // Pending with backlog warning
@@ -1362,8 +1460,10 @@ pub async fn cmd_status(
                 .map(|t| format!("last ingest {}", format_relative_time(t)))
                 .unwrap_or_else(|| "no ingests yet".to_string());
 
-            println!("{} daemon up {} | {} | {} | {} memories",
-                icon, uptime_str, pending_str, ingest_str, total_memories);
+            println!(
+                "{} daemon up {} | {} | {} | {} memories",
+                icon, uptime_str, pending_str, ingest_str, total_memories
+            );
         } else {
             println!("{} daemon down", icon);
         }
@@ -1382,17 +1482,33 @@ pub async fn cmd_status(
 
         // Curation stats in pretty mode
         if let Some(curation) = output.get("curation") {
-            let enabled = curation.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+            let enabled = curation
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if !enabled {
                 println!("  Curation: disabled");
             } else if let Some(last_run) = curation.get("last_run").and_then(|v| v.as_str()) {
-                let status = curation.get("last_run_status")
+                let status = curation
+                    .get("last_run_status")
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
-                let merged = curation.get("last_merged").and_then(|v| v.as_i64()).unwrap_or(0);
-                let flagged = curation.get("last_flagged").and_then(|v| v.as_i64()).unwrap_or(0);
-                let strengthened = curation.get("last_strengthened").and_then(|v| v.as_i64()).unwrap_or(0);
-                let interval = curation.get("interval_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+                let merged = curation
+                    .get("last_merged")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let flagged = curation
+                    .get("last_flagged")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let strengthened = curation
+                    .get("last_strengthened")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let interval = curation
+                    .get("interval_secs")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
                 let interval_str = if interval >= 86400 {
                     format!("every {}d", interval / 86400)
                 } else if interval >= 3600 {
@@ -1400,10 +1516,15 @@ pub async fn cmd_status(
                 } else {
                     format!("every {}s", interval)
                 };
-                println!("  Curation: last run {} ({}) | {} merged, {} flagged, {} strengthened | {}",
-                    last_run, status, merged, flagged, strengthened, interval_str);
+                println!(
+                    "  Curation: last run {} ({}) | {} merged, {} flagged, {} strengthened | {}",
+                    last_run, status, merged, flagged, strengthened, interval_str
+                );
             } else {
-                let interval = curation.get("interval_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+                let interval = curation
+                    .get("interval_secs")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
                 println!("  Curation: enabled, no runs yet (interval: {}s)", interval);
             }
         }
@@ -1426,11 +1547,7 @@ pub async fn cmd_status(
 ///
 /// Fire-and-forget: outputs `{"ok": true, "id": "...", "signal": "..."}` on success.
 /// Error handling is done by the caller in main.rs.
-pub async fn cmd_feedback(
-    store: &Arc<PostgresMemoryStore>,
-    id: &str,
-    signal: &str,
-) -> Result<()> {
+pub async fn cmd_feedback(store: &Arc<PostgresMemoryStore>, id: &str, signal: &str) -> Result<()> {
     store
         .apply_feedback(id, signal)
         .await
@@ -1525,6 +1642,7 @@ pub async fn cmd_gc(
 ///
 /// The `--first` flag is designed for session start — injects preamble and datetime so agents
 /// understand the memory system without repeating this overhead on every recall.
+#[allow(clippy::too_many_arguments)] // CLI handler args map to command-line flags; struct refactor deferred
 pub async fn cmd_recall(
     store: &Arc<PostgresMemoryStore>,
     config: &Config,
@@ -1551,7 +1669,16 @@ pub async fn cmd_recall(
 
     let mut result = if query.is_empty() {
         // Query-less path — no embedding needed; ranked by salience + recency.
-        engine.recall_queryless(session_id, reset, project.as_deref(), first, limit, boost_tags).await
+        engine
+            .recall_queryless(
+                session_id,
+                reset,
+                project.as_deref(),
+                first,
+                limit,
+                boost_tags,
+            )
+            .await
             .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?
     } else {
         // Query-based path — embed via daemon for vector similarity.
@@ -1564,7 +1691,15 @@ pub async fn cmd_recall(
             }
         };
 
-        let r = engine.recall(&query_embedding, session_id, reset, project.as_deref(), boost_tags).await
+        let r = engine
+            .recall(
+                &query_embedding,
+                session_id,
+                reset,
+                project.as_deref(),
+                boost_tags,
+            )
+            .await
             .map_err(|e| anyhow::anyhow!("Recall failed: {}", e))?;
         r
     };
@@ -1579,6 +1714,7 @@ pub async fn cmd_recall(
                 relevance: 1.0,
                 boost_applied: false,
                 boost_score: 0.0,
+                trust_level: 1.0,
             }),
             Ok(None) => None,
             Err(e) => {
@@ -1589,7 +1725,11 @@ pub async fn cmd_recall(
     }
 
     // Collect memory IDs for related context lookup.
-    let memory_ids: Vec<String> = result.memories.iter().map(|m| m.memory_id.clone()).collect();
+    let memory_ids: Vec<String> = result
+        .memories
+        .iter()
+        .map(|m| m.memory_id.clone())
+        .collect();
 
     // Fetch related context (batch) if enabled and there are memories.
     let related_map = if config.recall.related_context_enabled && !memory_ids.is_empty() {
@@ -1607,44 +1747,49 @@ pub async fn cmd_recall(
     let truncation_chars = config.recall.truncation_chars;
 
     // Build the memories array with truncation and related context.
-    let memories: Vec<serde_json::Value> = result.memories.iter().map(|mem| {
-        let (truncated_content, was_truncated) = truncate_content(&mem.content, truncation_chars);
+    let memories: Vec<serde_json::Value> = result
+        .memories
+        .iter()
+        .map(|mem| {
+            let (truncated_content, was_truncated) =
+                truncate_content(&mem.content, truncation_chars);
 
-        let mut obj = json!({
-            "id": mem.memory_id,
-            "content": truncated_content,
-            "relevance": mem.relevance,
-        });
+            let mut obj = json!({
+                "id": mem.memory_id,
+                "content": truncated_content,
+                "relevance": mem.relevance,
+            });
 
-        if was_truncated {
-            if let serde_json::Value::Object(ref mut map) = obj {
-                map.insert("truncated".to_string(), json!(true));
-            }
-        }
-
-        // Include boost metadata when boost was applied (mirrors serde skip_serializing_if).
-        if mem.boost_applied {
-            if let serde_json::Value::Object(ref mut map) = obj {
-                map.insert("boost_applied".to_string(), json!(true));
-                map.insert("boost_score".to_string(), json!(mem.boost_score));
-            }
-        }
-
-        // Add related context if present and count > 0.
-        if let Some(related) = related_map.get(&mem.memory_id) {
-            if related.related_count > 0 {
-                let hint = build_related_hint(&related.shared_tags);
+            if was_truncated {
                 if let serde_json::Value::Object(ref mut map) = obj {
-                    map.insert("related_count".to_string(), json!(related.related_count));
-                    if !hint.is_empty() {
-                        map.insert("hint".to_string(), json!(hint));
+                    map.insert("truncated".to_string(), json!(true));
+                }
+            }
+
+            // Include boost metadata when boost was applied (mirrors serde skip_serializing_if).
+            if mem.boost_applied {
+                if let serde_json::Value::Object(ref mut map) = obj {
+                    map.insert("boost_applied".to_string(), json!(true));
+                    map.insert("boost_score".to_string(), json!(mem.boost_score));
+                }
+            }
+
+            // Add related context if present and count > 0.
+            if let Some(related) = related_map.get(&mem.memory_id) {
+                if related.related_count > 0 {
+                    let hint = build_related_hint(&related.shared_tags);
+                    if let serde_json::Value::Object(ref mut map) = obj {
+                        map.insert("related_count".to_string(), json!(related.related_count));
+                        if !hint.is_empty() {
+                            map.insert("hint".to_string(), json!(hint));
+                        }
                     }
                 }
             }
-        }
 
-        obj
-    }).collect();
+            obj
+        })
+        .collect();
 
     // Assemble final output.
     let mut output = json!({
@@ -1656,20 +1801,28 @@ pub async fn cmd_recall(
     // Add summary if present (query-less with first=true, or query-based with first=true).
     if let Some(ref summary) = result.summary {
         if let serde_json::Value::Object(ref mut map) = output {
-            map.insert("summary".to_string(), json!({
-                "id": summary.memory_id,
-                "content": summary.content,
-            }));
+            map.insert(
+                "summary".to_string(),
+                json!({
+                    "id": summary.memory_id,
+                    "content": summary.content,
+                }),
+            );
         }
     }
 
     if first {
-        let preamble = config.recall.preamble_override
+        let preamble = config
+            .recall
+            .preamble_override
             .as_deref()
             .unwrap_or(DEFAULT_PREAMBLE);
 
         if let serde_json::Value::Object(ref mut map) = output {
-            map.insert("current_datetime".to_string(), json!(Utc::now().to_rfc3339()));
+            map.insert(
+                "current_datetime".to_string(),
+                json!(Utc::now().to_rfc3339()),
+            );
             map.insert("preamble".to_string(), json!(preamble));
         }
     }
@@ -1702,7 +1855,11 @@ pub async fn cmd_discover(
     }
 
     if min_similarity >= max_similarity {
-        anyhow::bail!("min_similarity ({}) must be less than max_similarity ({})", min_similarity, max_similarity);
+        anyhow::bail!(
+            "min_similarity ({}) must be less than max_similarity ({})",
+            min_similarity,
+            max_similarity
+        );
     }
 
     // Embed via daemon for vector similarity
@@ -1717,22 +1874,31 @@ pub async fn cmd_discover(
 
     let query_vec = pgvector::Vector::from(query_embedding);
     let results = store
-        .discover_associations(&query_vec, min_similarity, max_similarity, limit, project.as_deref())
+        .discover_associations(
+            &query_vec,
+            min_similarity,
+            max_similarity,
+            limit,
+            project.as_deref(),
+        )
         .await
         .map_err(|e| anyhow::anyhow!("Discovery failed: {}", e))?;
 
     if json_output {
-        let items: Vec<serde_json::Value> = results.iter().map(|(memory, sim)| {
-            json!({
-                "id": memory.id,
-                "content": memory.content,
-                "type_hint": memory.type_hint,
-                "tags": memory.tags,
-                "similarity": format!("{:.3}", sim),
-                "created_at": memory.created_at.to_rfc3339(),
-                "project": memory.project,
+        let items: Vec<serde_json::Value> = results
+            .iter()
+            .map(|(memory, sim)| {
+                json!({
+                    "id": memory.id,
+                    "content": memory.content,
+                    "type_hint": memory.type_hint,
+                    "tags": memory.tags,
+                    "similarity": format!("{:.3}", sim),
+                    "created_at": memory.created_at.to_rfc3339(),
+                    "project": memory.project,
+                })
             })
-        }).collect();
+            .collect();
         let output = json!({
             "discoveries": items,
             "query": query,
@@ -1746,14 +1912,18 @@ pub async fn cmd_discover(
             return Ok(());
         }
 
-        println!("Discovered {} connection(s) for \"{query}\":", results.len());
+        println!(
+            "Discovered {} connection(s) for \"{query}\":",
+            results.len()
+        );
         println!();
 
         for (i, (memory, sim)) in results.iter().enumerate() {
             println!("{}. [{:.2}] {}", i + 1, sim, memory.content);
             if let Some(ref tags) = memory.tags {
                 if let Some(arr) = tags.as_array() {
-                    let tag_str: Vec<String> = arr.iter()
+                    let tag_str: Vec<String> = arr
+                        .iter()
                         .filter_map(|v| v.as_str().map(|s| s.to_string()))
                         .collect();
                     if !tag_str.is_empty() {
@@ -1945,10 +2115,7 @@ pub async fn cmd_curation_log(
 ///
 /// Reverses all actions from a completed run: restores soft-deleted originals,
 /// removes merged memories, reverts stability changes, and strips added tags.
-pub async fn cmd_curation_undo(
-    store: &Arc<PostgresMemoryStore>,
-    run_id: &str,
-) -> Result<()> {
+pub async fn cmd_curation_undo(store: &Arc<PostgresMemoryStore>, run_id: &str) -> Result<()> {
     let undo_count = store
         .undo_curation_run(run_id)
         .await
@@ -1991,7 +2158,10 @@ pub async fn annotate_logic(
     salience_input: Option<String>,
 ) -> Result<AnnotateResult> {
     // 1. Verify memory exists and capture current state.
-    let memory = store.get(id).await.map_err(|e| anyhow::anyhow!("Memory not found: {}", e))?;
+    let memory = store
+        .get(id)
+        .await
+        .map_err(|e| anyhow::anyhow!("Memory not found: {}", e))?;
 
     // 2. Compute tag changes.
     // Memory.tags is Option<serde_json::Value> (JSONB array) — extract to Vec<String>.
@@ -1999,7 +2169,11 @@ pub async fn annotate_logic(
         .tags
         .as_ref()
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect::<Vec<String>>())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str().map(String::from))
+                .collect::<Vec<String>>()
+        })
         .unwrap_or_default();
     let new_tags: Vec<String> = if let Some(replace) = tags_to_replace {
         // replace_tags wins over tags
@@ -2040,10 +2214,7 @@ pub async fn annotate_logic(
             .get_salience_data(&[id.to_string()])
             .await
             .map_err(|e| anyhow::anyhow!("Failed to read salience: {}", e))?;
-        let current = salience_map
-            .get(id)
-            .cloned()
-            .unwrap_or_default();
+        let current = salience_map.get(id).cloned().unwrap_or_default();
 
         let new_stability = if input.ends_with('x') {
             // Multiplier mode
@@ -2182,4 +2353,3 @@ pub fn cmd_statusline_remove() -> Result<()> {
     }
     Ok(())
 }
-

@@ -59,38 +59,38 @@ impl UuidRefMap {
     }
 }
 
+use crate::query_intelligence::{temporal::parse_temporal_hint, RankedCandidate};
+use crate::search::rrf_fuse_multi;
+use chrono::DateTime;
+use chrono::Utc;
 use rmcp::{
-    ServerHandler,
-    tool,
-    model::{
-        ServerCapabilities, Implementation, ProtocolVersion, CallToolResult,
-        RawResource, ListResourcesResult, ReadResourceResult, ResourceContents,
-        ReadResourceRequestParams, AnnotateAble, Meta,
-    },
     handler::server::wrapper::Parameters,
+    model::{
+        AnnotateAble, CallToolResult, Implementation, ListResourcesResult, Meta, ProtocolVersion,
+        RawResource, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
+        ServerCapabilities,
+    },
     service::{RequestContext, RoleServer},
-    ErrorData as McpError,
+    tool, ErrorData as McpError, ServerHandler,
 };
-use serde::{Deserialize, Serialize};
 use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use chrono::DateTime;
-use chrono::Utc;
-use crate::query_intelligence::{RankedCandidate, temporal::parse_temporal_hint};
-use crate::search::rrf_fuse_multi;
 
-use crate::config::{IdempotencyConfig, RecallConfig, ResourceCapsConfig, SalienceConfig, SearchConfig};
+use crate::config::{
+    IdempotencyConfig, RecallConfig, ResourceCapsConfig, SalienceConfig, SearchConfig,
+};
 use crate::content_filter::{ContentFilter, FilterVerdict};
 use crate::embedding::{EmbeddingJob, EmbeddingProvider};
 use crate::errors::MemcpError;
 use crate::extraction::ExtractionJob;
+use crate::search::salience::{dedup_parent_chunks, SalienceInput};
 use crate::search::{SalienceScorer, ScoredHit};
-use crate::search::salience::{SalienceInput, dedup_parent_chunks};
 use crate::store::{
-    decode_search_keyset_cursor, encode_search_keyset_cursor,
-    CreateMemory, ListFilter, Memory, MemoryStore, UpdateMemory,
+    decode_search_keyset_cursor, encode_search_keyset_cursor, CreateMemory, ListFilter, Memory,
+    MemoryStore, UpdateMemory,
 };
 
 pub struct MemoryService {
@@ -102,8 +102,10 @@ pub struct MemoryService {
     search_config: SearchConfig,
     start_time: Instant,
     extraction_pipeline: Option<crate::extraction::pipeline::ExtractionPipeline>,
-    qi_expansion_provider: Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
-    qi_reranking_provider: Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
+    qi_expansion_provider:
+        Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
+    qi_reranking_provider:
+        Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
     qi_config: crate::config::QueryIntelligenceConfig,
     content_filter: Option<Arc<dyn ContentFilter>>,
     idempotency_config: IdempotencyConfig,
@@ -128,8 +130,12 @@ impl MemoryService {
         salience_config: SalienceConfig,
         search_config: SearchConfig,
         extraction_pipeline: Option<crate::extraction::pipeline::ExtractionPipeline>,
-        qi_expansion_provider: Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
-        qi_reranking_provider: Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
+        qi_expansion_provider: Option<
+            Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>,
+        >,
+        qi_reranking_provider: Option<
+            Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>,
+        >,
         qi_config: crate::config::QueryIntelligenceConfig,
         content_filter: Option<Arc<dyn ContentFilter>>,
     ) -> Self {
@@ -193,7 +199,11 @@ impl MemoryService {
     }
 
     /// Update the resource limits and GC config for capacity warnings and auto-GC.
-    pub fn set_resource_limits(&mut self, limits: crate::config::ResourceLimitsConfig, gc: crate::config::GcConfig) {
+    pub fn set_resource_limits(
+        &mut self,
+        limits: crate::config::ResourceLimitsConfig,
+        gc: crate::config::GcConfig,
+    ) {
         self.resource_limits = limits;
         self.gc_config = gc;
     }
@@ -209,7 +219,8 @@ impl MemoryService {
     fn inject_ref(&self, obj: &mut serde_json::Value) {
         if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
             let r = self.ref_map.assign_ref(id);
-            obj.as_object_mut().map(|m| m.insert("ref".to_string(), json!(r)));
+            obj.as_object_mut()
+                .map(|m| m.insert("ref".to_string(), json!(r)));
         }
     }
 
@@ -228,7 +239,12 @@ impl MemoryService {
             );
             Meta(obj)
         };
-        for name in &["search_memory", "store_memory", "recall_memory", "annotate_memory"] {
+        for name in &[
+            "search_memory",
+            "store_memory",
+            "recall_memory",
+            "annotate_memory",
+        ] {
             if let Some(route) = router.map.get_mut(*name) {
                 route.attr.meta = Some(sandbox_meta.clone());
             }
@@ -452,13 +468,11 @@ pub struct DiscoverMemoriesParams {
 // Helper: convert MemcpError to CallToolResult with isError: true
 fn store_error_to_result(err: MemcpError) -> CallToolResult {
     match err {
-        MemcpError::NotFound { id } => {
-            CallToolResult::structured_error(json!({
-                "isError": true,
-                "error": format!("Memory not found: {}", id),
-                "hint": "Use list_memories to find available memory IDs"
-            }))
-        }
+        MemcpError::NotFound { id } => CallToolResult::structured_error(json!({
+            "isError": true,
+            "error": format!("Memory not found: {}", id),
+            "hint": "Use list_memories to find available memory IDs"
+        })),
         MemcpError::Validation { message, field } => {
             let mut obj = json!({
                 "isError": true,
@@ -469,18 +483,14 @@ fn store_error_to_result(err: MemcpError) -> CallToolResult {
             }
             CallToolResult::structured_error(obj)
         }
-        MemcpError::Storage(msg) => {
-            CallToolResult::structured_error(json!({
-                "isError": true,
-                "error": format!("Storage error: {}", msg)
-            }))
-        }
-        other => {
-            CallToolResult::structured_error(json!({
-                "isError": true,
-                "error": other.to_string()
-            }))
-        }
+        MemcpError::Storage(msg) => CallToolResult::structured_error(json!({
+            "isError": true,
+            "error": format!("Storage error: {}", msg)
+        })),
+        other => CallToolResult::structured_error(json!({
+            "isError": true,
+            "error": other.to_string()
+        })),
     }
 }
 
@@ -508,7 +518,10 @@ fn parse_datetime(s: &str, field: &str) -> Result<chrono::DateTime<chrono::Utc>,
 /// Supports one-level dot-notation (e.g., "metadata.source" extracts
 /// `{ "metadata": { "source": ... } }`). Deeper paths (more than one dot)
 /// are silently ignored. Non-object parents are silently skipped.
-fn apply_field_projection(obj: serde_json::Value, fields: &Option<Vec<String>>) -> serde_json::Value {
+fn apply_field_projection(
+    obj: serde_json::Value,
+    fields: &Option<Vec<String>>,
+) -> serde_json::Value {
     match fields {
         None => obj,
         Some(requested) if requested.is_empty() => obj,
@@ -525,7 +538,8 @@ fn apply_field_projection(obj: serde_json::Value, fields: &Option<Vec<String>>) 
                         }
                         if let Some(serde_json::Value::Object(nested)) = map.get(parent_key) {
                             if let Some(child_val) = nested.get(child_key) {
-                                let entry = result.entry(parent_key.to_string())
+                                let entry = result
+                                    .entry(parent_key.to_string())
                                     .or_insert_with(|| serde_json::json!({}));
                                 if let serde_json::Value::Object(ref mut m) = entry {
                                     m.insert(child_key.to_string(), child_val.clone());
@@ -550,7 +564,8 @@ fn apply_field_projection(obj: serde_json::Value, fields: &Option<Vec<String>>) 
 // Tool implementations
 #[rmcp::tool_router]
 impl MemoryService {
-    #[tool(description = "Store a new memory. Returns {\"id\": \"uuid\", \"message\": \"Memory stored\"}.\n\
+    #[tool(
+        description = "Store a new memory. Returns {\"id\": \"uuid\", \"message\": \"Memory stored\"}.\n\
 Params: content (required), type_hint (fact|preference|instruction|decision), \
 tags (array), source (string), actor (string), actor_type (agent|human|system, default agent), \
 audience (global|personal|team:X), idempotency_key (optional string), \
@@ -560,7 +575,8 @@ session_id (string, groups memories by conversation session), \
 agent_role (string, e.g. coder/reviewer/planner).\n\
 Dedup: identical content within the server dedup window returns the existing memory (no duplicate). \
 Optional idempotency_key for caller-controlled at-most-once semantics — same key always returns original result.\n\
-Callable from code_execution_20260120 sandboxes.")]
+Callable from code_execution_20260120 sandboxes."
+    )]
     async fn store_memory(
         &self,
         Parameters(params): Parameters<StoreMemoryParams>,
@@ -679,7 +695,8 @@ Callable from code_execution_20260120 sandboxes.")]
 
                 // Enqueue background embedding job
                 if let Some(ref pipeline) = self.pipeline {
-                    let text = crate::embedding::build_embedding_text(&memory.content, &memory.tags);
+                    let text =
+                        crate::embedding::build_embedding_text(&memory.content, &memory.tags);
                     pipeline.enqueue(EmbeddingJob {
                         memory_id: memory.id.clone(),
                         text,
@@ -746,18 +763,28 @@ Callable from code_execution_20260120 sandboxes.")]
                                 if self.resource_limits.auto_gc {
                                     let should_gc = {
                                         let mut last = self.last_auto_gc.lock().unwrap();
-                                        let cooldown = Duration::from_secs(self.resource_limits.auto_gc_cooldown_mins * 60);
+                                        let cooldown = Duration::from_secs(
+                                            self.resource_limits.auto_gc_cooldown_mins * 60,
+                                        );
                                         match *last {
                                             Some(t) if t.elapsed() < cooldown => false,
-                                            _ => { *last = Some(Instant::now()); true }
+                                            _ => {
+                                                *last = Some(Instant::now());
+                                                true
+                                            }
                                         }
                                     };
                                     if should_gc {
                                         let store = pg.clone();
                                         let gc_config = self.gc_config.clone();
                                         tokio::spawn(async move {
-                                            tracing::info!("Auto-GC triggered (capacity near limit)");
-                                            if let Err(e) = crate::gc::worker::run_gc(&store, &gc_config, false).await {
+                                            tracing::info!(
+                                                "Auto-GC triggered (capacity near limit)"
+                                            );
+                                            if let Err(e) =
+                                                crate::gc::worker::run_gc(&store, &gc_config, false)
+                                                    .await
+                                            {
                                                 tracing::warn!(error = %e, "Auto-GC failed");
                                             }
                                         });
@@ -797,7 +824,9 @@ Callable from code_execution_20260120 sandboxes.")]
         }
 
         // Resolve integer ref or UUID passthrough
-        let id = self.ref_map.resolve(&params.id)
+        let id = self
+            .ref_map
+            .resolve(&params.id)
             .unwrap_or_else(|| params.id.clone());
 
         match self.store.get(&id).await {
@@ -859,7 +888,9 @@ Callable from code_execution_20260120 sandboxes.")]
         }
 
         // Resolve integer ref or UUID passthrough
-        let id = self.ref_map.resolve(&params.id)
+        let id = self
+            .ref_map
+            .resolve(&params.id)
             .unwrap_or_else(|| params.id.clone());
 
         if params.content.is_none()
@@ -910,10 +941,12 @@ Callable from code_execution_20260120 sandboxes.")]
             Ok(memory) => {
                 // Re-embed when content changes. Tag-only changes skip re-embed by default
                 // (configurable via embedding.reembed_on_tag_change in memcp.toml).
-                let should_reembed = content_changed || (tags_changed && self.reembed_on_tag_change);
+                let should_reembed =
+                    content_changed || (tags_changed && self.reembed_on_tag_change);
                 if should_reembed {
                     if let Some(ref pipeline) = self.pipeline {
-                        let text = crate::embedding::build_embedding_text(&memory.content, &memory.tags);
+                        let text =
+                            crate::embedding::build_embedding_text(&memory.content, &memory.tags);
                         pipeline.enqueue(EmbeddingJob {
                             memory_id: memory.id.clone(),
                             text,
@@ -931,8 +964,14 @@ Callable from code_execution_20260120 sandboxes.")]
                             let store = pg_store.clone();
                             let mem_id = memory.id.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = store.update_extraction_status(&mem_id, "pending").await {
-                                    tracing::warn!("Failed to reset extraction status for {}: {}", mem_id, e);
+                                if let Err(e) =
+                                    store.update_extraction_status(&mem_id, "pending").await
+                                {
+                                    tracing::warn!(
+                                        "Failed to reset extraction status for {}: {}",
+                                        mem_id,
+                                        e
+                                    );
                                 }
                             });
                         }
@@ -965,7 +1004,9 @@ Callable from code_execution_20260120 sandboxes.")]
         }
     }
 
-    #[tool(description = "Delete a memory by ID. Idempotent: returns success even if the memory does not exist (safe to retry).")]
+    #[tool(
+        description = "Delete a memory by ID. Idempotent: returns success even if the memory does not exist (safe to retry)."
+    )]
     async fn delete_memory(
         &self,
         Parameters(params): Parameters<DeleteMemoryParams>,
@@ -985,7 +1026,9 @@ Callable from code_execution_20260120 sandboxes.")]
         }
 
         // Resolve integer ref or UUID passthrough
-        let id = self.ref_map.resolve(&params.id)
+        let id = self
+            .ref_map
+            .resolve(&params.id)
             .unwrap_or_else(|| params.id.clone());
 
         match self.store.delete(&id).await {
@@ -998,7 +1041,9 @@ Callable from code_execution_20260120 sandboxes.")]
         }
     }
 
-    #[tool(description = "Bulk delete by filter. confirm=false returns count, confirm=true deletes.")]
+    #[tool(
+        description = "Bulk delete by filter. confirm=false returns count, confirm=true deletes."
+    )]
     async fn bulk_delete_memories(
         &self,
         Parameters(params): Parameters<BulkDeleteMemoriesParams>,
@@ -1188,7 +1233,8 @@ Callable from code_execution_20260120 sandboxes.")]
         }
     }
 
-    #[tool(description = "Search memories by meaning. Returns salience-ranked results.\n\
+    #[tool(
+        description = "Search memories by meaning. Returns salience-ranked results.\n\
 Params: query (required), limit (1-100, default 20), fields (array of field names for projection — \
 supports one-level dot-notation e.g. 'metadata.source'), \
 min_salience (0.0-1.0, server-side quality filter), cursor (pagination token), \
@@ -1202,7 +1248,8 @@ Default output: {\"memories\": [{\"id\": \"uuid\", \"content\": \"text\", \"type
 composite_score is a 0-1 blended relevance combining retrieval similarity and memory importance.\n\
 With fields=[\"id\",\"content\"]: each result has only {\"id\": \"uuid\", \"content\": \"text\"}.\n\
 Idempotent: identical queries always return consistent results (safe to retry).\n\
-Callable from code_execution_20260120 sandboxes.")]
+Callable from code_execution_20260120 sandboxes."
+    )]
     async fn search_memory(
         &self,
         Parameters(params): Parameters<SearchMemoryParams>,
@@ -1226,10 +1273,7 @@ Callable from code_execution_20260120 sandboxes.")]
 
         // 2. Validate limit (default 20 per CONTEXT.md), clamped to resource cap
         let user_limit = params.limit.unwrap_or(20).clamp(1, 100);
-        let limit = std::cmp::min(
-            user_limit as i64,
-            self.resource_caps.max_search_results,
-        ) as u32;
+        let limit = std::cmp::min(user_limit as i64, self.resource_caps.max_search_results) as u32;
 
         // 2a. Validate min_salience and compute effective threshold.
         if let Some(ms) = params.min_salience {
@@ -1242,7 +1286,8 @@ Callable from code_execution_20260120 sandboxes.")]
             }
         }
         let search_config = &self.search_config;
-        let effective_min = params.min_salience
+        let effective_min = params
+            .min_salience
             .or(search_config.default_min_salience)
             .unwrap_or(0.0);
 
@@ -1281,60 +1326,72 @@ Callable from code_execution_20260120 sandboxes.")]
 
         // decomposed_meta: (is_multi_faceted, sub_queries_for_debug)
         let mut decomposed_meta: Option<(bool, Vec<String>)> = None;
-        let (search_query, qi_time_range, sub_queries_for_search) =
-            if let Some(ref provider) = self.qi_expansion_provider {
-                let decompose_budget = qi_budget * 6 / 10; // 60% for decomposition
-                match tokio::time::timeout(decompose_budget, provider.decompose(&params.query)).await {
-                    Ok(Ok(dq)) => {
-                        if dq.is_multi_faceted && !dq.sub_queries.is_empty() && self.qi_config.multi_query_enabled {
-                            tracing::info!(
-                                sub_query_count = dq.sub_queries.len(),
-                                has_time_range = dq.time_range.is_some(),
-                                "Query decomposed into sub-queries (multi-query path)"
-                            );
-                            decomposed_meta = Some((true, dq.sub_queries.clone()));
-                            let time_range = dq.time_range;
-                            // sub_queries_for_search is non-empty → multi-query path
-                            (params.query.clone(), time_range, dq.sub_queries)
-                        } else {
-                            tracing::info!(
-                                variants = dq.variants.len(),
-                                has_time_range = dq.time_range.is_some(),
-                                "Query decomposed as simple (single-query path)"
-                            );
-                            decomposed_meta = Some((false, vec![]));
-                            let best_query = dq.variants.into_iter().next().unwrap_or_else(|| params.query.clone());
-                            let time_range = dq.time_range;
-                            (best_query, time_range, vec![])
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        tracing::warn!(error = %e, "Query decomposition failed, using original query");
-                        (params.query.clone(), None, vec![])
-                    }
-                    Err(_) => {
-                        tracing::warn!(elapsed_ms = ?qi_start.elapsed().as_millis(), "Query decomposition timed out, using original query");
-                        (params.query.clone(), None, vec![])
+        let (search_query, qi_time_range, sub_queries_for_search) = if let Some(ref provider) =
+            self.qi_expansion_provider
+        {
+            let decompose_budget = qi_budget * 6 / 10; // 60% for decomposition
+            match tokio::time::timeout(decompose_budget, provider.decompose(&params.query)).await {
+                Ok(Ok(dq)) => {
+                    if dq.is_multi_faceted
+                        && !dq.sub_queries.is_empty()
+                        && self.qi_config.multi_query_enabled
+                    {
+                        tracing::info!(
+                            sub_query_count = dq.sub_queries.len(),
+                            has_time_range = dq.time_range.is_some(),
+                            "Query decomposed into sub-queries (multi-query path)"
+                        );
+                        decomposed_meta = Some((true, dq.sub_queries.clone()));
+                        let time_range = dq.time_range;
+                        // sub_queries_for_search is non-empty → multi-query path
+                        (params.query.clone(), time_range, dq.sub_queries)
+                    } else {
+                        tracing::info!(
+                            variants = dq.variants.len(),
+                            has_time_range = dq.time_range.is_some(),
+                            "Query decomposed as simple (single-query path)"
+                        );
+                        decomposed_meta = Some((false, vec![]));
+                        let best_query = dq
+                            .variants
+                            .into_iter()
+                            .next()
+                            .unwrap_or_else(|| params.query.clone());
+                        let time_range = dq.time_range;
+                        (best_query, time_range, vec![])
                     }
                 }
-            } else {
-                // No LLM — try deterministic temporal fallback
-                let time_range = parse_temporal_hint(&params.query, Utc::now());
-                (params.query.clone(), time_range, vec![])
-            };
-
-        // 5. Optionally embed the search_query (graceful degradation to BM25-only if no provider)
-        let query_embedding: Option<pgvector::Vector> = if let Some(ref provider) = self.embedding_provider {
-            match provider.embed(&search_query).await {
-                Ok(vec) => Some(pgvector::Vector::from(vec)),
-                Err(e) => {
-                    tracing::warn!("Failed to embed search query, falling back to BM25-only: {}", e);
-                    None
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "Query decomposition failed, using original query");
+                    (params.query.clone(), None, vec![])
+                }
+                Err(_) => {
+                    tracing::warn!(elapsed_ms = ?qi_start.elapsed().as_millis(), "Query decomposition timed out, using original query");
+                    (params.query.clone(), None, vec![])
                 }
             }
         } else {
-            None
+            // No LLM — try deterministic temporal fallback
+            let time_range = parse_temporal_hint(&params.query, Utc::now());
+            (params.query.clone(), time_range, vec![])
         };
+
+        // 5. Optionally embed the search_query (graceful degradation to BM25-only if no provider)
+        let query_embedding: Option<pgvector::Vector> =
+            if let Some(ref provider) = self.embedding_provider {
+                match provider.embed(&search_query).await {
+                    Ok(vec) => Some(pgvector::Vector::from(vec)),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to embed search query, falling back to BM25-only: {}",
+                            e
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
         // 6. Parse optional datetime params
         let created_after = if let Some(ref s) = params.created_after {
@@ -1364,9 +1421,9 @@ Callable from code_execution_20260120 sandboxes.")]
         const SYMBOLIC_BASE_K: f64 = 40.0;
 
         let bm25_k = match params.bm25_weight {
-            Some(0.0) => None,                     // disabled
-            Some(w) => Some(BM25_BASE_K / w),     // weight=2.0 → k=30.0 (stronger influence)
-            None => Some(BM25_BASE_K),             // default
+            Some(0.0) => None,                // disabled
+            Some(w) => Some(BM25_BASE_K / w), // weight=2.0 → k=30.0 (stronger influence)
+            None => Some(BM25_BASE_K),        // default
         };
         let vector_k = match params.vector_weight {
             Some(0.0) => None,
@@ -1390,7 +1447,11 @@ Callable from code_execution_20260120 sandboxes.")]
         // 8. Call hybrid_search — BM25 + vector + symbolic with three-way RRF fusion.
         // Fetch a larger candidate pool when using cursor pagination (need candidates beyond cursor pos).
         // Salience re-ranking happens after, then cursor filtering is applied application-side.
-        let fetch_limit = if cursor_position.is_some() { limit as i64 * 5 } else { limit as i64 };
+        let fetch_limit = if cursor_position.is_some() {
+            limit as i64 * 5
+        } else {
+            limit as i64
+        };
         let tags_slice: Option<Vec<String>> = params.tags.clone();
 
         // 8a. Multi-query path: run hybrid_search for each sub-query, fuse results via rrf_fuse_multi.
@@ -1409,20 +1470,23 @@ Callable from code_execution_20260120 sandboxes.")]
                 } else {
                     None
                 };
-                let sub_hits = match pg_store.hybrid_search(
-                    sub_q,
-                    sub_embedding.as_ref(),
-                    fetch_limit,
-                    created_after,
-                    created_before,
-                    tags_slice.as_deref(),
-                    bm25_k,
-                    vector_k,
-                    symbolic_k,
-                    None,
-                    params.audience.as_deref(),
-                    params.project.as_deref(),
-                ).await {
+                let sub_hits = match pg_store
+                    .hybrid_search(
+                        sub_q,
+                        sub_embedding.as_ref(),
+                        fetch_limit,
+                        created_after,
+                        created_before,
+                        tags_slice.as_deref(),
+                        bm25_k,
+                        vector_k,
+                        symbolic_k,
+                        None,
+                        params.audience.as_deref(),
+                        params.project.as_deref(),
+                    )
+                    .await
+                {
                     Ok(hits) => hits,
                     Err(e) => {
                         tracing::warn!(sub_query = %sub_q, error = %e, "Sub-query search failed, skipping leg");
@@ -1441,20 +1505,23 @@ Callable from code_execution_20260120 sandboxes.")]
             if sub_query_result_ranks.is_empty() {
                 // All sub-query legs failed — fall back to original query
                 tracing::warn!("All sub-query legs failed, falling back to original query");
-                match pg_store.hybrid_search(
-                    &params.query,
-                    query_embedding.as_ref(),
-                    fetch_limit,
-                    created_after,
-                    created_before,
-                    tags_slice.as_deref(),
-                    bm25_k,
-                    vector_k,
-                    symbolic_k,
-                    None,
-                    params.audience.as_deref(),
-                    params.project.as_deref(),
-                ).await {
+                match pg_store
+                    .hybrid_search(
+                        &params.query,
+                        query_embedding.as_ref(),
+                        fetch_limit,
+                        created_after,
+                        created_before,
+                        tags_slice.as_deref(),
+                        bm25_k,
+                        vector_k,
+                        symbolic_k,
+                        None,
+                        params.audience.as_deref(),
+                        params.project.as_deref(),
+                    )
+                    .await
+                {
                     Ok(hits) => hits,
                     Err(e) => return Ok(store_error_to_result(e)),
                 }
@@ -1464,7 +1531,8 @@ Callable from code_execution_20260120 sandboxes.")]
                 let fused = rrf_fuse_multi(&sub_query_result_ranks, MULTI_QUERY_K);
 
                 // Fetch full Memory objects for fused IDs (top fetch_limit)
-                let fused_ids: Vec<String> = fused.into_iter()
+                let fused_ids: Vec<String> = fused
+                    .into_iter()
                     .take(fetch_limit as usize)
                     .map(|(id, _)| id)
                     .collect();
@@ -1472,37 +1540,44 @@ Callable from code_execution_20260120 sandboxes.")]
                 match pg_store.get_memories_by_ids(&fused_ids).await {
                     Ok(memory_map) => {
                         // Preserve fused rank order: iterate fused_ids in order, look up memory
-                        fused_ids.iter().enumerate().filter_map(|(i, id)| {
-                            memory_map.get(id).map(|mem| {
-                                let rank = i + 1;
-                                let rrf_score = 1.0 / (MULTI_QUERY_K + rank as f64);
-                                crate::search::HybridRawHit {
-                                    memory: mem.clone(),
-                                    rrf_score,
-                                    match_source: "multi_query".to_string(),
-                                }
+                        fused_ids
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, id)| {
+                                memory_map.get(id).map(|mem| {
+                                    let rank = i + 1;
+                                    let rrf_score = 1.0 / (MULTI_QUERY_K + rank as f64);
+                                    crate::search::HybridRawHit {
+                                        memory: mem.clone(),
+                                        rrf_score,
+                                        match_source: "multi_query".to_string(),
+                                    }
+                                })
                             })
-                        }).collect()
+                            .collect()
                     }
                     Err(e) => return Ok(store_error_to_result(e)),
                 }
             }
         } else {
             // 8b. Single-query path (default)
-            match pg_store.hybrid_search(
-                &search_query,
-                query_embedding.as_ref(),
-                fetch_limit,
-                created_after,
-                created_before,
-                tags_slice.as_deref(),
-                bm25_k,
-                vector_k,
-                symbolic_k,
-                None, // source filter (MCP uses separate params)
-                params.audience.as_deref(),
-                params.project.as_deref(),
-            ).await {
+            match pg_store
+                .hybrid_search(
+                    &search_query,
+                    query_embedding.as_ref(),
+                    fetch_limit,
+                    created_after,
+                    created_before,
+                    tags_slice.as_deref(),
+                    bm25_k,
+                    vector_k,
+                    symbolic_k,
+                    None, // source filter (MCP uses separate params)
+                    params.audience.as_deref(),
+                    params.project.as_deref(),
+                )
+                .await
+            {
                 Ok(hits) => hits,
                 Err(e) => return Ok(store_error_to_result(e)),
             }
@@ -1523,7 +1598,7 @@ Callable from code_execution_20260120 sandboxes.")]
                 rrf_score: hit.rrf_score,
                 salience_score: 0.0, // populated by rank()
                 match_source: hit.match_source,
-                breakdown: None,     // populated by rank() when debug_scoring=true
+                breakdown: None,      // populated by rank() when debug_scoring=true
                 composite_score: 0.0, // populated after salience scoring
             })
             .collect();
@@ -1536,7 +1611,8 @@ Callable from code_execution_20260120 sandboxes.")]
                     .get(&hit.memory.id)
                     .cloned()
                     .unwrap_or_default();
-                let days_since_reinforced = row.last_reinforced_at
+                let days_since_reinforced = row
+                    .last_reinforced_at
                     .map(|dt| {
                         let duration = Utc::now().signed_duration_since(dt);
                         (duration.num_seconds() as f64 / 86_400.0).max(0.0)
@@ -1571,20 +1647,27 @@ Callable from code_execution_20260120 sandboxes.")]
                 }
             }
             // Re-sort by boosted salience score
-            scored_hits.sort_by(|a, b| b.salience_score.partial_cmp(&a.salience_score).unwrap_or(std::cmp::Ordering::Equal));
+            scored_hits.sort_by(|a, b| {
+                b.salience_score
+                    .partial_cmp(&a.salience_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
         }
 
         // 12.75 LLM re-ranking (if enabled and budget remaining)
         if let Some(ref provider) = self.qi_reranking_provider {
             let remaining = qi_budget.saturating_sub(qi_start.elapsed());
-            if remaining > Duration::from_millis(100) { // Only attempt if >100ms remains
+            if remaining > Duration::from_millis(100) {
+                // Only attempt if >100ms remains
                 // Take top 10 for re-ranking (locked decision)
                 let top_n = scored_hits.len().min(10);
                 let candidates: Vec<RankedCandidate> = scored_hits[..top_n]
                     .iter()
                     .enumerate()
                     .map(|(i, hit)| {
-                        let content = if hit.memory.content.len() > self.qi_config.rerank_content_chars {
+                        let content = if hit.memory.content.len()
+                            > self.qi_config.rerank_content_chars
+                        {
                             hit.memory.content[..self.qi_config.rerank_content_chars].to_string()
                         } else {
                             hit.memory.content.clone()
@@ -1597,25 +1680,39 @@ Callable from code_execution_20260120 sandboxes.")]
                     })
                     .collect();
 
-                match tokio::time::timeout(remaining, provider.rerank(&params.query, &candidates)).await {
+                match tokio::time::timeout(remaining, provider.rerank(&params.query, &candidates))
+                    .await
+                {
                     Ok(Ok(ranked)) => {
                         tracing::info!(ranked_count = ranked.len(), "LLM re-ranking applied");
                         // Blend: 0.7 * llm_rank_score + 0.3 * salience_score (normalized)
                         // llm_rank_score = 1.0 / (1.0 + llm_rank as f64)
-                        let max_salience = scored_hits.iter().map(|h| h.salience_score).fold(f64::MIN, f64::max);
-                        let min_salience = scored_hits.iter().map(|h| h.salience_score).fold(f64::MAX, f64::min);
+                        let max_salience = scored_hits
+                            .iter()
+                            .map(|h| h.salience_score)
+                            .fold(f64::MIN, f64::max);
+                        let min_salience = scored_hits
+                            .iter()
+                            .map(|h| h.salience_score)
+                            .fold(f64::MAX, f64::min);
                         let salience_range = (max_salience - min_salience).max(1e-6);
 
                         for hit in scored_hits[..top_n].iter_mut() {
                             if let Some(r) = ranked.iter().find(|r| r.id == hit.memory.id) {
                                 let llm_score = 1.0 / (1.0 + r.llm_rank as f64);
-                                let norm_salience = (hit.salience_score - min_salience) / salience_range;
+                                let norm_salience =
+                                    (hit.salience_score - min_salience) / salience_range;
                                 let trust = hit.memory.trust_level as f64;
-                                hit.salience_score = 0.7 * llm_score + 0.3 * (norm_salience * trust);
+                                hit.salience_score =
+                                    0.7 * llm_score + 0.3 * (norm_salience * trust);
                             }
                         }
                         // Re-sort top_n portion only
-                        scored_hits[..top_n].sort_by(|a, b| b.salience_score.partial_cmp(&a.salience_score).unwrap_or(std::cmp::Ordering::Equal));
+                        scored_hits[..top_n].sort_by(|a, b| {
+                            b.salience_score
+                                .partial_cmp(&a.salience_score)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
                     }
                     Ok(Err(e)) => {
                         tracing::warn!(error = %e, "LLM re-ranking failed, keeping salience order");
@@ -1631,9 +1728,15 @@ Callable from code_execution_20260120 sandboxes.")]
 
         // 12.5. Apply salience threshold filtering AFTER re-ranking, BEFORE cursor/take.
         // Count below-threshold results first (needed for hint mode).
-        let below_threshold = scored_hits.iter().filter(|h| h.salience_score < effective_min).count();
+        let below_threshold = scored_hits
+            .iter()
+            .filter(|h| h.salience_score < effective_min)
+            .count();
         let mut scored_hits: Vec<ScoredHit> = if effective_min > 0.0 {
-            scored_hits.into_iter().filter(|h| h.salience_score >= effective_min).collect()
+            scored_hits
+                .into_iter()
+                .filter(|h| h.salience_score >= effective_min)
+                .collect()
         } else {
             scored_hits
         };
@@ -1642,12 +1745,24 @@ Callable from code_execution_20260120 sandboxes.")]
         if scored_hits.len() == 1 {
             scored_hits[0].composite_score = 1.0;
         } else if scored_hits.len() > 1 {
-            let max_rrf = scored_hits.iter().map(|h| h.rrf_score).fold(f64::MIN, f64::max);
-            let min_rrf = scored_hits.iter().map(|h| h.rrf_score).fold(f64::MAX, f64::min);
+            let max_rrf = scored_hits
+                .iter()
+                .map(|h| h.rrf_score)
+                .fold(f64::MIN, f64::max);
+            let min_rrf = scored_hits
+                .iter()
+                .map(|h| h.rrf_score)
+                .fold(f64::MAX, f64::min);
             let rrf_range = (max_rrf - min_rrf).max(1e-9);
 
-            let max_sal = scored_hits.iter().map(|h| h.salience_score).fold(f64::MIN, f64::max);
-            let min_sal = scored_hits.iter().map(|h| h.salience_score).fold(f64::MAX, f64::min);
+            let max_sal = scored_hits
+                .iter()
+                .map(|h| h.salience_score)
+                .fold(f64::MIN, f64::max);
+            let min_sal = scored_hits
+                .iter()
+                .map(|h| h.salience_score)
+                .fold(f64::MAX, f64::min);
             let sal_range = (max_sal - min_sal).max(1e-9);
 
             for hit in &mut scored_hits {
@@ -1665,64 +1780,76 @@ Callable from code_execution_20260120 sandboxes.")]
         // 13. Apply cursor-based filtering: skip items at or before the cursor position.
         // Cursor encodes (salience_score, id) of the LAST item on the previous page.
         let scored_hits: Vec<ScoredHit> = if let Some((last_score, ref last_id)) = cursor_position {
-            scored_hits.into_iter().filter(|hit| {
-                let score = hit.salience_score;
-                if (score - last_score).abs() < f64::EPSILON {
-                    hit.memory.id.as_str() > last_id.as_str()
-                } else {
-                    score < last_score
-                }
-            }).collect()
+            scored_hits
+                .into_iter()
+                .filter(|hit| {
+                    let score = hit.salience_score;
+                    if (score - last_score).abs() < f64::EPSILON {
+                        hit.memory.id.as_str() > last_id.as_str()
+                    } else {
+                        score < last_score
+                    }
+                })
+                .collect()
         } else {
             scored_hits
         };
 
         // Trim to limit and detect if more remain.
         let has_more = scored_hits.len() as u32 > limit;
-        let take = if has_more { limit as usize } else { scored_hits.len() };
+        let take = if has_more {
+            limit as usize
+        } else {
+            scored_hits.len()
+        };
         let scored_hits: Vec<ScoredHit> = scored_hits.into_iter().take(take).collect();
 
         // Build next_cursor from the last item's (salience_score, id).
         let next_cursor: Option<String> = if has_more {
-            scored_hits.last().map(|hit| encode_search_keyset_cursor(hit.salience_score, &hit.memory.id))
+            scored_hits
+                .last()
+                .map(|hit| encode_search_keyset_cursor(hit.salience_score, &hit.memory.id))
         } else {
             None
         };
 
         // 14. Format results
         let count = scored_hits.len();
-        let results: Vec<serde_json::Value> = scored_hits.iter().map(|hit| {
-            let mut obj = json!({
-                "id": hit.memory.id,
-                "content": hit.memory.content,
-                "type_hint": hit.memory.type_hint,
-                "source": hit.memory.source,
-                "tags": hit.memory.tags,
-                "created_at": hit.memory.created_at.to_rfc3339(),
-                "updated_at": hit.memory.updated_at.to_rfc3339(),
-                "access_count": hit.memory.access_count,
-                "relevance_score": (hit.salience_score * 1000.0).round() / 1000.0,
-                "composite_score": (hit.composite_score * 1000.0).round() / 1000.0,
-                "match_source": hit.match_source,
-                "rrf_score": (hit.rrf_score * 10000.0).round() / 10000.0,
-                "actor": hit.memory.actor,
-                "actor_type": hit.memory.actor_type,
-                "audience": hit.memory.audience,
-            });
-            // Add score breakdown when debug_scoring is enabled
-            if let Some(ref bd) = hit.breakdown {
-                obj["score_breakdown"] = json!({
-                    "recency": (bd.recency * 1000.0).round() / 1000.0,
-                    "access": (bd.access * 1000.0).round() / 1000.0,
-                    "semantic": (bd.semantic * 1000.0).round() / 1000.0,
-                    "reinforcement": (bd.reinforcement * 1000.0).round() / 1000.0,
+        let results: Vec<serde_json::Value> = scored_hits
+            .iter()
+            .map(|hit| {
+                let mut obj = json!({
+                    "id": hit.memory.id,
+                    "content": hit.memory.content,
+                    "type_hint": hit.memory.type_hint,
+                    "source": hit.memory.source,
+                    "tags": hit.memory.tags,
+                    "created_at": hit.memory.created_at.to_rfc3339(),
+                    "updated_at": hit.memory.updated_at.to_rfc3339(),
+                    "access_count": hit.memory.access_count,
+                    "relevance_score": (hit.salience_score * 1000.0).round() / 1000.0,
+                    "composite_score": (hit.composite_score * 1000.0).round() / 1000.0,
+                    "match_source": hit.match_source,
+                    "rrf_score": (hit.rrf_score * 10000.0).round() / 10000.0,
+                    "actor": hit.memory.actor,
+                    "actor_type": hit.memory.actor_type,
+                    "audience": hit.memory.audience,
                 });
-            }
-            // Inject integer ref alongside UUID id (always present, even when field projection is used)
-            self.inject_ref(&mut obj);
-            // Apply field projection (no-op when fields is None or empty).
-            apply_field_projection(obj, &params.fields)
-        }).collect();
+                // Add score breakdown when debug_scoring is enabled
+                if let Some(ref bd) = hit.breakdown {
+                    obj["score_breakdown"] = json!({
+                        "recency": (bd.recency * 1000.0).round() / 1000.0,
+                        "access": (bd.access * 1000.0).round() / 1000.0,
+                        "semantic": (bd.semantic * 1000.0).round() / 1000.0,
+                        "reinforcement": (bd.reinforcement * 1000.0).round() / 1000.0,
+                    });
+                }
+                // Inject integer ref alongside UUID id (always present, even when field projection is used)
+                self.inject_ref(&mut obj);
+                // Apply field projection (no-op when fields is None or empty).
+                apply_field_projection(obj, &params.fields)
+            })
+            .collect();
 
         // 15. Build final response JSON
         let mut response = json!({
@@ -1776,7 +1903,9 @@ Callable from code_execution_20260120 sandboxes.")]
         }
 
         // Resolve integer ref or UUID passthrough
-        let id = self.ref_map.resolve(&params.id)
+        let id = self
+            .ref_map
+            .resolve(&params.id)
             .unwrap_or_else(|| params.id.clone());
 
         // Verify memory exists
@@ -1820,12 +1949,14 @@ Callable from code_execution_20260120 sandboxes.")]
                 });
                 self.inject_ref(&mut obj);
                 Ok(CallToolResult::structured(obj))
-            },
+            }
             Err(e) => Ok(store_error_to_result(e)),
         }
     }
 
-    #[tool(description = "Provide relevance feedback for a memory (useful or irrelevant). Adjusts salience scoring.")]
+    #[tool(
+        description = "Provide relevance feedback for a memory (useful or irrelevant). Adjusts salience scoring."
+    )]
     async fn feedback_memory(
         &self,
         Parameters(params): Parameters<FeedbackMemoryParams>,
@@ -1846,7 +1977,9 @@ Callable from code_execution_20260120 sandboxes.")]
         }
 
         // Resolve integer ref or UUID passthrough
-        let id = self.ref_map.resolve(&params.id)
+        let id = self
+            .ref_map
+            .resolve(&params.id)
             .unwrap_or_else(|| params.id.clone());
 
         let pg_store = match &self.pg_store {
@@ -1865,13 +1998,15 @@ Callable from code_execution_20260120 sandboxes.")]
         }
     }
 
-    #[tool(description = "Recall relevant memories for automatic context injection. \
+    #[tool(
+        description = "Recall relevant memories for automatic context injection. \
 Query-based: provide 'query' to find semantically similar memories. \
 Query-less: omit 'query' for cold-start recall ranked by salience (stability + recency). \
 Set 'first' to true for session-start mode: pins project-summary memory and adds datetime/preamble. \
 Returns {\"session_id\": \"...\", \"count\": N, \"memories\": [...], \"summary\": {...} | null}. \
 Session-scoped dedup prevents re-injection within a conversation. \
-Callable from code_execution_20260120 sandboxes.")]
+Callable from code_execution_20260120 sandboxes."
+    )]
     async fn recall_memory(
         &self,
         Parameters(params): Parameters<RecallMemoryParams>,
@@ -1931,10 +2066,27 @@ Callable from code_execution_20260120 sandboxes.")]
                 }
             };
 
-            engine.recall(&query_embedding, params.session_id, reset, None, &boost_tags).await
+            engine
+                .recall(
+                    &query_embedding,
+                    params.session_id,
+                    reset,
+                    None,
+                    &boost_tags,
+                )
+                .await
         } else {
             // Query-less path — no embedding needed.
-            engine.recall_queryless(params.session_id, reset, None, first, params.limit, &boost_tags).await
+            engine
+                .recall_queryless(
+                    params.session_id,
+                    reset,
+                    None,
+                    first,
+                    params.limit,
+                    &boost_tags,
+                )
+                .await
         };
 
         // For query-based path with first=true, fetch project summary separately.
@@ -1949,6 +2101,7 @@ Callable from code_execution_20260120 sandboxes.")]
                             relevance: 1.0,
                             boost_applied: false,
                             boost_score: 0.0,
+                            trust_level: 1.0,
                         });
                     }
                     Ok(None) => {}
@@ -1960,22 +2113,26 @@ Callable from code_execution_20260120 sandboxes.")]
         match result {
             Ok(r) => {
                 // Build memories array with ref injected alongside memory_id
-                let memories: Vec<serde_json::Value> = r.memories.iter().map(|m| {
-                    let r_num = self.ref_map.assign_ref(&m.memory_id);
-                    let mut obj = json!({
-                        "memory_id": m.memory_id,
-                        "ref": r_num,
-                        "content": m.content,
-                        "relevance": m.relevance,
-                    });
-                    if m.boost_applied {
-                        obj["boost_applied"] = json!(m.boost_applied);
-                    }
-                    if m.boost_score != 0.0 {
-                        obj["boost_score"] = json!(m.boost_score);
-                    }
-                    obj
-                }).collect();
+                let memories: Vec<serde_json::Value> = r
+                    .memories
+                    .iter()
+                    .map(|m| {
+                        let r_num = self.ref_map.assign_ref(&m.memory_id);
+                        let mut obj = json!({
+                            "memory_id": m.memory_id,
+                            "ref": r_num,
+                            "content": m.content,
+                            "relevance": m.relevance,
+                        });
+                        if m.boost_applied {
+                            obj["boost_applied"] = json!(m.boost_applied);
+                        }
+                        if m.boost_score != 0.0 {
+                            obj["boost_score"] = json!(m.boost_score);
+                        }
+                        obj
+                    })
+                    .collect();
 
                 let mut response = json!({
                     "session_id": r.session_id,
@@ -1986,11 +2143,14 @@ Callable from code_execution_20260120 sandboxes.")]
                 if let Some(ref summary) = r.summary {
                     let summary_ref = self.ref_map.assign_ref(&summary.memory_id);
                     if let serde_json::Value::Object(ref mut map) = response {
-                        map.insert("summary".to_string(), json!({
-                            "memory_id": summary.memory_id,
-                            "ref": summary_ref,
-                            "content": summary.content,
-                        }));
+                        map.insert(
+                            "summary".to_string(),
+                            json!({
+                                "memory_id": summary.memory_id,
+                                "ref": summary_ref,
+                                "content": summary.content,
+                            }),
+                        );
                     }
                 }
                 Ok(CallToolResult::structured(response))
@@ -1999,11 +2159,13 @@ Callable from code_execution_20260120 sandboxes.")]
         }
     }
 
-    #[tool(description = "Annotate an existing memory — add/replace tags and adjust salience. \
+    #[tool(
+        description = "Annotate an existing memory — add/replace tags and adjust salience. \
 Tags: `tags` appends to existing (merged, deduplicated), `replace_tags` replaces all. \
 Salience: \"0.9\" sets absolute stability, \"1.5x\" multiplies current. \
 Returns diff showing changes. \
-Example: {\"id\": \"abc\", \"tags\": [\"decision\"], \"salience\": \"1.5x\"}")]
+Example: {\"id\": \"abc\", \"tags\": [\"decision\"], \"salience\": \"1.5x\"}"
+    )]
     async fn annotate_memory(
         &self,
         Parameters(params): Parameters<AnnotateMemoryParams>,
@@ -2023,7 +2185,9 @@ Example: {\"id\": \"abc\", \"tags\": [\"decision\"], \"salience\": \"1.5x\"}")]
         }
 
         // Resolve integer ref or UUID passthrough
-        let id = self.ref_map.resolve(&params.id)
+        let id = self
+            .ref_map
+            .resolve(&params.id)
             .unwrap_or_else(|| params.id.clone());
 
         let pg_store = match &self.pg_store {
@@ -2049,7 +2213,8 @@ Example: {\"id\": \"abc\", \"tags\": [\"decision\"], \"salience\": \"1.5x\"}")]
                 let mut changes = serde_json::Map::new();
                 changes.insert("tags_added".to_string(), json!(result.tags_added));
                 changes.insert("tags_removed".to_string(), json!(result.tags_removed));
-                if let (Some(before), Some(after)) = (result.salience_before, result.salience_after) {
+                if let (Some(before), Some(after)) = (result.salience_before, result.salience_after)
+                {
                     changes.insert("salience_before".to_string(), json!(before));
                     changes.insert("salience_after".to_string(), json!(after));
                 }
@@ -2140,13 +2305,16 @@ Returns results with similarity scores and optional LLM-generated connection exp
         };
 
         // Run discovery
-        let results = match pg_store.discover_associations(
-            &embedding,
-            min_sim,
-            max_sim,
-            limit,
-            params.project.as_deref(),
-        ).await {
+        let results = match pg_store
+            .discover_associations(
+                &embedding,
+                min_sim,
+                max_sim,
+                limit,
+                params.project.as_deref(),
+            )
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 return Ok(CallToolResult::structured_error(json!({
@@ -2158,32 +2326,40 @@ Returns results with similarity scores and optional LLM-generated connection exp
 
         // Optional LLM explanations (fail-open — no explanations if unavailable)
         let explanations = if let Some(ref provider) = self.qi_expansion_provider {
-            let slices: Vec<(&str, f64)> = results.iter()
+            let slices: Vec<(&str, f64)> = results
+                .iter()
                 .map(|(m, sim)| (m.content.as_str(), *sim))
                 .collect();
-            provider.explain_connections(&params.query, &slices).await.unwrap_or_default()
+            provider
+                .explain_connections(&params.query, &slices)
+                .await
+                .unwrap_or_default()
         } else {
             vec![]
         };
 
         // Build response with UUID ref mapping
-        let discoveries: Vec<serde_json::Value> = results.iter().enumerate().map(|(i, (memory, sim))| {
-            let mut obj = json!({
-                "id": memory.id,
-                "content": memory.content,
-                "type_hint": memory.type_hint,
-                "tags": memory.tags,
-                "similarity": format!("{:.3}", sim),
-                "created_at": memory.created_at.to_rfc3339(),
-            });
-            self.inject_ref(&mut obj);
-            if let Some(explanation) = explanations.get(i) {
-                if let Some(o) = obj.as_object_mut() {
-                    o.insert("connection".to_string(), json!(explanation));
+        let discoveries: Vec<serde_json::Value> = results
+            .iter()
+            .enumerate()
+            .map(|(i, (memory, sim))| {
+                let mut obj = json!({
+                    "id": memory.id,
+                    "content": memory.content,
+                    "type_hint": memory.type_hint,
+                    "tags": memory.tags,
+                    "similarity": format!("{:.3}", sim),
+                    "created_at": memory.created_at.to_rfc3339(),
+                });
+                self.inject_ref(&mut obj);
+                if let Some(explanation) = explanations.get(i) {
+                    if let Some(o) = obj.as_object_mut() {
+                        o.insert("connection".to_string(), json!(explanation));
+                    }
                 }
-            }
-            obj
-        }).collect();
+                obj
+            })
+            .collect();
 
         Ok(CallToolResult::structured(json!({
             "discoveries": discoveries,
@@ -2194,9 +2370,7 @@ Returns results with similarity scores and optional LLM-generated connection exp
     }
 
     #[tool(description = "Health check.")]
-    async fn health_check(
-        &self,
-    ) -> Result<CallToolResult, McpError> {
+    async fn health_check(&self) -> Result<CallToolResult, McpError> {
         tracing::info!(tool = "health_check", "Tool called");
 
         let response = json!({
@@ -2365,7 +2539,11 @@ mod uuid_ref_tests {
         let uuid = "550e8400-e29b-41d4-a716-446655440000";
         let r = map.assign_ref(uuid);
         let resolved = map.resolve(&r.to_string());
-        assert_eq!(resolved, Some(uuid.to_string()), "Integer ref must resolve back to UUID");
+        assert_eq!(
+            resolved,
+            Some(uuid.to_string()),
+            "Integer ref must resolve back to UUID"
+        );
     }
 
     #[test]
@@ -2374,7 +2552,11 @@ mod uuid_ref_tests {
         let uuid = "550e8400-e29b-41d4-a716-446655440000";
         // UUID passthrough — no assignment needed
         let resolved = map.resolve(uuid);
-        assert_eq!(resolved, Some(uuid.to_string()), "UUID string must pass through as-is");
+        assert_eq!(
+            resolved,
+            Some(uuid.to_string()),
+            "UUID string must pass through as-is"
+        );
     }
 
     #[test]
@@ -2401,7 +2583,9 @@ mod uuid_ref_tests {
         // Manually simulate inject_ref logic
         if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
             let r = map.assign_ref(id);
-            obj.as_object_mut().unwrap().insert("ref".to_string(), json!(r));
+            obj.as_object_mut()
+                .unwrap()
+                .insert("ref".to_string(), json!(r));
         }
         assert!(obj.get("ref").is_some(), "inject_ref must add 'ref' field");
         assert_eq!(obj["ref"], json!(1u32), "First ref must be 1");
@@ -2417,7 +2601,9 @@ mod uuid_ref_tests {
         for item in &mut items {
             if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
                 let r = map.assign_ref(id);
-                item.as_object_mut().unwrap().insert("ref".to_string(), json!(r));
+                item.as_object_mut()
+                    .unwrap()
+                    .insert("ref".to_string(), json!(r));
             }
         }
         // Each item should have a unique, sequential ref

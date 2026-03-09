@@ -41,10 +41,18 @@ pub struct RecalledMemory {
     /// Total boost score added (explicit + session). 0.0 when no boost.
     #[serde(skip_serializing_if = "is_zero_f32")]
     pub boost_score: f32,
+    /// Trust level from the stored memory (0.0–1.0). Skipped in JSON when 1.0 (default).
+    #[serde(skip_serializing_if = "is_default_trust")]
+    pub trust_level: f32,
 }
 
 fn is_zero_f32(v: &f32) -> bool {
     *v == 0.0
+}
+
+/// Skip serializing trust_level when it's the default (1.0) — keeps JSON clean for trusted memories.
+fn is_default_trust(v: &f32) -> bool {
+    (*v - 1.0).abs() < f32::EPSILON
 }
 
 /// Prefix-aware tag matching. If boost_tag ends with ':', it's a prefix match.
@@ -65,7 +73,12 @@ fn tag_matches(boost_tag: &str, memory_tag: &str) -> bool {
 ///
 /// Multiple matching tags stack: 2 matches * weight = 2x weight. Capped at cap.
 /// Returns 0.0 immediately when either input is empty.
-pub fn compute_tag_boost(boost_tags: &[String], memory_tags: &[String], weight: f64, cap: f64) -> f64 {
+pub fn compute_tag_boost(
+    boost_tags: &[String],
+    memory_tags: &[String],
+    weight: f64,
+    cap: f64,
+) -> f64 {
     if boost_tags.is_empty() || memory_tags.is_empty() {
         return 0.0;
     }
@@ -83,7 +96,11 @@ pub fn compute_tag_boost(boost_tags: &[String], memory_tags: &[String], weight: 
 pub fn extract_tags(tags: &Option<serde_json::Value>) -> Vec<String> {
     tags.as_ref()
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -158,7 +175,10 @@ impl RecallEngine {
 
         // d. Fetch session tags for implicit topic-affinity boost.
         let session_tags = if self.config.session_topic_tracking {
-            self.store.get_session_tags(&session_id).await.unwrap_or_default()
+            self.store
+                .get_session_tags(&session_id)
+                .await
+                .unwrap_or_default()
         } else {
             vec![]
         };
@@ -181,8 +201,8 @@ impl RecallEngine {
         let mut memories: Vec<RecalledMemory> = Vec::with_capacity(candidates.len());
         let mut accumulated_tags: Vec<String> = Vec::new();
 
-        for (memory_id, content, relevance, tags_json) in &candidates {
-            let memory_tags = extract_tags(tags_json);
+        for candidate in &candidates {
+            let memory_tags = extract_tags(&candidate.tags);
 
             // Compute explicit + implicit boost.
             let explicit_boost = compute_tag_boost(
@@ -198,14 +218,19 @@ impl RecallEngine {
                 self.config.session_boost_cap,
             );
             let total_boost = explicit_boost + implicit_boost;
-            let boosted_relevance = relevance + total_boost as f32;
+            let boosted_relevance = candidate.relevance + total_boost as f32;
+
+            // Apply trust weighting: multiply by trust_level with floor at 0.05
+            let trust = candidate.trust_level.max(0.05);
+            let trust_weighted = boosted_relevance * trust;
 
             memories.push(RecalledMemory {
-                memory_id: memory_id.clone(),
-                content: content.clone(),
-                relevance: boosted_relevance,
+                memory_id: candidate.memory_id.clone(),
+                content: candidate.content.clone(),
+                relevance: trust_weighted,
                 boost_applied: total_boost > 0.0,
                 boost_score: total_boost as f32,
+                trust_level: candidate.trust_level,
             });
 
             // Collect memory tags for session accumulation.
@@ -213,7 +238,11 @@ impl RecallEngine {
         }
 
         // g. Re-sort by boosted relevance DESC (boost may change relative order).
-        memories.sort_by(|a, b| b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal));
+        memories.sort_by(|a, b| {
+            b.relevance
+                .partial_cmp(&a.relevance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         // Already capped at max_memories by recall_candidates; no truncate needed.
 
         // h. Record each recalled memory in the session.
@@ -227,7 +256,10 @@ impl RecallEngine {
         if self.config.session_topic_tracking && !accumulated_tags.is_empty() {
             accumulated_tags.sort();
             accumulated_tags.dedup();
-            let _ = self.store.accumulate_session_tags(&session_id, &accumulated_tags).await;
+            let _ = self
+                .store
+                .accumulate_session_tags(&session_id, &accumulated_tags)
+                .await;
         }
 
         // j. Fire-and-forget salience bump for all recalled memories.
@@ -309,6 +341,7 @@ impl RecallEngine {
                     relevance: 1.0, // pinned, not relevance-ranked
                     boost_applied: false,
                     boost_score: 0.0,
+                    trust_level: 1.0, // summaries are always trusted
                 })
         } else {
             None
@@ -316,7 +349,10 @@ impl RecallEngine {
 
         // e. Fetch session tags for implicit topic-affinity boost.
         let session_tags = if self.config.session_topic_tracking {
-            self.store.get_session_tags(&session_id).await.unwrap_or_default()
+            self.store
+                .get_session_tags(&session_id)
+                .await
+                .unwrap_or_default()
         } else {
             vec![]
         };
@@ -360,7 +396,7 @@ impl RecallEngine {
                 event_time: None,
                 event_time_precision: None,
                 project: project.map(String::from),
-                trust_level: 0.5,
+                trust_level: candidate.trust_level,
                 session_id: None,
                 agent_role: None,
                 metadata: serde_json::json!({}),
@@ -416,8 +452,25 @@ impl RecallEngine {
                 hit.salience_score += explicit_boost + implicit_boost;
             }
             // Re-sort after boost.
-            hits.sort_by(|a, b| b.salience_score.partial_cmp(&a.salience_score).unwrap_or(std::cmp::Ordering::Equal));
+            hits.sort_by(|a, b| {
+                b.salience_score
+                    .partial_cmp(&a.salience_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
         }
+
+        // Apply trust weighting to salience scores (after boost, before truncation).
+        // Matches the search path pattern: score *= trust.max(0.05).
+        for hit in hits.iter_mut() {
+            let trust = (hit.memory.trust_level as f64).max(0.05);
+            hit.salience_score *= trust;
+        }
+        // Re-sort after trust weighting.
+        hits.sort_by(|a, b| {
+            b.salience_score
+                .partial_cmp(&a.salience_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         hits.truncate(max_memories);
 
@@ -454,6 +507,7 @@ impl RecallEngine {
                 relevance: hit.salience_score as f32,
                 boost_applied: total_boost > 0.0,
                 boost_score: total_boost as f32,
+                trust_level: hit.memory.trust_level,
             });
 
             accumulated_tags.extend(memory_tags);
@@ -463,7 +517,10 @@ impl RecallEngine {
         if self.config.session_topic_tracking && !accumulated_tags.is_empty() {
             accumulated_tags.sort();
             accumulated_tags.dedup();
-            let _ = self.store.accumulate_session_tags(&session_id, &accumulated_tags).await;
+            let _ = self
+                .store
+                .accumulate_session_tags(&session_id, &accumulated_tags)
+                .await;
         }
 
         // l. Fire-and-forget salience bump (same pattern as recall()).

@@ -9,9 +9,9 @@ use axum::{extract::State, http::StatusCode, Json};
 use chrono::Utc;
 use serde_json::json;
 
+use super::types::{error_json, RecallRequest};
 use crate::recall::RecallEngine;
 use crate::transport::health::AppState;
-use super::types::{RecallRequest, error_json};
 
 /// Default preamble text shown to agents on first=true.
 const DEFAULT_PREAMBLE: &str = "You have access to persistent memory via memcp. \
@@ -31,12 +31,20 @@ pub async fn recall_handler(
 ) -> (StatusCode, Json<serde_json::Value>) {
     // Readiness gate
     if !state.ready.load(Ordering::Acquire) {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(error_json("daemon not ready")));
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(error_json("daemon not ready")),
+        );
     }
 
     let store = match &state.store {
         Some(s) => s.clone(),
-        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(error_json("store not available"))),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_json("store not available")),
+            )
+        }
     };
 
     let engine = RecallEngine::new(
@@ -64,32 +72,54 @@ pub async fn recall_handler(
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(error = %e, "recall_queryless failed");
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(error_json(&format!("Recall failed: {}", e))));
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(error_json(&format!("Recall failed: {}", e))),
+                );
             }
         }
     } else {
         // Query-based path — embed in-process via embed_provider.
         let provider = match &state.embed_provider {
             Some(p) => p.clone(),
-            None => return (StatusCode::SERVICE_UNAVAILABLE, Json(error_json("embedding provider not available — daemon not fully initialized"))),
+            None => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(error_json(
+                        "embedding provider not available — daemon not fully initialized",
+                    )),
+                )
+            }
         };
 
         let query_embedding = match provider.embed(&query_str).await {
             Ok(emb) => emb,
             Err(e) => {
                 tracing::warn!(error = %e, "embedding failed in recall handler");
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(error_json(&format!("Embedding failed: {}", e))));
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(error_json(&format!("Embedding failed: {}", e))),
+                );
             }
         };
 
         match engine
-            .recall(&query_embedding, req.session_id, req.reset, req.project.as_deref(), &req.boost_tags)
+            .recall(
+                &query_embedding,
+                req.session_id,
+                req.reset,
+                req.project.as_deref(),
+                &req.boost_tags,
+            )
             .await
         {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(error = %e, "recall failed");
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(error_json(&format!("Recall failed: {}", e))));
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(error_json(&format!("Recall failed: {}", e))),
+                );
             }
         }
     };
@@ -104,6 +134,7 @@ pub async fn recall_handler(
                 relevance: 1.0,
                 boost_applied: false,
                 boost_score: 0.0,
+                trust_level: 1.0,
             }),
             Ok(None) => None,
             Err(e) => {
@@ -114,7 +145,11 @@ pub async fn recall_handler(
     }
 
     // Fetch related context if enabled and there are memories.
-    let memory_ids: Vec<String> = result.memories.iter().map(|m| m.memory_id.clone()).collect();
+    let memory_ids: Vec<String> = result
+        .memories
+        .iter()
+        .map(|m| m.memory_id.clone())
+        .collect();
     let related_map = if state.config.recall.related_context_enabled && !memory_ids.is_empty() {
         match store.get_related_context(&memory_ids).await {
             Ok(map) => map,
@@ -133,42 +168,47 @@ pub async fn recall_handler(
     metrics::histogram!("memcp_recall_memories_returned").record(result.memories.len() as f64);
 
     // Build memories array with truncation and related context.
-    let memories: Vec<serde_json::Value> = result.memories.iter().map(|mem| {
-        let (truncated_content, was_truncated) = truncate_content(&mem.content, truncation_chars);
+    let memories: Vec<serde_json::Value> = result
+        .memories
+        .iter()
+        .map(|mem| {
+            let (truncated_content, was_truncated) =
+                truncate_content(&mem.content, truncation_chars);
 
-        let mut obj = json!({
-            "id": mem.memory_id,
-            "content": truncated_content,
-            "relevance": mem.relevance,
-        });
+            let mut obj = json!({
+                "id": mem.memory_id,
+                "content": truncated_content,
+                "relevance": mem.relevance,
+            });
 
-        if was_truncated {
-            if let serde_json::Value::Object(ref mut map) = obj {
-                map.insert("truncated".to_string(), json!(true));
-            }
-        }
-
-        if mem.boost_applied {
-            if let serde_json::Value::Object(ref mut map) = obj {
-                map.insert("boost_applied".to_string(), json!(true));
-                map.insert("boost_score".to_string(), json!(mem.boost_score));
-            }
-        }
-
-        if let Some(related) = related_map.get(&mem.memory_id) {
-            if related.related_count > 0 {
-                let hint = build_related_hint(&related.shared_tags);
+            if was_truncated {
                 if let serde_json::Value::Object(ref mut map) = obj {
-                    map.insert("related_count".to_string(), json!(related.related_count));
-                    if !hint.is_empty() {
-                        map.insert("hint".to_string(), json!(hint));
+                    map.insert("truncated".to_string(), json!(true));
+                }
+            }
+
+            if mem.boost_applied {
+                if let serde_json::Value::Object(ref mut map) = obj {
+                    map.insert("boost_applied".to_string(), json!(true));
+                    map.insert("boost_score".to_string(), json!(mem.boost_score));
+                }
+            }
+
+            if let Some(related) = related_map.get(&mem.memory_id) {
+                if related.related_count > 0 {
+                    let hint = build_related_hint(&related.shared_tags);
+                    if let serde_json::Value::Object(ref mut map) = obj {
+                        map.insert("related_count".to_string(), json!(related.related_count));
+                        if !hint.is_empty() {
+                            map.insert("hint".to_string(), json!(hint));
+                        }
                     }
                 }
             }
-        }
 
-        obj
-    }).collect();
+            obj
+        })
+        .collect();
 
     // Assemble final output — same shape as CLI --json output.
     let mut output = json!({
@@ -179,19 +219,28 @@ pub async fn recall_handler(
 
     if let Some(ref summary) = result.summary {
         if let serde_json::Value::Object(ref mut map) = output {
-            map.insert("summary".to_string(), json!({
-                "id": summary.memory_id,
-                "content": summary.content,
-            }));
+            map.insert(
+                "summary".to_string(),
+                json!({
+                    "id": summary.memory_id,
+                    "content": summary.content,
+                }),
+            );
         }
     }
 
     if req.first {
-        let preamble = state.config.recall.preamble_override
+        let preamble = state
+            .config
+            .recall
+            .preamble_override
             .as_deref()
             .unwrap_or(DEFAULT_PREAMBLE);
         if let serde_json::Value::Object(ref mut map) = output {
-            map.insert("current_datetime".to_string(), json!(Utc::now().to_rfc3339()));
+            map.insert(
+                "current_datetime".to_string(),
+                json!(Utc::now().to_rfc3339()),
+            );
             map.insert("preamble".to_string(), json!(preamble));
         }
     }
