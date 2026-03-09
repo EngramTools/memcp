@@ -89,6 +89,42 @@ pub struct TrustDistributionSummary {
     pub low_count: usize,
 }
 
+// ─── Security Report Types ──────────────────────────────────────────────────
+
+/// Security correctness report produced by the trust workload.
+#[derive(Debug, Clone)]
+pub struct SecurityReport {
+    /// Number of poisoned memories seeded into the corpus.
+    pub poisoned_seeded: usize,
+    /// Number of poisoned memories successfully quarantined.
+    pub quarantined_count: usize,
+    /// Detection rate: quarantined_count / poisoned_seeded (0.0-1.0).
+    pub detection_rate: f64,
+    /// Number of clean memories incorrectly flagged as suspicious.
+    pub false_positive_count: usize,
+    /// Formatted violation descriptions.
+    pub violations: Vec<String>,
+    /// Total curation cycles completed during the run.
+    pub curation_cycles: usize,
+    /// P1 (new+low trust) curation drain times in milliseconds.
+    pub p1_drain_ms: Vec<u64>,
+    /// P2 (new+medium trust) curation drain times in milliseconds.
+    pub p2_drain_ms: Vec<u64>,
+    /// Normal curation drain times in milliseconds.
+    pub normal_drain_ms: Vec<u64>,
+    /// Poison dwell times (store-to-quarantine) in milliseconds.
+    pub dwell_times_ms: Vec<u64>,
+}
+
+/// Result of a trust workload run, combining security report and optional throughput metrics.
+#[derive(Debug)]
+pub struct TrustWorkloadResult {
+    /// Security correctness metrics.
+    pub security_report: SecurityReport,
+    /// HTTP throughput metrics if also collected during the run.
+    pub standard_report: Option<LoadTestReport>,
+}
+
 // ─── Configuration ────────────────────────────────────────────────────────────
 
 /// Configuration for a single load test run.

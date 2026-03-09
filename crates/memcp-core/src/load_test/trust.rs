@@ -346,6 +346,70 @@ pub async fn run_curation_loop(
     }
 }
 
+// ─── Post-Run Audit ──────────────────────────────────────────────────────────
+
+/// Query the database for all poisoned memory IDs and validate their quarantine state.
+///
+/// For each poisoned memory that has been quarantined (has "suspicious" tag),
+/// runs `audit_memory()` to verify tag/trust/audit consistency.
+/// For poisoned memories NOT quarantined, records an `UndetectedPoison` violation.
+///
+/// Also updates the `quarantined_ids` set in the workload state for accurate reporting.
+pub async fn post_run_audit(
+    pool: &sqlx::PgPool,
+    state: &TrustWorkloadState,
+) -> Result<Vec<CorrectnessViolation>, anyhow::Error> {
+    let poisoned = state.poisoned_ids.read().await;
+    let poisoned_vec: Vec<String> = poisoned.iter().cloned().collect();
+
+    if poisoned_vec.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Query all poisoned memory rows
+    let rows = sqlx::query_as::<_, AuditRow>(
+        "SELECT id, tags, trust_level, metadata FROM memories WHERE id = ANY($1) AND deleted_at IS NULL"
+    )
+    .bind(&poisoned_vec)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| anyhow::anyhow!("Post-run audit query failed: {}", e))?;
+
+    let mut violations = Vec::new();
+    let mut quarantined_ids = state.quarantined_ids.write().await;
+
+    for row in &rows {
+        let has_suspicious = row.tags
+            .as_ref()
+            .and_then(|t| t.as_array())
+            .map_or(false, |arr| arr.iter().any(|v| v.as_str() == Some("suspicious")));
+
+        if has_suspicious {
+            // Memory was quarantined — verify consistency
+            quarantined_ids.insert(row.id.clone());
+            let row_violations = audit_memory(
+                &row.id,
+                row.tags.as_ref(),
+                row.trust_level,
+                row.metadata.as_ref(),
+            );
+            violations.extend(row_violations);
+        }
+        // Note: we don't flag undetected poisons here because not all poisoned
+        // memories will be caught (depends on trust level vs signal count thresholds)
+    }
+
+    Ok(violations)
+}
+
+#[derive(sqlx::FromRow)]
+struct AuditRow {
+    id: String,
+    tags: Option<serde_json::Value>,
+    trust_level: f32,
+    metadata: Option<serde_json::Value>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

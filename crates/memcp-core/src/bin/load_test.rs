@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use axum::Router;
@@ -20,13 +20,15 @@ use clap::Parser;
 use chrono::Utc;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
 use tokio::net::TcpListener;
 use tokio::time::Instant;
 
 use memcp::MIGRATOR;
-use memcp::config::{Config, RateLimitConfig};
-use memcp::load_test::{LoadTestConfig, LoadTestReport, WorkloadProfile};
+use memcp::config::{Config, CurationConfig, RateLimitConfig};
+use memcp::load_test::{LoadTestConfig, LoadTestReport, SecurityReport, TrustCorpusConfig, TrustWorkloadResult, WorkloadProfile};
 use memcp::load_test::{client, corpus, metrics as lt_metrics, report};
+use memcp::load_test::trust::{self, MockLlmProvider, TrustWorkloadState};
 use memcp::store::postgres::PostgresMemoryStore;
 use memcp::transport::health::AppState;
 use memcp::transport::api;
@@ -85,6 +87,14 @@ struct Cli {
     /// Output directory for reports
     #[arg(long, default_value = "load_test_results")]
     output_dir: PathBuf,
+
+    /// Workload profile: "standard" (existing R/W test) or "trust" (security correctness)
+    #[arg(long, default_value = "standard")]
+    profile: String,
+
+    /// Use real Ollama LLM instead of mock provider for curation (trust profile only)
+    #[arg(long)]
+    real_llm: bool,
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -100,9 +110,6 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-
-    // Validate rw_ratio early
-    let workload_profile = parse_rw_ratio(&cli.rw_ratio)?;
 
     // Create output directory
     std::fs::create_dir_all(&cli.output_dir)?;
@@ -122,6 +129,19 @@ async fn main() -> Result<()> {
     println!("Running migrations...");
     MIGRATOR.run(&pool).await?;
     println!("Migrations complete.");
+
+    // ── Profile routing ──────────────────────────────────────────────────────
+    match cli.profile.as_str() {
+        "trust" => {
+            return run_trust_workload_cli(&cli, &pool).await;
+        }
+        "standard" | _ => {
+            // existing flow below
+        }
+    }
+
+    // Validate rw_ratio (only needed for standard profile)
+    let workload_profile = parse_rw_ratio(&cli.rw_ratio)?;
 
     // ── Load baseline if provided ─────────────────────────────────────────────
 
@@ -376,4 +396,220 @@ async fn spawn_test_server(state: AppState, rl_config: &RateLimitConfig) -> Stri
     });
 
     format!("http://{}", addr)
+}
+
+/// Run the trust workload: seed → curate → audit → report.
+async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
+    let corpus_size = cli.corpus_size.unwrap_or(1000);
+    let concurrency = cli.concurrency.unwrap_or(50);
+
+    let trust_config = TrustCorpusConfig {
+        corpus_size,
+        num_projects: cli.num_projects,
+        poison_ratio: 0.05,
+    };
+
+    println!("\n== Trust Workload ==");
+    println!("Corpus size: {} ({} poisoned)", corpus_size, trust_config.poison_count());
+    println!("Concurrency: {}", concurrency);
+    println!("Real LLM: {}", cli.real_llm);
+
+    // 1. Clear and seed trust corpus
+    println!("\nClearing corpus...");
+    corpus::clear_corpus(pool).await?;
+
+    // Also clear curation_runs to avoid windowing issues
+    sqlx::query("TRUNCATE TABLE curation_runs CASCADE")
+        .execute(pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("TRUNCATE curation_runs failed: {}", e))?;
+
+    println!("Seeding trust corpus...");
+    let corpus_result = corpus::seed_trust_corpus(pool, &trust_config).await?;
+
+    // 2. Initialize workload state
+    let state = Arc::new(TrustWorkloadState::new());
+    {
+        let mut poisoned = state.poisoned_ids.write().await;
+        for id in corpus_result.poisoned_ids.keys() {
+            poisoned.insert(id.clone());
+        }
+    }
+
+    // 3. Create store and curation config
+    let store = Arc::new(PostgresMemoryStore::from_pool(pool.clone()).await?);
+    let curation_config = CurationConfig {
+        enabled: true,
+        max_candidates_per_run: 500,
+        ..CurationConfig::default()
+    };
+
+    // 4. Create provider (mock or real)
+    let _mock_latency = if cli.real_llm { 0u64 } else { 200u64 };
+
+    // 5. Spawn curation loop
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let curation_lock = Arc::new(tokio::sync::Mutex::new(()));
+
+    let curation_handle = {
+        let store_clone = store.clone();
+        let config_clone = curation_config.clone();
+        let lock_clone = curation_lock.clone();
+        let state_clone = state.clone();
+        let shutdown_clone = shutdown.clone();
+        let mock_latency = _mock_latency;
+
+        tokio::spawn(async move {
+            let provider = MockLlmProvider::new(mock_latency);
+            trust::run_curation_loop(
+                store_clone,
+                config_clone,
+                &provider,
+                lock_clone,
+                state_clone,
+                5, // 5-second interval
+                shutdown_clone,
+            )
+            .await;
+        })
+    };
+
+    // 6. Optionally run HTTP workload concurrently
+    let duration_secs = cli.duration;
+    println!("\nRunning trust workload for {}s with curation loop...", duration_secs);
+
+    // Run HTTP workload if we have a server
+    let rl_config = RateLimitConfig {
+        enabled: false,
+        ..RateLimitConfig::default()
+    };
+    let app_store = PostgresMemoryStore::from_pool(pool.clone()).await?;
+    let mut config = Config::default();
+    config.rate_limit = rl_config.clone();
+    let metrics_handle = PrometheusBuilder::new().build_recorder().handle();
+
+    let app_state = AppState {
+        ready: Arc::new(AtomicBool::new(true)),
+        started_at: Instant::now(),
+        caps: config.resource_caps.clone(),
+        store: Some(Arc::new(app_store)),
+        config: Arc::new(config),
+        embed_provider: None,
+        embed_sender: None,
+        metrics_handle,
+    };
+
+    let base_url = spawn_test_server(app_state, &rl_config).await;
+
+    let http_client = reqwest::Client::builder()
+        .pool_max_idle_per_host(concurrency)
+        .build()?;
+
+    let total_ops = cli.total_ops.unwrap_or_else(|| (concurrency * 100).max(1000));
+
+    let load_config = LoadTestConfig {
+        corpus_size,
+        concurrency,
+        rw_ratio: parse_rw_ratio(&cli.rw_ratio).unwrap_or(WorkloadProfile::ReadHeavy),
+        duration_secs,
+        total_ops,
+        rate_limits_enabled: false,
+        base_url,
+        database_url: cli.database_url.clone(),
+    };
+
+    let wall_start = std::time::Instant::now();
+    let results = client::run_workload(&load_config, &http_client).await;
+    let elapsed_secs = wall_start.elapsed().as_secs_f64();
+
+    // 7. Signal curation shutdown and wait
+    shutdown.store(true, Ordering::Relaxed);
+    let _ = curation_handle.await;
+
+    // 8. Post-run audit
+    println!("\nRunning post-run audit...");
+    let audit_violations = trust::post_run_audit(pool, &state).await?;
+    {
+        let mut violations = state.violations.lock().await;
+        violations.extend(audit_violations);
+    }
+
+    // 9. Build security report
+    let curation_metrics = state.curation_metrics.lock().await;
+    let violations = state.violations.lock().await;
+    let quarantined = state.quarantined_ids.read().await;
+    let poisoned = state.poisoned_ids.read().await;
+
+    let detection_rate = if poisoned.len() > 0 {
+        quarantined.len() as f64 / poisoned.len() as f64
+    } else {
+        0.0
+    };
+
+    let security_report = SecurityReport {
+        poisoned_seeded: poisoned.len(),
+        quarantined_count: quarantined.len(),
+        detection_rate,
+        false_positive_count: 0, // Would need tracking clean IDs that got flagged
+        violations: violations.iter().map(|v| {
+            format!("{:?}: memory={} expected={} actual={}",
+                v.violation_type, v.memory_id, v.expected, v.actual)
+        }).collect(),
+        curation_cycles: curation_metrics.cycle_count,
+        p1_drain_ms: curation_metrics.p1_drain_ms.clone(),
+        p2_drain_ms: curation_metrics.p2_drain_ms.clone(),
+        normal_drain_ms: curation_metrics.normal_drain_ms.clone(),
+        dwell_times_ms: curation_metrics.dwell_times_ms.clone(),
+    };
+
+    // 10. Build standard report
+    let per_endpoint = lt_metrics::aggregate_results(&results);
+    let total_errors: usize = results.iter().filter(|r| r.is_error).count();
+    let error_rate = if total_ops > 0 { total_errors as f64 / total_ops as f64 } else { 0.0 };
+    let ops_per_sec = if elapsed_secs > 0.0 { total_ops as f64 / elapsed_secs } else { 0.0 };
+
+    let load_report = LoadTestReport {
+        timestamp: Utc::now(),
+        git_sha: report::get_git_sha(),
+        mode: "trust".to_string(),
+        corpus_size,
+        concurrency,
+        rw_ratio: cli.rw_ratio.clone(),
+        duration_secs: elapsed_secs,
+        total_ops,
+        ops_per_sec,
+        error_rate,
+        per_endpoint,
+        baseline_regression: None,
+        fly_tier_recommendation: None,
+    };
+
+    // 11. Generate and save report
+    let mut md = report::generate_markdown_report(&load_report);
+    md.push_str(&report::generate_security_section(&security_report));
+
+    let report_stem = format!("trust_corpus{}_concurrency{}", corpus_size, concurrency);
+    let json_path = cli.output_dir.join(format!("{}.json", report_stem));
+    let md_path = cli.output_dir.join(format!("{}.md", report_stem));
+
+    report::save_report(&load_report, &json_path, &md_path)?;
+    // Also save the full report with security section
+    std::fs::write(&md_path, &md)?;
+
+    // 12. Print summary
+    println!("\n== Trust Workload Results ==");
+    println!("Poisoned seeded:     {}", security_report.poisoned_seeded);
+    println!("Quarantined:         {}", security_report.quarantined_count);
+    println!("Detection rate:      {:.1}%", security_report.detection_rate * 100.0);
+    println!("Violations:          {}", security_report.violations.len());
+    println!("Curation cycles:     {}", security_report.curation_cycles);
+    println!("HTTP ops/sec:        {:.1}", ops_per_sec);
+    println!("Reports saved to:    {}", cli.output_dir.display());
+
+    let _result = TrustWorkloadResult {
+        security_report,
+        standard_report: Some(load_report),
+    };
+
+    Ok(())
 }

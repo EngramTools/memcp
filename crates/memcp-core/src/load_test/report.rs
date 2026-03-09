@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::{LoadTestReport, RegressionItem, RegressionReport};
+use super::{LoadTestReport, RegressionItem, RegressionReport, SecurityReport};
 
 // ─── Markdown Report ─────────────────────────────────────────────────────────
 
@@ -117,6 +117,93 @@ pub fn generate_markdown_report(report: &LoadTestReport) -> String {
     }
 
     out
+}
+
+// ─── Security Correctness Report Section ──────────────────────────────────────
+
+/// Generate a Markdown section reporting security correctness metrics.
+///
+/// Includes detection summary table, violations list, curation throughput
+/// breakdown (P1/P2/Normal), and poison dwell time statistics.
+pub fn generate_security_section(report: &SecurityReport) -> String {
+    let mut out = String::new();
+    out.push_str("## Security Correctness\n\n");
+
+    // Detection summary table
+    out.push_str("| Metric | Value |\n|-|-|\n");
+    out.push_str(&format!(
+        "| Poisoned memories seeded | {} |\n",
+        report.poisoned_seeded
+    ));
+    out.push_str(&format!(
+        "| Successfully quarantined | {} |\n",
+        report.quarantined_count
+    ));
+    out.push_str(&format!(
+        "| Detection rate | {:.1}% |\n",
+        report.detection_rate * 100.0
+    ));
+    out.push_str(&format!(
+        "| False positives | {} |\n",
+        report.false_positive_count
+    ));
+    out.push_str(&format!(
+        "| Correctness violations | {} |\n",
+        report.violations.len()
+    ));
+
+    // Violations detail
+    if report.violations.is_empty() {
+        out.push_str("\nNo violations found.\n");
+    } else {
+        out.push_str("\n### Violations\n\n");
+        for v in &report.violations {
+            out.push_str(&format!("- {}\n", v));
+        }
+    }
+
+    // Curation throughput
+    out.push_str("\n### Curation Throughput\n\n");
+    out.push_str(&format!(
+        "Curation cycles completed: {}\n\n",
+        report.curation_cycles
+    ));
+    append_drain_stats(&mut out, "P1 (new+low trust)", &report.p1_drain_ms);
+    append_drain_stats(&mut out, "P2 (new+medium trust)", &report.p2_drain_ms);
+    append_drain_stats(&mut out, "Normal", &report.normal_drain_ms);
+
+    // Poison dwell time
+    if !report.dwell_times_ms.is_empty() {
+        out.push_str("\n### Poison Dwell Time (store -> quarantine)\n\n");
+        let mean = report.dwell_times_ms.iter().sum::<u64>() as f64
+            / report.dwell_times_ms.len() as f64;
+        let mut sorted = report.dwell_times_ms.clone();
+        sorted.sort();
+        let p95_idx = (sorted.len() as f64 * 0.95) as usize;
+        let p95 = sorted
+            .get(p95_idx.min(sorted.len() - 1))
+            .copied()
+            .unwrap_or(0);
+        out.push_str("| Metric | Value |\n|-|-|\n");
+        out.push_str(&format!("| Mean | {:.0}ms |\n", mean));
+        out.push_str(&format!("| p95 | {}ms |\n", p95));
+    }
+
+    out
+}
+
+fn append_drain_stats(out: &mut String, label: &str, times: &[u64]) {
+    if times.is_empty() {
+        out.push_str(&format!("**{}:** no data\n", label));
+    } else {
+        let mean = times.iter().sum::<u64>() as f64 / times.len() as f64;
+        out.push_str(&format!(
+            "**{}:** mean={:.0}ms, samples={}\n",
+            label,
+            mean,
+            times.len()
+        ));
+    }
 }
 
 // ─── Save / Load ─────────────────────────────────────────────────────────────
