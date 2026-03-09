@@ -346,7 +346,7 @@ Plans:
 
 Plans:
 - [x] 08.6-01-PLAN.md — Curation foundation: migration, CurationConfig, CurationProvider trait, AlgorithmicCurator [Wave 1] — commit 18343bb
-- [ ] 08.6-05-PLAN.md — Gap closure: true dry-run mode for --propose flag [Wave 1]
+- [x] 08.6-05-PLAN.md — Gap closure: true dry-run mode for --propose flag [Wave 1]
 
 ## Phase 08.7: Multi-Model Embeddings
 - **Goal**: Run multiple embedding models simultaneously — fast local model for bulk ingestion, quality API model for important memories. Tiered embedding strategy with automatic model selection based on memory importance/type. Extends Phase 07 single-model modularity to concurrent multi-model.
@@ -383,8 +383,8 @@ Plans:
 - **Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 08.9-01-PLAN.md — Store methods (recall_candidates_queryless, fetch_project_summary) + RecallEngine.recall_queryless() + RecallResult.summary field [Wave 1]
-- [ ] 08.9-02-PLAN.md — CLI (optional query, --limit flag, summary output) + MCP (optional query, first/limit params, tool description) [Wave 2, depends on 01]
+- [x] 08.9-01-PLAN.md — Store methods (recall_candidates_queryless, fetch_project_summary) + RecallEngine.recall_queryless() + RecallResult.summary field [Wave 1]
+- [x] 08.9-02-PLAN.md — CLI (optional query, --limit flag, summary output) + MCP (optional query, first/limit params, tool description) [Wave 2, depends on 01]
 
 ## Phase 08.10: Memory Content Updates
 - **Goal**: `memcp update <id> "new content"` CLI command for in-place memory content replacement. stdin support for multi-paragraph updates. Re-triggers embedding pipeline for updated content. Primary use case: evolving project summaries that agents maintain as living documents.
@@ -394,7 +394,7 @@ Plans:
 - **Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 08.10-01-PLAN.md — Commands::Update CLI + --stdin support on store/update + cmd_update handler [Wave 1]
+- [x] 08.10-01-PLAN.md — Commands::Update CLI + --stdin support on store/update + cmd_update handler [Wave 1]
 
 ## Phase 08.11: Warm Recall & Session-Aware Ranking
 - **Goal**: Session-aware ranking enhancements for `memcp recall`. Tag-affinity boosting (`--boost-tags`) lets callers pass context tags (channel, agent, topic) that give a soft ranking bonus. Session topic accumulation tracks recalled memory tags and uses accumulated context as implicit bias for future recalls. Decoupled from plugin — these are memcp-side primitives usable by any caller.
@@ -404,8 +404,8 @@ Plans:
 - **Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 08.11-01-PLAN.md — Config extension (5 RecallConfig fields) + migration 019 (session_tags) + store methods + tag boost helpers + RecalledMemory extension [Wave 1]
-- [ ] 08.11-02-PLAN.md — Wire boost into RecallEngine (both paths) + CLI --boost-tags + MCP boost_tags param + session tag accumulation [Wave 2, depends on 01]
+- [x] 08.11-01-PLAN.md — Config extension (5 RecallConfig fields) + migration 019 (session_tags) + store methods + tag boost helpers + RecalledMemory extension [Wave 1]
+- [x] 08.11-02-PLAN.md — Wire boost into RecallEngine (both paths) + CLI --boost-tags + MCP boost_tags param + session tag accumulation [Wave 2, depends on 01]
 
 ## Phase 08.11.1: Bi-Temporal Search (event_time wiring)
 - **Goal**: Wire `event_time` into temporal search boost. One-line fix in server.rs: prefer `event_time` over `created_at` when present in temporal range matching. Completes the bi-temporal search story started in Phase 08.8 (which added the schema + extraction but never wired it into retrieval). `let t = hit.memory.event_time.unwrap_or(hit.memory.created_at);`
@@ -435,8 +435,8 @@ Requirements:
 - HTTP-07: CLI output in remote mode identical to local mode — transparent to callers
 
 Plans:
-- [ ] 08.12-01-PLAN.md — AppState + transport/api module (all 6 routes + handlers + types) + daemon wiring + integration tests [Wave 1]
-- [ ] 08.12-02-PLAN.md — CLI --remote flag + dispatch_remote() helper + remote dispatch in 5 data commands + E2E tests [Wave 2, depends on 01]
+- [x] 08.12-01-PLAN.md — AppState + transport/api module (all 6 routes + handlers + types) + daemon wiring + integration tests [Wave 1]
+- [x] 08.12-02-PLAN.md — CLI --remote flag + dispatch_remote() helper + remote dispatch in 5 data commands + E2E tests [Wave 2, depends on 01]
 
 **Why:** The memcp CLI currently connects directly to Postgres. In Docker (and any split deployment), this means every container that uses memcp needs the binary installed and DATABASE_URL with full DB credentials. An HTTP API on the existing daemon server lets callers reach memcp with just a URL. The daemon's connection pool handles Postgres access. Cleaner separation, no credential leakage, works for self-hosters on k8s or multi-machine setups.
 
@@ -459,23 +459,6 @@ Plans:
 ## Phase 09: Documentation & QA Playbook
 - **Goal**: README overhaul, config reference, architecture guide. Must cover both standalone and engram-bundled usage. Includes a scripted QA playbook (CLI + MCP flows against real Postgres) designed to be run by both humans and an AI QA agent.
 - **Status**: Planned
-- **Requirements:** [TWR-01, TWR-02, TWR-03, TWR-04, TWR-05, TWR-06, TWR-07, TWR-08]
-- **Plans:** 3 plans
-
-Requirements:
-- TWR-01: Trust multiplier in composite scoring — score = 0.5 * RRF + 0.5 * (salience * trust_level)
-- TWR-02: Trust multiplier in LLM re-ranking — 0.7 * llm_rank + 0.3 * (salience * trust)
-- TWR-03: Suspicious curation action — quarantine with tag + trust=0.05 + audit trail
-- TWR-04: Quarantined memories excluded from all search via skip_tags
-- TWR-05: Un-quarantine restores previous trust_level from trust_history
-- TWR-06: Algorithmic instruction detection with trust-gated thresholds (1/2/3 signals)
-- TWR-07: LLM prompt instruction-detection dimension + parse suspicious action
-- TWR-08: Priority queue ordering — P1 (low trust+new) before P2 before Normal
-
-Plans:
-- [ ] 11.2-01-PLAN.md — Trust-weighted composite scoring + LLM re-ranking [Wave 1]
-- [ ] 11.2-02-PLAN.md — Suspicious curation action + quarantine + instruction detection [Wave 1]
-- [ ] 11.2-03-PLAN.md — LLM instruction-detection prompt + priority queue scheduling [Wave 2, depends on 02]
 - **Depends on**: Phases 08.4, 08.5, 08.6, 08.7, 08.8
 - **Note**: QA playbook absorbed from dropped Phase 08.1. Playbook should be structured for AI agent execution (machine-parseable assertions, clear pass/fail criteria) as well as human walkthroughs.
 
@@ -515,13 +498,13 @@ Plans:
 
 ## Phase 10.1: Stress & Load Testing
 - **Goal**: Load test all core operations under simulated multi-tenant conditions. Establish capacity numbers and known breaking points.
-- **Status**: Planned
+- **Status**: DONE (3/3 plans done)
 - **Plans:** 3/3 plans complete
 
 Plans:
-- [ ] 10.1-01-PLAN.md — Load test types, corpus seeding, metrics, and report generation [Wave 1]
-- [ ] 10.1-02-PLAN.md — Concurrent HTTP client driver and CLI binary [Wave 2, depends on 01]
-- [ ] 10.1-03-PLAN.md — Full matrix run, capacity report, and user review checkpoint [Wave 3, depends on 02]
+- [x] 10.1-01-PLAN.md — Load test types, corpus seeding, metrics, and report generation [Wave 1]
+- [x] 10.1-02-PLAN.md — Concurrent HTTP client driver and CLI binary [Wave 2, depends on 01]
+- [x] 10.1-03-PLAN.md — Full matrix run, capacity report, and user review checkpoint [Wave 3, depends on 02]
 - **Depends on**: Phase 10
 - **Success Criteria**:
   1. Concurrent store/search benchmark at 10, 100, 1000 ops/sec
@@ -547,7 +530,7 @@ Plans:
 ## Phase 11.2–11.3: Trust-Weighted Retrieval & Brain Curation Security — from engram Phase 22
 
 - **Goal**: Trust-weighted retrieval and brain curation security extension. Completes OWASP ASI06 defense.
-- **Status**: In progress
+- **Status**: DONE (3/3 plans done)
 - **Requirements:** [TWR-01, TWR-02, TWR-03, TWR-04, TWR-05, TWR-06, TWR-07, TWR-08]
 - **Plans:** 3/3 plans complete
 
@@ -562,9 +545,9 @@ Requirements:
 - TWR-08: Priority queue ordering — P1 (low trust+new) before P2 before Normal
 
 Plans:
-- [ ] 11.2-01-PLAN.md — Trust-weighted composite scoring + LLM re-ranking [Wave 1]
-- [ ] 11.2-02-PLAN.md — Suspicious curation action + quarantine + instruction detection [Wave 1]
-- [ ] 11.2-03-PLAN.md — LLM instruction-detection prompt + priority queue scheduling [Wave 2, depends on 02]
+- [x] 11.2-01-PLAN.md — Trust-weighted composite scoring + LLM re-ranking [Wave 1]
+- [x] 11.2-02-PLAN.md — Suspicious curation action + quarantine + instruction detection [Wave 1]
+- [x] 11.2-03-PLAN.md — LLM instruction-detection prompt + priority queue scheduling [Wave 2, depends on 02]
 - **Depends on**: Phase 11.1
 - **Driven by**: engram Phase 22 (Agent Role Guardrails & Memory Safety)
 - **11.2**: Trust-weighted retrieval — low-trust memories demoted in recall ranking even if semantically relevant
@@ -575,24 +558,15 @@ Plans:
 ## Phase 11: System Review
 - **Goal**: Codebase audit for quality/gaps before open-source release
 - **Status**: Planned
+- **Depends on**: Phase 10.1, Phase 11.1–11.3 (memory safety — must be audited as part of this review)
 - **Requirements:** [TWR-01, TWR-02, TWR-03, TWR-04, TWR-05, TWR-06, TWR-07, TWR-08]
-- **Plans:** 3 plans
-
-Requirements:
-- TWR-01: Trust multiplier in composite scoring — score = 0.5 * RRF + 0.5 * (salience * trust_level)
-- TWR-02: Trust multiplier in LLM re-ranking — 0.7 * llm_rank + 0.3 * (salience * trust)
-- TWR-03: Suspicious curation action — quarantine with tag + trust=0.05 + audit trail
-- TWR-04: Quarantined memories excluded from all search via skip_tags
-- TWR-05: Un-quarantine restores previous trust_level from trust_history
-- TWR-06: Algorithmic instruction detection with trust-gated thresholds (1/2/3 signals)
-- TWR-07: LLM prompt instruction-detection dimension + parse suspicious action
-- TWR-08: Priority queue ordering — P1 (low trust+new) before P2 before Normal
+- **Plans:** 4 plans
 
 Plans:
-- [ ] 11.2-01-PLAN.md — Trust-weighted composite scoring + LLM re-ranking [Wave 1]
-- [ ] 11.2-02-PLAN.md — Suspicious curation action + quarantine + instruction detection [Wave 1]
-- [ ] 11.2-03-PLAN.md — LLM instruction-detection prompt + priority queue scheduling [Wave 2, depends on 02]
-- **Depends on**: Phase 10.1, Phase 11.1–11.3 (memory safety — must be audited as part of this review)
+- [ ] 11-01-PLAN.md — Targeted code fixes: clippy error, stale features, locomo test, logging TODO [Wave 1]
+- [ ] 11-02-PLAN.md — Bulk clippy warning fixes (117 warnings across 50+ files) [Wave 2]
+- [ ] 11-03-PLAN.md — Open-source packaging: MIT license, README, CONTRIBUTING, CHANGELOG, deployment guide [Wave 3]
+- [ ] 11-04-PLAN.md — AUDIT.md: unwrap audit, API surface review, test coverage gaps [Wave 3]
 
 ---
 *Open-source fork cutoff: After Phase 11, fork memcp into a public MIT repo containing phases 01–11 (core memory server). Phase 12+ stays in the private memcp repo (or engram repo) — never published to the public fork. See engram Phase 4.5 and /Users/ayoamadi/projects/engram/.planning/ROADMAP.md for strategy.*
@@ -602,23 +576,6 @@ Plans:
 ## Phase 12: Auth & API Keys
 - **Goal**: API key authentication for the MCP interface. NOT full multi-tenant isolation inside memcp — engram uses container-per-tenant, so each memcp instance runs single-tenant. This phase adds the auth layer so a memcp instance rejects unauthorized callers.
 - **Status**: Planned
-- **Requirements:** [TWR-01, TWR-02, TWR-03, TWR-04, TWR-05, TWR-06, TWR-07, TWR-08]
-- **Plans:** 3 plans
-
-Requirements:
-- TWR-01: Trust multiplier in composite scoring — score = 0.5 * RRF + 0.5 * (salience * trust_level)
-- TWR-02: Trust multiplier in LLM re-ranking — 0.7 * llm_rank + 0.3 * (salience * trust)
-- TWR-03: Suspicious curation action — quarantine with tag + trust=0.05 + audit trail
-- TWR-04: Quarantined memories excluded from all search via skip_tags
-- TWR-05: Un-quarantine restores previous trust_level from trust_history
-- TWR-06: Algorithmic instruction detection with trust-gated thresholds (1/2/3 signals)
-- TWR-07: LLM prompt instruction-detection dimension + parse suspicious action
-- TWR-08: Priority queue ordering — P1 (low trust+new) before P2 before Normal
-
-Plans:
-- [ ] 11.2-01-PLAN.md — Trust-weighted composite scoring + LLM re-ranking [Wave 1]
-- [ ] 11.2-02-PLAN.md — Suspicious curation action + quarantine + instruction detection [Wave 1]
-- [ ] 11.2-03-PLAN.md — LLM instruction-detection prompt + priority queue scheduling [Wave 2, depends on 02]
 - **Depends on**: Phase 11 + public fork (Phase 12 code stays PRIVATE — never enters public memcp repo)
 - **Note**: Full tenant isolation (row-level security, tenant IDs) is NOT needed. Container-per-tenant means isolation happens at the infrastructure level. This phase is about: API key validation, key rotation, and authenticated identity on stored memories.
 
@@ -707,8 +664,8 @@ Requirements:
 - BENCH-08: CI workflow_dispatch for manual benchmark triggers
 
 Plans:
-- [ ] 14.6-01-PLAN.md — LoCoMo types, dataset loader, F1 scorer, ingestion, history append, judge model switch [Wave 1]
-- [ ] 14.6-02-PLAN.md — LoCoMo runner, CLI dispatch extension, CI workflow [Wave 2, depends on 01]
+- [x] 14.6-01-PLAN.md — LoCoMo types, dataset loader, F1 scorer, ingestion, history append, judge model switch [Wave 1]
+- [x] 14.6-02-PLAN.md — LoCoMo runner, CLI dispatch extension, CI workflow [Wave 2, depends on 01]
 
 ## Phase 14.7: Benchmark Schema Isolation
 - **Goal**: Postgres schema isolation for benchmark runs. Benchmarks create and use a dedicated `benchmark` schema instead of operating on `public`, preventing accidental data loss and enabling clean per-run isolation. Schema is ephemeral by default (dropped after run), with `--keep-schema` for post-run inspection.
