@@ -15,6 +15,7 @@ pub struct MemoryBuilder {
     audience: String,
     idempotency_key: Option<String>,
     project: Option<String>,
+    trust_level: Option<f32>,
 }
 
 impl MemoryBuilder {
@@ -31,6 +32,7 @@ impl MemoryBuilder {
             audience: "global".to_string(),
             idempotency_key: None,
             project: None,
+            trust_level: None,
         }
     }
 
@@ -82,6 +84,12 @@ impl MemoryBuilder {
         self
     }
 
+    /// Set the trust level (0.0 to 1.0).
+    pub fn trust_level(mut self, trust_level: f32) -> Self {
+        self.trust_level = Some(trust_level);
+        self
+    }
+
     /// Consume the builder and produce a `CreateMemory`.
     pub fn build(self) -> CreateMemory {
         CreateMemory {
@@ -100,7 +108,7 @@ impl MemoryBuilder {
             event_time: None,
             event_time_precision: None,
             project: self.project,
-            trust_level: None,
+            trust_level: self.trust_level,
             session_id: None,
             agent_role: None,
         }
