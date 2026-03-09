@@ -433,6 +433,34 @@ async fn build_clusters(
     Ok(clusters)
 }
 
+/// Compute priority score for curation ordering.
+///
+/// P1 (0): Low trust (<= 0.3) + new (< 1 hour) — highest priority, potential poison.
+/// P2 (1): Medium trust (0.3–0.7) + new (< 1 hour) — elevated priority.
+/// Normal (2): High trust or old memories — standard processing.
+fn priority_score(memory: &Memory) -> u8 {
+    let age_minutes = (Utc::now() - memory.created_at).num_minutes();
+    let is_new = age_minutes < 60;
+    if is_new && memory.trust_level <= 0.3 {
+        0 // P1
+    } else if is_new && memory.trust_level <= 0.7 {
+        1 // P2
+    } else {
+        2 // Normal
+    }
+}
+
+/// Check if a cluster contains any high-priority (P1/P2) members.
+///
+/// Used to decide whether to route to LLM provider for deeper review.
+fn cluster_has_high_priority(cluster: &[ClusterMember]) -> bool {
+    let now = Utc::now();
+    cluster.iter().any(|m| {
+        let age_minutes = (now - m.created_at).num_minutes();
+        age_minutes < 60 && m.trust_level <= 0.7
+    })
+}
+
 /// Convert a Memory + SalienceRow into a ClusterMember.
 fn to_cluster_member(memory: &Memory, salience: &SalienceRow) -> ClusterMember {
     let tags = memory
@@ -462,5 +490,91 @@ fn to_cluster_member(memory: &Memory, salience: &SalienceRow) -> ClusterMember {
         reinforcement_count: salience.reinforcement_count,
         last_reinforced_at: salience.last_reinforced_at,
         trust_level: memory.trust_level,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    fn make_test_memory(id: &str, trust: f32, age_minutes: i64) -> Memory {
+        let now = Utc::now();
+        Memory {
+            id: id.to_string(),
+            content: format!("Content for {}", id),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: now - Duration::minutes(age_minutes),
+            updated_at: now - Duration::minutes(age_minutes),
+            last_accessed_at: None,
+            access_count: 0,
+            embedding_status: "complete".to_string(),
+            extracted_entities: None,
+            extracted_facts: None,
+            extraction_status: "complete".to_string(),
+            is_consolidated_original: false,
+            consolidated_into: None,
+            actor: None,
+            actor_type: "system".to_string(),
+            audience: "global".to_string(),
+            parent_id: None,
+            chunk_index: None,
+            total_chunks: None,
+            event_time: None,
+            event_time_precision: None,
+            project: None,
+            trust_level: trust,
+            session_id: None,
+            agent_role: None,
+            metadata: serde_json::json!({}),
+        }
+    }
+
+    fn make_test_salience() -> SalienceRow {
+        SalienceRow {
+            stability: 2.5,
+            difficulty: 5.0,
+            reinforcement_count: 0,
+            last_reinforced_at: None,
+        }
+    }
+
+    #[test]
+    fn test_priority_score_p1_low_trust_new() {
+        let mem = make_test_memory("p1", 0.2, 10); // low trust, 10min old
+        assert_eq!(priority_score(&mem), 0, "Low trust + new should be P1");
+    }
+
+    #[test]
+    fn test_priority_score_p2_medium_trust_new() {
+        let mem = make_test_memory("p2", 0.5, 10); // medium trust, 10min old
+        assert_eq!(priority_score(&mem), 1, "Medium trust + new should be P2");
+    }
+
+    #[test]
+    fn test_priority_score_normal_high_trust() {
+        let mem = make_test_memory("n1", 0.9, 10); // high trust, new
+        assert_eq!(priority_score(&mem), 2, "High trust should be Normal");
+    }
+
+    #[test]
+    fn test_priority_score_normal_old() {
+        let mem = make_test_memory("n2", 0.2, 120); // low trust but old (2hr)
+        assert_eq!(priority_score(&mem), 2, "Old memory should be Normal regardless of trust");
+    }
+
+    #[test]
+    fn test_candidates_sorted_by_priority() {
+        let mut candidates: Vec<(Memory, SalienceRow)> = vec![
+            (make_test_memory("normal", 0.9, 10), make_test_salience()),
+            (make_test_memory("p1", 0.2, 10), make_test_salience()),
+            (make_test_memory("p2", 0.5, 10), make_test_salience()),
+        ];
+        candidates.sort_by_key(|(m, _)| priority_score(m));
+        assert_eq!(candidates[0].0.id, "p1", "P1 should be first");
+        assert_eq!(candidates[1].0.id, "p2", "P2 should be second");
+        assert_eq!(candidates[2].0.id, "normal", "Normal should be last");
     }
 }
