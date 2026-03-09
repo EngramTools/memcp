@@ -409,13 +409,13 @@ Plans:
 
 ## Phase 08.11.1: Bi-Temporal Search (event_time wiring)
 - **Goal**: Wire `event_time` into temporal search boost. One-line fix in server.rs: prefer `event_time` over `created_at` when present in temporal range matching. Completes the bi-temporal search story started in Phase 08.8 (which added the schema + extraction but never wired it into retrieval). `let t = hit.memory.event_time.unwrap_or(hit.memory.created_at);`
-- **Status**: Not started
+- **Status**: DONE
 - **Depends on**: Phase 08.11
 - **Origin**: Competitive analysis (2026-03-03) — Zep/Graphiti bi-temporal comparison revealed memcp has the schema but doesn't query against event_time
 - **Plans:** 1/1 plans complete
 
 Plans:
-- [ ] 08.11.1-01-PLAN.md — Wire event_time into temporal boost + unit test [Wave 1]
+- [x] 08.11.1-01-PLAN.md — Wire event_time into temporal boost + unit test [Wave 1]
 
 ## Phase 08.12: HTTP API (Remote Daemon Mode)
 - **Goal**: Extend the existing axum health server (port 9090) with API routes for core memcp operations. Add `--remote <url>` / `MEMCP_URL` env var to the CLI so it can route through HTTP instead of direct Postgres. Enables the OpenClaw plugin to call memcp over the network without Postgres credentials or a memcp binary in the OpenClaw container.
@@ -481,7 +481,7 @@ Plans:
 
 ## Phase 10: Production Hardening
 - **Goal**: Connection pool observability, global rate limiting on HTTP API, Prometheus metrics endpoint, and structured logging improvements. All work targets the daemon process (port 9090).
-- **Status**: Planning complete
+- **Status**: DONE (5/5 plans done)
 - **Depends on**: Phase 09
 - **Requirements:** [PH-01, PH-02, PH-03, PH-04, PH-05, PH-06, PH-07]
 - **Plans:** 5/5 plans complete
@@ -497,11 +497,21 @@ Requirements:
 - PH-07: Worker metric instrumentation — GC runs/pruned counters, embedding jobs/duration, dedup merges, recall/search result count histograms
 
 Plans:
-- [ ] 10-01-PLAN.md — Prometheus infrastructure: dependencies, config structs, recorder install, /metrics endpoint, pool config wiring, pool poller [Wave 1]
-- [ ] 10-02-PLAN.md — Rate limiting + metrics middleware on /v1/* routes + enriched /status [Wave 2, depends on 01]
-- [ ] 10-03-PLAN.md — Structured logging (request spans, Redacted) + worker/handler metric instrumentation [Wave 2, depends on 01]
-- [ ] 10-04-PLAN.md — Gap closure: rate limits + metrics for Phase 14 endpoints (discover, export, delete) + worker instrumentation (enrichment, promotion, curation, temporal) [Wave 2, depends on 01]
-- [ ] 10-05-PLAN.md — Integration tests for metrics endpoint, rate limiting, and middleware [Wave 3, depends on 01+02+03+04]
+- [x] 10-01-PLAN.md — Prometheus infrastructure: dependencies, config structs, recorder install, /metrics endpoint, pool config wiring, pool poller [Wave 1]
+- [x] 10-02-PLAN.md — Rate limiting + metrics middleware on /v1/* routes + enriched /status [Wave 2, depends on 01]
+- [x] 10-03-PLAN.md — Structured logging (request spans, Redacted) + worker/handler metric instrumentation [Wave 2, depends on 01]
+- [x] 10-04-PLAN.md — Gap closure: rate limits + metrics for Phase 14 endpoints (discover, export, delete) + worker instrumentation (enrichment, promotion, curation, temporal) [Wave 2, depends on 01]
+- [x] 10-05-PLAN.md — Integration tests for metrics endpoint, rate limiting, and middleware [Wave 3, depends on 01+02+03+04]
+
+### Phase 10.2: Load test trust-weighted retrieval, quarantine, and curation features (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 10
+**Plans:** 2/3 plans executed
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 10.2 to break down)
 
 ## Phase 10.1: Stress & Load Testing
 - **Goal**: Load test all core operations under simulated multi-tenant conditions. Establish capacity numbers and known breaking points.
@@ -524,20 +534,20 @@ Plans:
 ## Phase 11.1: Provenance Tagging — from engram Phase 22 (Memory Safety, OWASP ASI06)
 
 - **Goal**: Every memory write gets trust_level, session_id, agent_role metadata. Defends against memory poisoning (OWASP ASI06) by recording WHO wrote WHAT and with WHAT authority.
-- **Status**: Planned
+- **Status**: DONE (2/2 plans done)
 - **Depends on**: Phase 08.6 (brain curation)
 - **Driven by**: engram Phase 22 (Agent Role Guardrails & Memory Safety)
 - **Requirements:** [PROV-01, PROV-02, PROV-03, PROV-04, PROV-05, PROV-06, PROV-07, PROV-08, PROV-09, PROV-10]
 - **Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 11.1-01-PLAN.md — Migration + core structs + postgres queries + trust inference + tests [Wave 1]
-- [ ] 11.1-02-PLAN.md — Transport layer (MCP + HTTP API + CLI) + auto-store + source audit [Wave 2, depends on 01]
+- [x] 11.1-01-PLAN.md — Migration + core structs + postgres queries + trust inference + tests [Wave 1]
+- [x] 11.1-02-PLAN.md — Transport layer (MCP + HTTP API + CLI) + auto-store + source audit [Wave 2, depends on 01]
 
 ## Phase 11.2–11.3: Trust-Weighted Retrieval & Brain Curation Security — from engram Phase 22
 
 - **Goal**: Trust-weighted retrieval and brain curation security extension. Completes OWASP ASI06 defense.
-- **Status**: Planned
+- **Status**: In progress
 - **Requirements:** [TWR-01, TWR-02, TWR-03, TWR-04, TWR-05, TWR-06, TWR-07, TWR-08]
 - **Plans:** 3/3 plans complete
 
@@ -618,7 +628,7 @@ Plans:
 
 ## Phase 14: Memory Boosting (Competitor-Informed)
 - **Goal**: Retrieval and evolution improvements informed by competitive landscape analysis (engram/.planning/competitive-landscape.md). Focuses on the highest-impact ideas from code review of 10+ competitor codebases.
-- **Status**: Planned
+- **Status**: DONE (5/5 plans done)
 - **Requirements:** [UUID-01, UUID-02, RET-01, RET-02, MQ-01, MQ-02, MQ-03, ENR-01, ENR-02, ENR-03, DISC-01, DISC-02, DISC-03]
 - **Plans:** 5/5 plans complete
 
@@ -640,46 +650,46 @@ Requirements:
 Plans:
 - [x] 14-01-PLAN.md — UUID hallucination prevention (integer ref mapping) [Wave 1]
 - [x] 14-02-PLAN.md — Type-specific retention via FSRS stability [Wave 1]
-- [ ] 14-03-PLAN.md — Multi-query retrieval (decomposition + RRF fusion) [Wave 2]
+- [x] 14-03-PLAN.md — Multi-query retrieval (decomposition + RRF fusion) [Wave 2]
 - [x] 14-04-PLAN.md — Retroactive neighbor enrichment (daemon worker) [Wave 2]
-- [ ] 14-05-PLAN.md — Creative association discovery (CLI + MCP + API) [Wave 3]
+- [x] 14-05-PLAN.md — Creative association discovery (CLI + MCP + API) [Wave 3]
 - **Depends on**: Phase 12
 - **Note**: PRIVATE — stays in private repo, never enters public memcp fork
 - **Origin**: Competitive landscape research (2026-03-03) — Viren Mohindra's "State of Agent Memory 2026", SimpleMem, A-Mem, mcp-memory-service, Mem0
 
 ### Phase 14.1: Multi-Query Retrieval
 - **Goal**: Decompose a search query into 1-4 targeted sub-queries, each hitting the hybrid search pipeline in parallel, then merge results. Modeled after SimpleMem's intent-aware retrieval planning — rated "the best retrieval strategy in the survey" by code review. Directly improves recall for complex/multi-faceted queries.
-- **Status**: Planned
+- **Status**: DONE
 - **Depends on**: Phase 14
 - **Source**: SimpleMem (arXiv:2601.02553)
 
 ### Phase 14.2: Type-Specific Retention Periods
 - **Goal**: Make salience decay vary by memory type. Architecture decisions get longer retention (365 days), error observations get shorter (30 days), ephemeral context decays fastest. Uses existing `expires_at` column + `type_hint` to set retention at store time. Configurable retention schedule in memcp.toml.
-- **Status**: Planned
+- **Status**: DONE
 - **Depends on**: Phase 14
 - **Source**: mcp-memory-service (doobidoo)
 
 ### Phase 14.3: Retroactive Neighbor Enrichment
 - **Goal**: When a new memory is stored, retrieve the 5 nearest existing memories and use an LLM to update their tags and context to reflect emerging patterns. New information doesn't just add to the store — it changes how old memories are represented. Addresses the "no feedback loop" gap. Makes the memory store compound over time.
-- **Status**: Planned
+- **Status**: DONE
 - **Depends on**: Phase 14.1
 - **Source**: A-Mem (NeurIPS 2025, arXiv:2502.12110, Zetzelkasten-inspired)
 
 ### Phase 14.4: Creative Association Discovery
 - **Goal**: New query mode that searches the 0.3-0.7 cosine similarity "sweet spot" between memory pairs. Above 0.7 = redundant (already known to be related). Below 0.3 = noise. The sweet spot finds genuinely unexpected connections. Exposed as `memcp discover` CLI command and MCP tool.
-- **Status**: Planned
+- **Status**: DONE
 - **Depends on**: Phase 14
 - **Source**: mcp-memory-service ("dream-inspired" consolidation)
 
 ### Phase 14.5: UUID Hallucination Prevention
 - **Goal**: Replace real UUIDs with integer indices before passing memory IDs to LLMs. Prevents a class of errors where models generate plausible-looking but invalid UUIDs. Transform layer in MCP tool responses and search result formatting.
-- **Status**: Planned
+- **Status**: DONE
 - **Depends on**: Phase 14
 - **Source**: Mem0 (discovered during code review)
 
 ### Phase 14.6: Standardized Benchmarking (LongMemEval + LoCoMo)
 - **Goal**: Run memcp against LongMemEval and LoCoMo benchmarks. Publish scores. Every serious competitor publishes these — memcp is invisible without them. Extend existing Phase 06.3 benchmark harness with standard benchmark dataset runners. CI integration for regression.
-- **Status**: In progress
+- **Status**: DONE
 - **Depends on**: Phase 12 (for public-facing numbers), but can run internally anytime
 - **Source**: Competitive landscape analysis — table-stakes for credibility
 - **Note**: Could be done pre-v1 for internal baseline. Public numbers published with open-source launch.
@@ -702,26 +712,10 @@ Plans:
 
 ## Phase 14.7: Benchmark Schema Isolation
 - **Goal**: Postgres schema isolation for benchmark runs. Benchmarks create and use a dedicated `benchmark` schema instead of operating on `public`, preventing accidental data loss and enabling clean per-run isolation. Schema is ephemeral by default (dropped after run), with `--keep-schema` for post-run inspection.
-- **Status**: Planned
-- **Requirements:** [TWR-01, TWR-02, TWR-03, TWR-04, TWR-05, TWR-06, TWR-07, TWR-08]
-- **Plans:** 3 plans
-
-Requirements:
-- TWR-01: Trust multiplier in composite scoring — score = 0.5 * RRF + 0.5 * (salience * trust_level)
-- TWR-02: Trust multiplier in LLM re-ranking — 0.7 * llm_rank + 0.3 * (salience * trust)
-- TWR-03: Suspicious curation action — quarantine with tag + trust=0.05 + audit trail
-- TWR-04: Quarantined memories excluded from all search via skip_tags
-- TWR-05: Un-quarantine restores previous trust_level from trust_history
-- TWR-06: Algorithmic instruction detection with trust-gated thresholds (1/2/3 signals)
-- TWR-07: LLM prompt instruction-detection dimension + parse suspicious action
-- TWR-08: Priority queue ordering — P1 (low trust+new) before P2 before Normal
-
-Plans:
-- [ ] 11.2-01-PLAN.md — Trust-weighted composite scoring + LLM re-ranking [Wave 1]
-- [ ] 11.2-02-PLAN.md — Suspicious curation action + quarantine + instruction detection [Wave 1]
-- [ ] 11.2-03-PLAN.md — LLM instruction-detection prompt + priority queue scheduling [Wave 2, depends on 02]
+- **Status**: DONE
 - **Depends on**: Phase 14.6
-- **Note**: Uses Postgres `SET search_path` on connection pool — industry standard approach. No conflict with future Phase 12 multi-tenancy (RLS on public schema rows, orthogonal to schema isolation). Scope: benchmark binary only — tests stay on #[sqlx::test] ephemeral DBs.
+- **Plans:** 1/1 plans complete
+- **Note**: Uses Postgres `SET search_path` on connection pool via `new_with_schema()`. `--keep-schema` flag on benchmark CLI. Tests stay on `#[sqlx::test]` ephemeral DBs.
 
 ## Phase 15: Import & Migration
 - **Goal**: Import memories from external AI tools (OpenClaw, Claude Code, ChatGPT, Claude.ai, markdown, JSONL) and export memcp memories in multiple formats. The onboarding moment — user runs `memcp import`, instantly has thousands of searchable memories from existing AI usage. Three-tier curation pipeline (rule-based noise filter → optional LLM triage → existing memcp hygiene). Embedding reuse from OpenClaw for zero-cost import. Round-trip export for anti-lock-in.

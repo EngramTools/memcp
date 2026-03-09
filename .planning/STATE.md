@@ -3,24 +3,25 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 11.2-03-PLAN.md
-last_updated: "2026-03-09T05:30:06.855Z"
+stopped_at: Completed 10.2-02-PLAN.md
+last_updated: "2026-03-09T14:12:03.693Z"
 progress:
-  total_phases: 51
+  total_phases: 52
   completed_phases: 28
-  total_plans: 115
-  completed_plans: 89
-  percent: 78
+  total_plans: 118
+  completed_plans: 91
+  percent: 79
 ---
 
 # Project State
 
 ## Current Phase
-Phase 11.2-trust-weighted-retrieval-curation-security — COMPLETE (3/3 plans done)
+Phase 14.7-benchmark-schema-isolation — DONE (already implemented, marked retroactively)
 
-Progress: [████████░░] 92/118 plans (78%)
+Progress: [████████░░] 93/118 plans (79%)
 
 ## Active Context
+- Last completed: Phase 14.7 -- Benchmark Schema Isolation (new_with_schema(), drop_schema(), --keep-schema CLI flag, SET search_path after_connect hook)
 - Last completed: Phase 11.2-03 -- LLM Instruction-Detection + Priority Curation (REVIEW_SYSTEM_PROMPT with suspicious action, priority queue P1/P2/Normal ordering, per-cluster LLM routing, 8 new tests)
 - Last completed: Phase 11.2-02 -- Curation Security (Suspicious curation action with quarantine mechanics, algorithmic injection detection with trust-gated thresholds, 12 new tests)
 - Last completed: Phase 11.2-01 -- Trust-Weighted Retrieval (trust_weight in search scoring)
@@ -53,8 +54,8 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 **Current focus:** Phase 11.1 — Provenance Tagging
 
 ## Session Continuity
-Last session: 2026-03-09T05:30:06.850Z
-Stopped at: Completed 11.2-03-PLAN.md
+Last session: 2026-03-09T14:11:59.789Z
+Stopped at: Completed 10.2-02-PLAN.md
 Resume file: None
 
 ## Accumulated Context
@@ -420,6 +421,7 @@ Resume file: None
 - Phase 07.2 (Test Database) added to roadmap — separate test DB from main dev/production DB, inserted before Phase 08 Testing
 - Phase 07.2: Adopted #[sqlx::test] for ephemeral per-test databases; store-level tests moved from MCP-over-stdio to direct store calls
 - Phase 07.3 (Sidecar Status Indicator) added — daemon health visibility via CLI/skill/status line, inserted before Phase 08
+- Phase 10.2 inserted after Phase 10: Load test trust-weighted retrieval, quarantine, and curation features (URGENT)
 
 ### Key Decisions
 - Phase 11.1-02: MCP source default changed from 'default' to 'mcp' for provenance correctness
