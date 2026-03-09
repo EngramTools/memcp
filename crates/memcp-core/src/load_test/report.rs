@@ -471,4 +471,101 @@ mod tests {
         // In a git repo, this should return Some. We just check it doesn't panic.
         let _sha = get_git_sha();
     }
+
+    // ── Security Section Tests ─────────────────────────────────────────────
+
+    fn make_security_report(
+        poisoned: usize,
+        quarantined: usize,
+        violations: Vec<String>,
+    ) -> SecurityReport {
+        let detection_rate = if poisoned > 0 {
+            quarantined as f64 / poisoned as f64
+        } else {
+            0.0
+        };
+        SecurityReport {
+            poisoned_seeded: poisoned,
+            quarantined_count: quarantined,
+            detection_rate,
+            false_positive_count: 0,
+            violations,
+            curation_cycles: 3,
+            p1_drain_ms: vec![10, 15, 12],
+            p2_drain_ms: vec![20, 25],
+            normal_drain_ms: vec![50, 60, 55],
+            dwell_times_ms: vec![100, 200, 150, 300, 250],
+        }
+    }
+
+    #[test]
+    fn test_security_section_no_violations() {
+        let report = make_security_report(50, 45, vec![]);
+        let section = generate_security_section(&report);
+
+        assert!(section.contains("## Security Correctness"));
+        assert!(section.contains("No violations found."));
+        assert!(section.contains("| Poisoned memories seeded | 50 |"));
+        assert!(section.contains("| Successfully quarantined | 45 |"));
+        assert!(section.contains("90.0%")); // 45/50 = 90%
+    }
+
+    #[test]
+    fn test_security_section_with_violations() {
+        let violations = vec![
+            "WrongTrustLevel: memory=m1 expected=0.05 actual=0.50".to_string(),
+            "MissingTag: memory=m2 expected=suspicious actual=[]".to_string(),
+        ];
+        let report = make_security_report(50, 45, violations);
+        let section = generate_security_section(&report);
+
+        assert!(section.contains("### Violations"));
+        assert!(section.contains("- WrongTrustLevel: memory=m1"));
+        assert!(section.contains("- MissingTag: memory=m2"));
+        assert!(section.contains("| Correctness violations | 2 |"));
+    }
+
+    #[test]
+    fn test_security_section_detection_rate() {
+        let report = make_security_report(100, 75, vec![]);
+        let section = generate_security_section(&report);
+
+        assert!(section.contains("75.0%")); // 75/100
+    }
+
+    #[test]
+    fn test_security_section_curation_throughput() {
+        let report = make_security_report(50, 45, vec![]);
+        let section = generate_security_section(&report);
+
+        assert!(section.contains("### Curation Throughput"));
+        assert!(section.contains("Curation cycles completed: 3"));
+        assert!(section.contains("**P1 (new+low trust):**"));
+        assert!(section.contains("**P2 (new+medium trust):**"));
+        assert!(section.contains("**Normal:**"));
+    }
+
+    #[test]
+    fn test_security_section_dwell_time() {
+        let report = make_security_report(50, 45, vec![]);
+        let section = generate_security_section(&report);
+
+        assert!(section.contains("### Poison Dwell Time"));
+        assert!(section.contains("| Mean |"));
+        assert!(section.contains("| p95 |"));
+    }
+
+    #[test]
+    fn test_security_section_empty_drain_stats() {
+        let mut report = make_security_report(50, 45, vec![]);
+        report.p1_drain_ms = vec![];
+        report.p2_drain_ms = vec![];
+        report.dwell_times_ms = vec![];
+        let section = generate_security_section(&report);
+
+        assert!(section.contains("**P1 (new+low trust):** no data"));
+        assert!(section.contains("**P2 (new+medium trust):** no data"));
+        // No dwell time section when empty
+        assert!(!section.contains("### Poison Dwell Time"));
+    }
 }
