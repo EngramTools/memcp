@@ -127,7 +127,10 @@ impl ConsolidationWorker {
                 }
 
                 // Atomically create consolidated memory + links + mark originals
-                match store.create_consolidated_memory(&synthesized, &source_ids, &similarities).await {
+                match store
+                    .create_consolidated_memory(&synthesized, &source_ids, &similarities)
+                    .await
+                {
                     Ok(consolidated_id) => {
                         tracing::info!(
                             consolidated_id = %consolidated_id,
@@ -138,7 +141,10 @@ impl ConsolidationWorker {
                     Err(e) => {
                         // UNIQUE constraint violation = already consolidated — safe to ignore
                         let msg = e.to_string();
-                        if msg.contains("duplicate key") || msg.contains("unique") || msg.contains("23505") {
+                        if msg.contains("duplicate key")
+                            || msg.contains("unique")
+                            || msg.contains("23505")
+                        {
                             tracing::debug!(
                                 memory_id = %job.memory_id,
                                 "Consolidation already exists (idempotent) — skipping"
@@ -165,7 +171,7 @@ impl ConsolidationWorker {
 }
 
 /// Build the synthesis prompt for LLM consolidation.
-fn build_synthesis_prompt(contents: &[&str]) -> String {
+pub fn build_synthesis_prompt(contents: &[&str]) -> String {
     let mut prompt = "Synthesize these related memories into one comprehensive memory. \
         Preserve all unique facts, preferences, and specific details. \
         Do not add information not present in the originals. \
@@ -179,7 +185,7 @@ fn build_synthesis_prompt(contents: &[&str]) -> String {
 }
 
 /// Concatenate memories as a fallback when LLM synthesis fails.
-fn concatenate_memories(contents: &[&str]) -> String {
+pub fn concatenate_memories(contents: &[&str]) -> String {
     contents
         .iter()
         .enumerate()
@@ -281,9 +287,10 @@ async fn synthesize_memories(
 
     let text = chat_response.message.content.trim().to_string();
     if text.is_empty() {
-        return Err(SynthesisError::Parse("Empty synthesis response".to_string()));
+        return Err(SynthesisError::Parse(
+            "Empty synthesis response".to_string(),
+        ));
     }
 
     Ok(text)
 }
-

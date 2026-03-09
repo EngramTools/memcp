@@ -39,3 +39,9 @@ mod summarization;
 
 #[path = "unit/cli.rs"]
 mod cli;
+
+#[path = "unit/extraction.rs"]
+mod extraction;
+
+#[path = "unit/consolidation.rs"]
+mod consolidation;
