@@ -84,7 +84,7 @@ enum Commands {
         stdin: bool,
         #[arg(long, default_value = "fact")]
         type_hint: String,
-        #[arg(long, default_value = "default")]
+        #[arg(long, default_value = "cli")]
         source: String,
         #[arg(long, value_delimiter = ',')]
         tags: Option<Vec<String>>,
@@ -105,6 +105,15 @@ enum Commands {
         /// Project scope. Overrides MEMCP_PROJECT env var and config default_project.
         #[arg(long, alias = "project")]
         project: Option<String>,
+        /// Trust level 0.0-1.0. Omit to let memcp infer from source/actor_type.
+        #[arg(long)]
+        trust_level: Option<f32>,
+        /// Session identifier for grouping memories by conversation.
+        #[arg(long)]
+        session_id: Option<String>,
+        /// Agent's role when creating this memory (e.g., coder, reviewer, planner).
+        #[arg(long)]
+        agent_role: Option<String>,
     },
     /// Search memories by keyword + metadata matching with salience ranking
     Search {
@@ -869,7 +878,7 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        Commands::Store { content, stdin, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, project } => {
+        Commands::Store { content, stdin, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, project, trust_level, session_id, agent_role } => {
             let resolved = cli::resolve_content_arg(content, stdin)?;
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
@@ -883,13 +892,16 @@ async fn main() -> Result<()> {
                     "idempotency_key": idempotency_key,
                     "wait": wait,
                     "project": project,
+                    "trust_level": trust_level,
+                    "session_id": session_id,
+                    "agent_role": agent_role,
                 });
                 let result = cli::dispatch_remote(remote_url, "store", body).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 let store = cli::connect_store(&config, cli.skip_migrate).await?;
                 let project = cli::resolve_project(project, &config);
-                cli::cmd_store(&store, &config, resolved, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, project).await?;
+                cli::cmd_store(&store, &config, resolved, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, project, trust_level, session_id, agent_role).await?;
             }
         }
 

@@ -302,8 +302,8 @@ async fn run_worker(
             event_time,
             event_time_precision,
             project: project.clone(),
-            trust_level: None,
-            session_id: None,
+            trust_level: Some(0.3),
+            session_id: entry.session_id.clone(),
             agent_role: None,
         };
 
@@ -418,8 +418,8 @@ async fn run_worker(
                             event_time: memory.event_time,
                             event_time_precision: memory.event_time_precision.clone(),
                             project: project.clone(),
-                            trust_level: None,
-                            session_id: None,
+                            trust_level: Some(0.3),
+                            session_id: entry.session_id.clone(),
                             agent_role: None,
                         };
 

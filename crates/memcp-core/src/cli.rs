@@ -119,6 +119,9 @@ fn format_memory_json(memory: &Memory, verbose: bool) -> serde_json::Value {
             "event_time": memory.event_time.map(|t| t.to_rfc3339()),
             "event_time_precision": memory.event_time_precision,
             "project": memory.project,
+            "trust_level": memory.trust_level,
+            "session_id": memory.session_id,
+            "agent_role": memory.agent_role,
         })
     } else {
         let mut obj = json!({
@@ -146,6 +149,22 @@ fn format_memory_json(memory: &Memory, verbose: bool) -> serde_json::Value {
         if let Some(ref ws) = memory.project {
             if let serde_json::Value::Object(ref mut map) = obj {
                 map.insert("project".to_string(), json!(ws));
+            }
+        }
+        // Include provenance fields only when non-default/non-null (saves tokens for agents)
+        if memory.trust_level != 0.0 {
+            if let serde_json::Value::Object(ref mut map) = obj {
+                map.insert("trust_level".to_string(), json!(memory.trust_level));
+            }
+        }
+        if let Some(ref sid) = memory.session_id {
+            if let serde_json::Value::Object(ref mut map) = obj {
+                map.insert("session_id".to_string(), json!(sid));
+            }
+        }
+        if let Some(ref ar) = memory.agent_role {
+            if let serde_json::Value::Object(ref mut map) = obj {
+                map.insert("agent_role".to_string(), json!(ar));
             }
         }
         obj
@@ -331,6 +350,9 @@ pub async fn cmd_store(
     idempotency_key: Option<String>,
     wait: bool,
     project: Option<String>,
+    trust_level: Option<f32>,
+    session_id: Option<String>,
+    agent_role: Option<String>,
 ) -> Result<()> {
     let content = content.ok_or_else(|| anyhow::anyhow!(
         "Content is required — provide as argument or use --stdin"
@@ -377,9 +399,9 @@ pub async fn cmd_store(
         event_time,
         event_time_precision,
         project,
-        trust_level: None,
-        session_id: None,
-        agent_role: None,
+        trust_level,
+        session_id,
+        agent_role,
     };
 
     let memory = store

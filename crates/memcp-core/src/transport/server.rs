@@ -634,7 +634,7 @@ Callable from code_execution_20260120 sandboxes.")]
         let input = CreateMemory {
             content: params.content,
             type_hint: params.type_hint.unwrap_or_else(|| "fact".to_string()),
-            source: params.source.unwrap_or_else(|| "default".to_string()),
+            source: params.source.unwrap_or_else(|| "mcp".to_string()),
             tags: params.tags,
             created_at: None,
             actor: params.actor,
