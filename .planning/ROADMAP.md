@@ -503,10 +503,35 @@ Plans:
   4. Memory/CPU profile per operation type
   5. Published capacity numbers for engram.host tier sizing
 
+
+## Phase 11.1: Provenance Tagging — from engram Phase 22 (Memory Safety, OWASP ASI06)
+
+- **Goal**: Every memory write gets trust_level, session_id, agent_role metadata. Defends against memory poisoning (OWASP ASI06) by recording WHO wrote WHAT and with WHAT authority.
+- **Status**: Planned
+- **Depends on**: Phase 08.6 (brain curation)
+- **Driven by**: engram Phase 22 (Agent Role Guardrails & Memory Safety)
+- **Requirements:** [PROV-01, PROV-02, PROV-03, PROV-04, PROV-05, PROV-06, PROV-07, PROV-08, PROV-09, PROV-10]
+- **Plans:** 2 plans
+
+Plans:
+- [ ] 11.1-01-PLAN.md — Migration + core structs + postgres queries + trust inference + tests [Wave 1]
+- [ ] 11.1-02-PLAN.md — Transport layer (MCP + HTTP API + CLI) + auto-store + source audit [Wave 2, depends on 01]
+
+## Phase 11.2–11.3: Trust-Weighted Retrieval & Brain Curation Security — from engram Phase 22
+
+- **Goal**: Trust-weighted retrieval and brain curation security extension. Completes OWASP ASI06 defense.
+- **Status**: Not planned
+- **Depends on**: Phase 11.1
+- **Driven by**: engram Phase 22 (Agent Role Guardrails & Memory Safety)
+- **11.2**: Trust-weighted retrieval — low-trust memories demoted in recall ranking even if semantically relevant
+- **11.3**: Brain curation security extension — add instruction-detection dimension to LLM cluster review + `suspicious` curation action + curation frequency bump for new memories
+- **Research**: `engram/.planning/research/agent-suite-best-practices.md` (OWASP ASI06 section)
+- **IMPORTANT**: Must complete 11.1–11.3 BEFORE Phase 11 (code audit), so the audit covers these security features
+
 ## Phase 11: System Review
 - **Goal**: Codebase audit for quality/gaps before open-source release
 - **Status**: Not planned
-- **Depends on**: Phase 10.1
+- **Depends on**: Phase 10.1, Phase 11.1–11.3 (memory safety — must be audited as part of this review)
 
 ---
 *Open-source fork cutoff: After Phase 11, fork memcp into a public MIT repo containing phases 01–11 (core memory server). Phase 12+ stays in the private memcp repo (or engram repo) — never published to the public fork. See engram Phase 4.5 and /Users/ayoamadi/projects/engram/.planning/ROADMAP.md for strategy.*
