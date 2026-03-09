@@ -71,6 +71,9 @@ async fn ingest_per_turn(
                 event_time: None,
                 event_time_precision: None,
                 project: None,
+                trust_level: None,
+                session_id: None,
+                agent_role: None,
             };
 
             let stored = store.store(memory).await?;
@@ -128,6 +131,9 @@ async fn ingest_per_session(
             event_time: None,
             event_time_precision: None,
             project: None,
+            trust_level: None,
+            session_id: None,
+            agent_role: None,
         };
 
         let stored = store.store(memory).await?;

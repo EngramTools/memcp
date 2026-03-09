@@ -94,6 +94,9 @@ pub async fn store_handler(
         event_time,
         event_time_precision,
         project: req.project,
+        trust_level: None,
+        session_id: None,
+        agent_role: None,
     };
 
     let memory = match store.store(input).await {

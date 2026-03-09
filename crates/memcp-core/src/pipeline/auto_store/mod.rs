@@ -302,6 +302,9 @@ async fn run_worker(
             event_time,
             event_time_precision,
             project: project.clone(),
+            trust_level: None,
+            session_id: None,
+            agent_role: None,
         };
 
         match store.store(create).await {
@@ -415,6 +418,9 @@ async fn run_worker(
                             event_time: memory.event_time,
                             event_time_precision: memory.event_time_precision.clone(),
                             project: project.clone(),
+                            trust_level: None,
+                            session_id: None,
+                            agent_role: None,
                         };
 
                         match store.store(chunk_create).await {

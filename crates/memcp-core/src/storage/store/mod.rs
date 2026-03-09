@@ -67,6 +67,15 @@ pub struct Memory {
     /// Project scope. None means global (visible in all projects).
     /// Project-scoped searches return both project-scoped AND global (None) memories.
     pub project: Option<String>,
+    /// Trust level: 0.0 (untrusted) to 1.0 (fully trusted).
+    /// System-inferred from source/actor_type if not explicitly set at store time.
+    pub trust_level: f32,
+    /// Session identifier linking this memory to a specific agent session.
+    pub session_id: Option<String>,
+    /// Role of the agent that created this memory (e.g., "coder", "reviewer", "planner").
+    pub agent_role: Option<String>,
+    /// Extensible metadata JSONB (trust_history, annotations, etc.).
+    pub metadata: serde_json::Value,
 }
 
 /// Input type for creating a new memory.
@@ -120,6 +129,15 @@ pub struct CreateMemory {
     /// Project scope for this memory. None means global (no project isolation).
     #[serde(default)]
     pub project: Option<String>,
+    /// Explicit trust level override. None = system infers from source/actor_type.
+    #[serde(default)]
+    pub trust_level: Option<f32>,
+    /// Session identifier linking this memory to a specific agent session.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Role of the agent that created this memory (e.g., "coder", "reviewer", "planner").
+    #[serde(default)]
+    pub agent_role: Option<String>,
 }
 
 fn default_type_hint() -> String {
@@ -151,6 +169,8 @@ pub struct UpdateMemory {
     pub source: Option<String>,
     /// New tags (optional, replaces existing tags)
     pub tags: Option<Vec<String>>,
+    /// New trust level (optional). When set, produces a trust_history audit entry in metadata.
+    pub trust_level: Option<f32>,
 }
 
 /// Filter criteria for listing memories with cursor-based pagination.
@@ -179,6 +199,10 @@ pub struct ListFilter {
     /// Filter by project — returns project-scoped AND global (NULL project) memories.
     /// None means no project filter (return all regardless of project).
     pub project: Option<String>,
+    /// Filter by session_id (exact match, optional).
+    pub session_id: Option<String>,
+    /// Filter by agent_role (exact match, optional).
+    pub agent_role: Option<String>,
 }
 
 impl Default for ListFilter {
@@ -195,6 +219,8 @@ impl Default for ListFilter {
             actor: None,
             audience: None,
             project: None,
+            session_id: None,
+            agent_role: None,
         }
     }
 }
@@ -397,4 +423,24 @@ pub trait MemoryStore: Send + Sync {
     ///
     /// Silently ignores if the ID doesn't exist (fire-and-forget semantics).
     async fn touch(&self, id: &str) -> Result<(), MemcpError>;
+}
+
+/// Infer a trust level from source and actor_type when not explicitly provided.
+///
+/// Trust scale: 0.0 (untrusted) to 1.0 (fully trusted).
+/// - user-initiated or CLI stores: 0.8 (high — human in the loop)
+/// - auto-store (sidecar): 0.3 (low — automated, may be noisy)
+/// - import: 0.4 (low-moderate — bulk data, unknown quality)
+/// - default: 0.5 (neutral)
+pub fn infer_trust_level(source: &str, actor_type: &str) -> f32 {
+    if actor_type == "user" || source == "cli" {
+        return 0.8;
+    }
+    match actor_type {
+        "auto-store" => 0.3,
+        _ => match source {
+            "import" => 0.4,
+            _ => 0.5,
+        },
+    }
 }

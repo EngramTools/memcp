@@ -86,6 +86,9 @@ async fn store_with_real_embedding(
             event_time: None,
             event_time_precision: None,
             project: None,
+            trust_level: None,
+            session_id: None,
+            agent_role: None,
         })
         .await
         .expect("Failed to store golden memory");

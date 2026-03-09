@@ -631,6 +631,9 @@ Callable from code_execution_20260120 sandboxes.")]
             event_time: None,
             event_time_precision: None,
             project: None,
+            trust_level: None,
+            session_id: None,
+            agent_role: None,
         };
 
         // Determine if sync store is requested
@@ -878,6 +881,7 @@ Callable from code_execution_20260120 sandboxes.")]
             type_hint: params.type_hint,
             source: params.source,
             tags: params.tags,
+            trust_level: None,
         };
 
         match self.store.update(&id, input).await {
@@ -1118,6 +1122,8 @@ Callable from code_execution_20260120 sandboxes.")]
             actor: params.actor,
             audience: params.audience,
             project: None, // MCP list_memories doesn't expose project yet
+            session_id: None,
+            agent_role: None,
         };
 
         match self.store.list(filter).await {

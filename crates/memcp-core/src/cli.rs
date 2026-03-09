@@ -377,6 +377,9 @@ pub async fn cmd_store(
         event_time,
         event_time_precision,
         project,
+        trust_level: None,
+        session_id: None,
+        agent_role: None,
     };
 
     let memory = store
@@ -456,6 +459,7 @@ pub async fn cmd_update(
         type_hint,
         source,
         tags,
+        trust_level: None,
     };
 
     let memory = store
@@ -994,6 +998,8 @@ pub async fn cmd_recent(
         actor,
         audience: None,
         project: None,
+        session_id: None,
+        agent_role: None,
     };
 
     let result = store
@@ -1066,6 +1072,8 @@ pub async fn cmd_list(
         actor,
         audience,
         project,
+        session_id: None,
+        agent_role: None,
     };
 
     let result = store
@@ -1997,6 +2005,7 @@ pub async fn annotate_logic(
                     type_hint: None,
                     tags: Some(new_tags.clone()),
                     source: None,
+                    trust_level: None,
                 },
             )
             .await

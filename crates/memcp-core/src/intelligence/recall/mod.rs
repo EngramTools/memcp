@@ -360,6 +360,10 @@ impl RecallEngine {
                 event_time: None,
                 event_time_precision: None,
                 project: project.map(String::from),
+                trust_level: 0.5,
+                session_id: None,
+                agent_role: None,
+                metadata: serde_json::json!({}),
             };
 
             hits.push(ScoredHit {

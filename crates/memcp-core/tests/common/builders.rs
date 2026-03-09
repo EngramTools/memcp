@@ -100,6 +100,9 @@ impl MemoryBuilder {
             event_time: None,
             event_time_precision: None,
             project: self.project,
+            trust_level: None,
+            session_id: None,
+            agent_role: None,
         }
     }
 

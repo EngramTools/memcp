@@ -629,6 +629,10 @@ fn row_to_memory(row: &PgRow) -> Result<Memory, MemcpError> {
         event_time: row.try_get("event_time").unwrap_or(None),
         event_time_precision: row.try_get("event_time_precision").unwrap_or(None),
         project: row.try_get("project").unwrap_or(None),
+        trust_level: row.try_get("trust_level").unwrap_or(0.5),
+        session_id: row.try_get("session_id").unwrap_or(None),
+        agent_role: row.try_get("agent_role").unwrap_or(None),
+        metadata: row.try_get("metadata").unwrap_or_else(|_| serde_json::json!({})),
     })
 }
 
@@ -783,6 +787,8 @@ impl MemoryStore for PostgresMemoryStore {
             }
         }
 
+        let resolved_trust = input.trust_level.unwrap_or_else(|| crate::store::infer_trust_level(&input.source, &input.actor_type));
+
         Ok(Memory {
             id,
             content: input.content,
@@ -808,6 +814,10 @@ impl MemoryStore for PostgresMemoryStore {
             event_time: input.event_time,
             event_time_precision: input.event_time_precision,
             project: input.project,
+            trust_level: resolved_trust,
+            session_id: input.session_id,
+            agent_role: input.agent_role,
+            metadata: serde_json::json!({}),
         })
     }
 

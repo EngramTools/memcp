@@ -180,6 +180,9 @@ async fn execute_curation(
                         event_time: None,
                         event_time_precision: None,
                         project: None,
+                        trust_level: None,
+                        session_id: None,
+                        agent_role: None,
                     };
 
                     match store.store(new_memory).await {

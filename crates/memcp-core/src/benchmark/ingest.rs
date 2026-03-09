@@ -69,6 +69,9 @@ pub async fn ingest_question(
                 event_time: None,
                 event_time_precision: None,
                 project: None,
+                trust_level: None,
+                session_id: None,
+                agent_role: None,
             };
 
             let stored = store.store(memory).await?;

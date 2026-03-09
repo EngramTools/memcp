@@ -45,6 +45,7 @@ pub async fn update_handler(
         type_hint: req.type_hint,
         source: req.source,
         tags: req.tags,
+        trust_level: None,
     };
 
     let memory: Memory = match store.update(&req.id, input).await {
