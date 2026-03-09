@@ -34,8 +34,8 @@ pub async fn update_handler(
     }
 
     // Validate at least one field to update
-    if req.content.is_none() && req.type_hint.is_none() && req.source.is_none() && req.tags.is_none() {
-        return (StatusCode::BAD_REQUEST, Json(error_json("at least one field is required: content, type_hint, source, or tags")));
+    if req.content.is_none() && req.type_hint.is_none() && req.source.is_none() && req.tags.is_none() && req.trust_level.is_none() {
+        return (StatusCode::BAD_REQUEST, Json(error_json("at least one field is required: content, type_hint, source, tags, or trust_level")));
     }
 
     let has_content_change = req.content.is_some();
@@ -45,7 +45,7 @@ pub async fn update_handler(
         type_hint: req.type_hint,
         source: req.source,
         tags: req.tags,
-        trust_level: None,
+        trust_level: req.trust_level,
     };
 
     let memory: Memory = match store.update(&req.id, input).await {

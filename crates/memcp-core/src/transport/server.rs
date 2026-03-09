@@ -256,6 +256,13 @@ pub struct StoreMemoryParams {
     /// Returns enriched response with embedding_status and embedding_dimension on completion.
     #[serde(default)]
     pub wait: Option<bool>,
+    /// Trust level 0.0-1.0. Omit to let memcp infer from source/actor_type.
+    /// Higher = more trusted (e.g., human-verified=1.0, auto-store=0.3).
+    pub trust_level: Option<f32>,
+    /// Session identifier for grouping memories by conversation.
+    pub session_id: Option<String>,
+    /// Agent's role when creating this memory (e.g., coder, reviewer, planner). Free-text, nullable.
+    pub agent_role: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -276,6 +283,8 @@ pub struct UpdateMemoryParams {
     pub source: Option<String>,
     /// New tags (replaces existing)
     pub tags: Option<Vec<String>>,
+    /// Trust level override 0.0-1.0. Updates the stored trust level with JSONB audit trail.
+    pub trust_level: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -325,6 +334,10 @@ pub struct ListMemoriesParams {
     pub actor: Option<String>,
     /// Filter by audience
     pub audience: Option<String>,
+    /// Filter by session ID — returns only memories from this conversation session.
+    pub session_id: Option<String>,
+    /// Filter by agent role — returns only memories created by agents with this role.
+    pub agent_role: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -536,7 +549,10 @@ impl MemoryService {
 Params: content (required), type_hint (fact|preference|instruction|decision), \
 tags (array), source (string), actor (string), actor_type (agent|human|system, default agent), \
 audience (global|personal|team:X), idempotency_key (optional string), \
-wait (bool, default false — when true, blocks until embedding completes; returns embedding_status and embedding_dimension).\n\
+wait (bool, default false — when true, blocks until embedding completes; returns embedding_status and embedding_dimension), \
+trust_level (float 0.0-1.0, omit to auto-infer from source/actor_type), \
+session_id (string, groups memories by conversation session), \
+agent_role (string, e.g. coder/reviewer/planner).\n\
 Dedup: identical content within the server dedup window returns the existing memory (no duplicate). \
 Optional idempotency_key for caller-controlled at-most-once semantics — same key always returns original result.\n\
 Callable from code_execution_20260120 sandboxes.")]
@@ -631,9 +647,9 @@ Callable from code_execution_20260120 sandboxes.")]
             event_time: None,
             event_time_precision: None,
             project: None,
-            trust_level: None,
-            session_id: None,
-            agent_role: None,
+            trust_level: params.trust_level,
+            session_id: params.session_id,
+            agent_role: params.agent_role,
         };
 
         // Determine if sync store is requested
@@ -845,10 +861,11 @@ Callable from code_execution_20260120 sandboxes.")]
             && params.type_hint.is_none()
             && params.source.is_none()
             && params.tags.is_none()
+            && params.trust_level.is_none()
         {
             return Ok(CallToolResult::structured_error(json!({
                 "isError": true,
-                "error": "At least one of 'content', 'type_hint', 'source', or 'tags' must be provided"
+                "error": "At least one of 'content', 'type_hint', 'source', 'tags', or 'trust_level' must be provided"
             })));
         }
 
@@ -881,7 +898,7 @@ Callable from code_execution_20260120 sandboxes.")]
             type_hint: params.type_hint,
             source: params.source,
             tags: params.tags,
-            trust_level: None,
+            trust_level: params.trust_level,
         };
 
         match self.store.update(&id, input).await {
@@ -1122,8 +1139,8 @@ Callable from code_execution_20260120 sandboxes.")]
             actor: params.actor,
             audience: params.audience,
             project: None, // MCP list_memories doesn't expose project yet
-            session_id: None,
-            agent_role: None,
+            session_id: params.session_id,
+            agent_role: params.agent_role,
         };
 
         match self.store.list(filter).await {

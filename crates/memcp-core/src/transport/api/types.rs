@@ -89,6 +89,15 @@ pub struct StoreRequest {
     /// Project scope for this memory.
     #[serde(alias = "workspace")]
     pub project: Option<String>,
+    /// Trust level 0.0-1.0. Omit to let memcp infer from source/actor_type.
+    #[serde(default)]
+    pub trust_level: Option<f32>,
+    /// Session identifier for grouping memories by conversation.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Agent's role when creating this memory (e.g., coder, reviewer, planner).
+    #[serde(default)]
+    pub agent_role: Option<String>,
 }
 
 fn default_type_hint() -> String { "fact".to_string() }
@@ -122,6 +131,8 @@ pub struct UpdateRequest {
     pub source: Option<String>,
     /// New tags (replaces all existing tags).
     pub tags: Option<Vec<String>>,
+    /// Trust level override 0.0-1.0. Updates the stored trust level with JSONB audit trail.
+    pub trust_level: Option<f32>,
 }
 
 /// Shared error body serializer.
