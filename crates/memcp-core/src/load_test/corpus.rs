@@ -392,6 +392,295 @@ pub async fn clear_corpus(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
+// ─── Trust Corpus Seeding ─────────────────────────────────────────────────────
+
+/// Seed a trust-distributed corpus with poisoned memories for the trust workload.
+///
+/// Creates `config.corpus_size` memories total:
+/// - `config.poison_count()` poisoned memories cycling through POISONED_TEMPLATES
+/// - `config.clean_count()` clean memories with 60/30/10 trust distribution
+///
+/// All memories get explicit `trust_level` column values and pre-computed embeddings.
+/// Returns `TrustCorpusResult` with tracked poisoned/clean IDs for downstream assertions.
+pub async fn seed_trust_corpus(
+    pool: &PgPool,
+    config: &TrustCorpusConfig,
+) -> Result<TrustCorpusResult> {
+    let start = Instant::now();
+    let poison_count = config.poison_count();
+    let clean_count = config.clean_count();
+
+    println!(
+        "  Seeding trust corpus: {} total ({} clean, {} poisoned)",
+        config.corpus_size, clean_count, poison_count
+    );
+
+    let mut all_ids: Vec<String> = Vec::with_capacity(config.corpus_size);
+    let mut poisoned_ids: HashMap<String, PoisonedMemoryInfo> = HashMap::new();
+    let mut clean_ids: Vec<String> = Vec::with_capacity(clean_count);
+    let mut high_count = 0usize;
+    let mut medium_count = 0usize;
+    let mut low_count = 0usize;
+
+    // ── Phase 1: Insert clean memories ───────────────────────────────────────
+    const BATCH_SIZE: usize = 100;
+
+    let clean_pb = ProgressBar::new(clean_count as u64);
+    clean_pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} clean memories ({eta})")
+            .unwrap_or_else(|_| ProgressStyle::default_bar()),
+    );
+
+    for batch_start in (0..clean_count).step_by(BATCH_SIZE) {
+        let batch_end = (batch_start + BATCH_SIZE).min(clean_count);
+        let batch_size = batch_end - batch_start;
+
+        let mut value_clauses: Vec<String> = Vec::with_capacity(batch_size);
+        let mut ids: Vec<String> = Vec::with_capacity(batch_size);
+        let mut contents: Vec<String> = Vec::with_capacity(batch_size);
+        let mut type_hints: Vec<String> = Vec::with_capacity(batch_size);
+        let mut tags_values: Vec<Option<serde_json::Value>> = Vec::with_capacity(batch_size);
+        let mut projects: Vec<String> = Vec::with_capacity(batch_size);
+        let mut hashes: Vec<String> = Vec::with_capacity(batch_size);
+        let mut trust_levels: Vec<f32> = Vec::with_capacity(batch_size);
+
+        for row in 0..batch_size {
+            let i = batch_start + row;
+            // 7 params per row: id, content, type_hint, tags, project, content_hash, trust_level
+            let p = row * 7 + 1;
+
+            let id = uuid::Uuid::new_v4().to_string();
+            let content = format!(
+                "Trust corpus clean #{}: {}",
+                i,
+                CONTENT_TEMPLATES[i % CONTENT_TEMPLATES.len()]
+            );
+            let project_name = format!("project-{}", i % config.num_projects.max(1));
+            let trust = assign_clean_trust_level(i);
+
+            // Track distribution
+            if trust >= 0.7 {
+                high_count += 1;
+            } else if trust >= 0.3 {
+                medium_count += 1;
+            } else {
+                low_count += 1;
+            }
+
+            value_clauses.push(format!(
+                "(${}::text, ${}, ${}, ${}::jsonb, ${}, \
+                 'agent', 'global', NOW(), NOW(), false, ${}, NULL, 'done', 'load-test-trust', ${}::real)",
+                p, p + 1, p + 2, p + 3, p + 4, p + 5, p + 6
+            ));
+
+            hashes.push(fnv1a_hex(&content));
+            ids.push(id);
+            contents.push(content);
+            type_hints.push(type_hint_for(i).to_string());
+            tags_values.push(tags_for(i));
+            projects.push(project_name);
+            trust_levels.push(trust);
+        }
+
+        let sql = format!(
+            "INSERT INTO memories \
+             (id, content, type_hint, tags, project, actor_type, audience, \
+              created_at, updated_at, is_consolidated_original, content_hash, deleted_at, \
+              embedding_status, source, trust_level) \
+             VALUES {}",
+            value_clauses.join(", ")
+        );
+
+        let mut q = sqlx::query(&sql);
+        for row in 0..batch_size {
+            q = q
+                .bind(&ids[row])
+                .bind(&contents[row])
+                .bind(&type_hints[row])
+                .bind(&tags_values[row])
+                .bind(&projects[row])
+                .bind(&hashes[row])
+                .bind(trust_levels[row]);
+        }
+        q.execute(pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Clean memory batch insert failed: {}", e))?;
+
+        clean_ids.extend(ids.iter().cloned());
+        all_ids.extend(ids);
+        clean_pb.inc(batch_size as u64);
+    }
+
+    clean_pb.finish_with_message("clean memories inserted");
+
+    // ── Phase 2: Insert poisoned memories ────────────────────────────────────
+
+    let poison_pb = ProgressBar::new(poison_count as u64);
+    poison_pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {bar:40.red/white} {pos}/{len} poisoned memories ({eta})")
+            .unwrap_or_else(|_| ProgressStyle::default_bar()),
+    );
+
+    for batch_start in (0..poison_count).step_by(BATCH_SIZE) {
+        let batch_end = (batch_start + BATCH_SIZE).min(poison_count);
+        let batch_size = batch_end - batch_start;
+
+        let mut value_clauses: Vec<String> = Vec::with_capacity(batch_size);
+        let mut ids: Vec<String> = Vec::with_capacity(batch_size);
+        let mut contents: Vec<String> = Vec::with_capacity(batch_size);
+        let mut type_hints: Vec<String> = Vec::with_capacity(batch_size);
+        let mut tags_values: Vec<Option<serde_json::Value>> = Vec::with_capacity(batch_size);
+        let mut projects: Vec<String> = Vec::with_capacity(batch_size);
+        let mut hashes: Vec<String> = Vec::with_capacity(batch_size);
+        let mut trust_levels: Vec<f32> = Vec::with_capacity(batch_size);
+
+        for row in 0..batch_size {
+            let i = batch_start + row;
+            let p = row * 7 + 1;
+
+            let template = &POISONED_TEMPLATES[i % POISONED_TEMPLATES.len()];
+            let id = uuid::Uuid::new_v4().to_string();
+            let content = format!("Trust corpus poisoned #{}: {}", i, template.content);
+            let project_name = format!("project-{}", i % config.num_projects.max(1));
+            let trust = assign_poisoned_trust_level(i);
+
+            value_clauses.push(format!(
+                "(${}::text, ${}, ${}, ${}::jsonb, ${}, \
+                 'agent', 'global', NOW(), NOW(), false, ${}, NULL, 'done', 'load-test-trust', ${}::real)",
+                p, p + 1, p + 2, p + 3, p + 4, p + 5, p + 6
+            ));
+
+            // Track poisoned memory info
+            poisoned_ids.insert(
+                id.clone(),
+                PoisonedMemoryInfo {
+                    signal_count: template.signal_count,
+                    expected_signals: template
+                        .expected_signals
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                    trust_level: trust,
+                    content: content.clone(),
+                },
+            );
+
+            hashes.push(fnv1a_hex(&content));
+            ids.push(id);
+            contents.push(content);
+            type_hints.push("fact".to_string());
+            tags_values.push(None); // No tags on poisoned memories
+            projects.push(project_name);
+            trust_levels.push(trust);
+        }
+
+        let sql = format!(
+            "INSERT INTO memories \
+             (id, content, type_hint, tags, project, actor_type, audience, \
+              created_at, updated_at, is_consolidated_original, content_hash, deleted_at, \
+              embedding_status, source, trust_level) \
+             VALUES {}",
+            value_clauses.join(", ")
+        );
+
+        let mut q = sqlx::query(&sql);
+        for row in 0..batch_size {
+            q = q
+                .bind(&ids[row])
+                .bind(&contents[row])
+                .bind(&type_hints[row])
+                .bind(&tags_values[row])
+                .bind(&projects[row])
+                .bind(&hashes[row])
+                .bind(trust_levels[row]);
+        }
+        q.execute(pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Poisoned memory batch insert failed: {}", e))?;
+
+        all_ids.extend(ids);
+        poison_pb.inc(batch_size as u64);
+    }
+
+    poison_pb.finish_with_message("poisoned memories inserted");
+
+    // ── Phase 3: Insert embeddings for all memories ──────────────────────────
+
+    println!(
+        "  Seeding embeddings for {} trust corpus memories...",
+        config.corpus_size
+    );
+    let embed_pb = ProgressBar::new(config.corpus_size as u64);
+    embed_pb.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {bar:40.green/white} {pos}/{len} embeddings ({eta})")
+            .unwrap_or_else(|_| ProgressStyle::default_bar()),
+    );
+
+    const EMBED_BATCH: usize = 50;
+    for chunk in all_ids.chunks(EMBED_BATCH) {
+        let mut value_clauses: Vec<String> = Vec::with_capacity(chunk.len());
+        let mut embed_ids: Vec<String> = Vec::with_capacity(chunk.len());
+        let mut memory_ids: Vec<String> = Vec::with_capacity(chunk.len());
+        let mut vectors: Vec<String> = Vec::with_capacity(chunk.len());
+
+        for (j, id) in chunk.iter().enumerate() {
+            let p = j * 7 + 1;
+            value_clauses.push(format!(
+                "(${}::text, ${}::text, ${}::text, ${}::text, ${}::int, ${}::vector, ${}::text, true, NOW(), NOW())",
+                p, p + 1, p + 2, p + 3, p + 4, p + 5, p + 6
+            ));
+            embed_ids.push(uuid::Uuid::new_v4().to_string());
+            memory_ids.push(id.clone());
+            vectors.push(format_pg_vector(&random_unit_vector()));
+        }
+
+        let sql = format!(
+            "INSERT INTO memory_embeddings \
+             (id, memory_id, model_name, model_version, dimension, embedding, tier, is_current, created_at, updated_at) \
+             VALUES {}",
+            value_clauses.join(", ")
+        );
+
+        let mut q = sqlx::query(&sql);
+        for j in 0..chunk.len() {
+            q = q
+                .bind(&embed_ids[j])
+                .bind(&memory_ids[j])
+                .bind("load-test-synthetic")
+                .bind("1.0")
+                .bind(384i32)
+                .bind(&vectors[j])
+                .bind("fast");
+        }
+        q.execute(pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("Trust embedding batch insert failed: {}", e))?;
+
+        embed_pb.inc(chunk.len() as u64);
+    }
+
+    embed_pb.finish_with_message("trust corpus embeddings seeded");
+
+    let elapsed = start.elapsed().as_secs_f64();
+    println!(
+        "  Trust corpus seeded: {} clean + {} poisoned in {:.1}s",
+        clean_count, poison_count, elapsed
+    );
+
+    Ok(TrustCorpusResult {
+        poisoned_ids,
+        clean_ids,
+        trust_distribution: TrustDistributionSummary {
+            high_count,
+            medium_count,
+            low_count,
+        },
+    })
+}
+
 // ─── Internal Helpers ─────────────────────────────────────────────────────────
 
 struct MemoryBatchParams {
