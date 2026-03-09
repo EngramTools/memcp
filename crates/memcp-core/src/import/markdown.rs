@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
@@ -71,7 +71,7 @@ impl ImportSource for MarkdownReader {
             let created_at: Option<DateTime<Utc>> = std::fs::metadata(&md_path)
                 .ok()
                 .and_then(|m| m.modified().ok())
-                .map(|t| DateTime::from(t));
+                .map(DateTime::from);
 
             // Apply --since filter.
             if let (Some(since), Some(ts)) = (opts.since, created_at) {

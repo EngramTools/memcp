@@ -44,16 +44,13 @@ pub async fn handle_delete(
     }
 
     // Check existence first — get() returns NotFound for deleted/missing memories.
-    match store.get(&id).await {
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("not found") || msg.contains("NotFound") {
-                return (StatusCode::NOT_FOUND, Json(error_json(&format!("Memory not found: {}", id))));
-            }
-            tracing::warn!(error = %e, memory_id = %id, "delete existence check failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(error_json(&format!("Delete failed: {}", e))));
+    if let Err(e) = store.get(&id).await {
+        let msg = e.to_string();
+        if msg.contains("not found") || msg.contains("NotFound") {
+            return (StatusCode::NOT_FOUND, Json(error_json(&format!("Memory not found: {}", id))));
         }
-        Ok(_) => {} // memory exists — proceed with delete
+        tracing::warn!(error = %e, memory_id = %id, "delete existence check failed");
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(error_json(&format!("Delete failed: {}", e))));
     }
 
     match store.delete(&id).await {

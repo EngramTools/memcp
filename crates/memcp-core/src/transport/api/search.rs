@@ -92,7 +92,7 @@ pub async fn search_handler(
             Some(60.0), // bm25_k
             vector_k,
             Some(40.0), // symbolic_k
-            req.source.as_ref().map(|v| v.as_slice()),
+            req.source.as_deref(),
             req.audience.as_deref(),
             req.project.as_deref(),
         )
@@ -288,14 +288,12 @@ fn apply_field_projection(obj: serde_json::Value, fields: &Option<Vec<String>>) 
                         let parent_key = &field[..dot_pos];
                         let child_key = &field[dot_pos + 1..];
                         if child_key.contains('.') { continue; }
-                        if let Some(parent_val) = map.get(parent_key) {
-                            if let serde_json::Value::Object(nested) = parent_val {
-                                if let Some(child_val) = nested.get(child_key) {
-                                    let entry = result.entry(parent_key.to_string())
-                                        .or_insert_with(|| serde_json::json!({}));
-                                    if let serde_json::Value::Object(ref mut m) = entry {
-                                        m.insert(child_key.to_string(), child_val.clone());
-                                    }
+                        if let Some(serde_json::Value::Object(nested)) = map.get(parent_key) {
+                            if let Some(child_val) = nested.get(child_key) {
+                                let entry = result.entry(parent_key.to_string())
+                                    .or_insert_with(|| serde_json::json!({}));
+                                if let serde_json::Value::Object(ref mut m) = entry {
+                                    m.insert(child_key.to_string(), child_val.clone());
                                 }
                             }
                         }

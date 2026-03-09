@@ -12,8 +12,8 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, TimeZone, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::{TimeZone, Utc};
+use serde::Deserialize;
 use serde_json::Value;
 
 use super::{DiscoveredSource, ImportChunk, ImportOpts, ImportSource, ImportSourceKind};
@@ -31,6 +31,7 @@ pub const MAX_DECOMPRESSED_SIZE: u64 = 500 * 1024 * 1024; // 500MB
 // ── JSON structures for conversations.json ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // JSON schema struct retained for documentation purposes
 struct ChatGptExport(Vec<Conversation>);
 
 #[derive(Debug, Deserialize)]
@@ -49,6 +50,7 @@ struct MappingNode {
 
 #[derive(Debug, Deserialize)]
 struct Message {
+    #[allow(dead_code)] // Present in JSON schema, not needed for import logic
     id: Option<String>,
     author: Option<Author>,
     content: Option<MessageContent>,

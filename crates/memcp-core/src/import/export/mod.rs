@@ -36,6 +36,7 @@ pub enum ExportFormat {
 
 impl ExportFormat {
     /// Parse a format string (case-insensitive) into an ExportFormat.
+    #[allow(clippy::should_implement_trait)] // Custom from_str with anyhow::bail!, not std::str::FromStr
     pub fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "jsonl" => Ok(Self::Jsonl),

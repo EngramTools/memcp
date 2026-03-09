@@ -21,6 +21,12 @@ pub struct UuidRefMap {
     next_ref: AtomicU32,
 }
 
+impl Default for UuidRefMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UuidRefMap {
     pub fn new() -> Self {
         Self {
@@ -113,6 +119,7 @@ pub struct MemoryService {
 }
 
 impl MemoryService {
+    #[allow(clippy::too_many_arguments)] // Service construction params map to distinct components; struct refactor deferred
     pub fn new(
         store: Arc<dyn MemoryStore + Send + Sync>,
         pipeline: Option<crate::embedding::pipeline::EmbeddingPipeline>,
@@ -516,14 +523,12 @@ fn apply_field_projection(obj: serde_json::Value, fields: &Option<Vec<String>>) 
                         if child_key.contains('.') {
                             continue;
                         }
-                        if let Some(parent_val) = map.get(parent_key) {
-                            if let serde_json::Value::Object(nested) = parent_val {
-                                if let Some(child_val) = nested.get(child_key) {
-                                    let entry = result.entry(parent_key.to_string())
-                                        .or_insert_with(|| serde_json::json!({}));
-                                    if let serde_json::Value::Object(ref mut m) = entry {
-                                        m.insert(child_key.to_string(), child_val.clone());
-                                    }
+                        if let Some(serde_json::Value::Object(nested)) = map.get(parent_key) {
+                            if let Some(child_val) = nested.get(child_key) {
+                                let entry = result.entry(parent_key.to_string())
+                                    .or_insert_with(|| serde_json::json!({}));
+                                if let serde_json::Value::Object(ref mut m) = entry {
+                                    m.insert(child_key.to_string(), child_val.clone());
                                 }
                             }
                         }
@@ -1359,17 +1364,17 @@ Callable from code_execution_20260120 sandboxes.")]
         const SYMBOLIC_BASE_K: f64 = 40.0;
 
         let bm25_k = match params.bm25_weight {
-            Some(w) if w == 0.0 => None,          // disabled
+            Some(0.0) => None,                     // disabled
             Some(w) => Some(BM25_BASE_K / w),     // weight=2.0 → k=30.0 (stronger influence)
             None => Some(BM25_BASE_K),             // default
         };
         let vector_k = match params.vector_weight {
-            Some(w) if w == 0.0 => None,
+            Some(0.0) => None,
             Some(w) => Some(VECTOR_BASE_K / w),
             None => Some(VECTOR_BASE_K),
         };
         let symbolic_k = match params.symbolic_weight {
-            Some(w) if w == 0.0 => None,
+            Some(0.0) => None,
             Some(w) => Some(SYMBOLIC_BASE_K / w),
             None => Some(SYMBOLIC_BASE_K),
         };
@@ -1901,7 +1906,7 @@ Callable from code_execution_20260120 sandboxes.")]
         let boost_tags = params.boost_tags.unwrap_or_default();
 
         // Branch on query presence: Some(non-empty) → query-based, None or empty → queryless.
-        let has_query = params.query.as_ref().map_or(false, |q| !q.trim().is_empty());
+        let has_query = params.query.as_ref().is_some_and(|q| !q.trim().is_empty());
 
         let mut result = if has_query {
             // Query-based path — needs embedding provider.

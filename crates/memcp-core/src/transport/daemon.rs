@@ -867,7 +867,7 @@ pub async fn create_embedding_provider(
             Ok(Arc::new(provider))
         }
         #[cfg(feature = "local-embed")]
-        "local" | _ => Ok(Arc::new(
+        _ => Ok(Arc::new(
             LocalEmbeddingProvider::new(&config.embedding.cache_dir, &config.embedding.local_model).await?,
         )),
         #[cfg(not(feature = "local-embed"))]
@@ -910,7 +910,7 @@ pub fn create_extraction_provider(
                 config.extraction.max_content_chars,
             )?))
         }
-        "ollama" | _ => Ok(Arc::new(OllamaExtractionProvider::new(
+        _ => Ok(Arc::new(OllamaExtractionProvider::new(
             config.extraction.ollama_base_url.clone(),
             config.extraction.ollama_model.clone(),
             config.extraction.max_content_chars,
@@ -945,7 +945,7 @@ pub fn create_qi_reranking_provider(
             .map_err(|e| anyhow::anyhow!("{}", e))?;
             Ok(Arc::new(provider))
         }
-        "ollama" | _ => Ok(Arc::new(OllamaQueryIntelligenceProvider::new(
+        _ => Ok(Arc::new(OllamaQueryIntelligenceProvider::new(
             config.query_intelligence.ollama_base_url.clone(),
             config.query_intelligence.reranking_ollama_model.clone(),
         ))),
@@ -1017,7 +1017,7 @@ async fn create_tier_provider(
             Ok(Arc::new(provider))
         }
         #[cfg(feature = "local-embed")]
-        "local" | _ => {
+        _ => {
             let model = tier.model.clone()
                 .unwrap_or_else(|| config.embedding.local_model.clone());
             Ok(Arc::new(

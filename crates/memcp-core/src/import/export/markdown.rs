@@ -5,9 +5,9 @@
 //!
 //! Format:
 //!   # Memory Archive
-//!   ## <type_hint>
+//!   ## \<type_hint\>
 //!   > content
-//!   *source: X | tags: a, b | created: 2024-01-01*
+//!   > *source: X | tags: a, b | created: 2024-01-01*
 //!
 //!   ---
 

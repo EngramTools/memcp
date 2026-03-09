@@ -4,15 +4,6 @@
 //! (component health + resource usage). Runs on separate configurable port.
 //! Spawned by transport/daemon, queries storage/ for live metrics.
 
-/// Health HTTP server for container lifecycle probes.
-///
-/// Provides:
-///   GET /health — liveness/readiness probe (200 = ready, 503 = starting/not ready)
-///   GET /status — operational status with component health and resource usage vs limits
-///
-/// Runs on a separate configurable port (default: 9090) from the MCP stdio transport.
-/// Bind failure is non-fatal: logs a warning and returns rather than crashing the daemon.
-
 use axum::{Router, Json, extract::State, routing::get, http::StatusCode};
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Serialize;

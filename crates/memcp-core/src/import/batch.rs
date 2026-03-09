@@ -105,8 +105,8 @@ pub async fn batch_insert_memories(
         .bind(&type_hint)
         .bind(&chunk.source)
         .bind(&tags_json)
-        .bind(&now)
-        .bind(&now)
+        .bind(now)
+        .bind(now)
         .bind(embedding_status)
         .bind(&chunk.actor)
         .bind(content_hash)
@@ -149,8 +149,8 @@ pub async fn batch_insert_memories(
                 .bind(model_name)
                 .bind("imported")
                 .bind(dimension)
-                .bind(&now)
-                .bind(&now)
+                .bind(now)
+                .bind(now)
                 .execute(&mut *tx)
                 .await
                 {

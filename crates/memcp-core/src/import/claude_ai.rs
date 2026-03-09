@@ -44,6 +44,7 @@ struct ClaudeMessage {
     /// Message text.
     text: Option<String>,
     /// ISO 8601 creation time for this message.
+    #[allow(dead_code)] // Present in JSON schema, not needed for import logic
     created_at: Option<String>,
 }
 
