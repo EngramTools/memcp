@@ -460,7 +460,7 @@ Plans:
 - **Goal**: README overhaul (slim landing page), docs/ folder with config reference, CLI reference, API reference, MCP tools reference, architecture guide. Dual-format QA playbook: human-readable markdown + machine-parseable YAML test cases for AI agent execution.
 - **Status**: Planned
 - **Depends on**: Phases 08.4, 08.5, 08.6, 08.7, 08.8
-- **Plans:** 3/4 plans executed
+- **Plans:** 4/4 plans complete
 - **Note**: QA playbook absorbed from dropped Phase 08.1. Playbook structured for AI agent execution (machine-parseable assertions, clear pass/fail criteria) as well as human walkthroughs.
 
 Plans:
