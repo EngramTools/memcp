@@ -463,7 +463,8 @@ async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
     println!("\nClearing corpus...");
     corpus::clear_corpus(pool).await?;
 
-    // Also clear curation_runs to avoid windowing issues
+    // DESTRUCTIVE: Clears all curation_runs on the public schema.
+    // Safe because --destructive flag was required at CLI entry point.
     sqlx::query("TRUNCATE TABLE curation_runs CASCADE")
         .execute(pool)
         .await

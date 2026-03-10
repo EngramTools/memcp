@@ -11,9 +11,7 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 use std::time::Instant;
 
-use super::{
-    PoisonedMemoryInfo, TrustCorpusConfig, TrustCorpusResult, TrustDistributionSummary,
-};
+use super::{PoisonedMemoryInfo, TrustCorpusConfig, TrustCorpusResult, TrustDistributionSummary};
 
 // ─── Poisoned Memory Templates ───────────────────────────────────────────────
 
@@ -119,9 +117,9 @@ pub const POISONED_TEMPLATES: &[PoisonedTemplate] = &[
 pub fn assign_clean_trust_level(index: usize) -> f32 {
     let mut rng = rand::thread_rng();
     match index % 10 {
-        0..=5 => rng.gen_range(0.7..=1.0),  // 60%
-        6..=8 => rng.gen_range(0.3..0.7),   // 30%
-        _ => rng.gen_range(0.05..0.3),       // 10%
+        0..=5 => rng.gen_range(0.7..=1.0), // 60%
+        6..=8 => rng.gen_range(0.3..0.7),  // 30%
+        _ => rng.gen_range(0.05..0.3),     // 10%
     }
 }
 
@@ -133,9 +131,9 @@ pub fn assign_clean_trust_level(index: usize) -> f32 {
 pub fn assign_poisoned_trust_level(index: usize) -> f32 {
     let mut rng = rand::thread_rng();
     match index % 3 {
-        0 => rng.gen_range(0.7..=1.0),   // high
-        1 => rng.gen_range(0.3..0.7),    // medium
-        _ => rng.gen_range(0.05..0.3),   // low
+        0 => rng.gen_range(0.7..=1.0), // high
+        1 => rng.gen_range(0.3..0.7),  // medium
+        _ => rng.gen_range(0.05..0.3), // low
     }
 }
 
@@ -196,8 +194,18 @@ fn type_hint_for(i: usize) -> &'static str {
 /// Tag assignment: 30% no tags, 40% one tag, 30% two tags.
 fn tags_for(i: usize) -> Option<serde_json::Value> {
     let tag_pool = [
-        "rust", "memory", "search", "config", "daemon", "cli", "gc", "embedding",
-        "postgres", "api", "performance", "async",
+        "rust",
+        "memory",
+        "search",
+        "config",
+        "daemon",
+        "cli",
+        "gc",
+        "embedding",
+        "postgres",
+        "api",
+        "performance",
+        "async",
     ];
     match i % 10 {
         0..=2 => None,
@@ -292,7 +300,8 @@ pub async fn seed_corpus(pool: &PgPool, count: usize, num_projects: usize) -> Re
     }
 
     if remainder > 0 {
-        let (ids, sql, params) = build_memory_batch(full_batches * BATCH_SIZE, remainder, num_projects);
+        let (ids, sql, params) =
+            build_memory_batch(full_batches * BATCH_SIZE, remainder, num_projects);
         execute_memory_batch(pool, &sql, &params).await?;
         inserted_ids.extend(ids);
         pb.inc(remainder as u64);
@@ -381,9 +390,14 @@ pub async fn seed_corpus(pool: &PgPool, count: usize, num_projects: usize) -> Re
     Ok(())
 }
 
-/// Truncate the `memory_embeddings` and `memories` tables to reset state before a test run.
+/// **DESTRUCTIVE:** Truncate the `memory_embeddings` and `memories` tables to reset state.
 ///
-/// Uses CASCADE to handle any foreign key dependencies automatically.
+/// Operates on the PUBLIC schema with CASCADE. This will destroy ALL memory data
+/// in the target database. Only call from load test binary (which requires --destructive flag).
+///
+/// # Safety
+/// Caller must ensure the target database is a test/development instance.
+/// The load_test binary enforces this via the `--destructive` CLI flag.
 pub async fn clear_corpus(pool: &PgPool) -> Result<()> {
     sqlx::query("TRUNCATE TABLE memory_embeddings, memories CASCADE")
         .execute(pool)
@@ -519,7 +533,9 @@ pub async fn seed_trust_corpus(
     let poison_pb = ProgressBar::new(poison_count as u64);
     poison_pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:40.red/white} {pos}/{len} poisoned memories ({eta})")
+            .template(
+                "[{elapsed_precise}] {bar:40.red/white} {pos}/{len} poisoned memories ({eta})",
+            )
             .unwrap_or_else(|_| ProgressStyle::default_bar()),
     );
 
@@ -722,7 +738,12 @@ fn build_memory_batch(
         value_clauses.push(format!(
             "(${}::text, ${}, ${}, ${}::jsonb, ${}, \
              'agent', 'global', NOW(), NOW(), false, ${}, NULL, 'done', 'load-test-batch')",
-            p, p + 1, p + 2, p + 3, p + 4, p + 5
+            p,
+            p + 1,
+            p + 2,
+            p + 3,
+            p + 4,
+            p + 5
         ));
 
         hashes.push(fnv1a_hex(&content));
@@ -844,15 +865,43 @@ mod tests {
         );
 
         // Count by signal_count
-        let single = POISONED_TEMPLATES.iter().filter(|t| t.signal_count == 1).count();
-        let dual = POISONED_TEMPLATES.iter().filter(|t| t.signal_count == 2).count();
-        let triple = POISONED_TEMPLATES.iter().filter(|t| t.signal_count == 3).count();
-        let llm_only = POISONED_TEMPLATES.iter().filter(|t| t.signal_count == 0).count();
+        let single = POISONED_TEMPLATES
+            .iter()
+            .filter(|t| t.signal_count == 1)
+            .count();
+        let dual = POISONED_TEMPLATES
+            .iter()
+            .filter(|t| t.signal_count == 2)
+            .count();
+        let triple = POISONED_TEMPLATES
+            .iter()
+            .filter(|t| t.signal_count == 3)
+            .count();
+        let llm_only = POISONED_TEMPLATES
+            .iter()
+            .filter(|t| t.signal_count == 0)
+            .count();
 
-        assert!(single >= 4, "Expected at least 4 single-signal templates, got {}", single);
-        assert!(dual >= 4, "Expected at least 4 dual-signal templates, got {}", dual);
-        assert!(triple >= 4, "Expected at least 4 triple-signal templates, got {}", triple);
-        assert!(llm_only >= 3, "Expected at least 3 LLM-only templates, got {}", llm_only);
+        assert!(
+            single >= 4,
+            "Expected at least 4 single-signal templates, got {}",
+            single
+        );
+        assert!(
+            dual >= 4,
+            "Expected at least 4 dual-signal templates, got {}",
+            dual
+        );
+        assert!(
+            triple >= 4,
+            "Expected at least 4 triple-signal templates, got {}",
+            triple
+        );
+        assert!(
+            llm_only >= 3,
+            "Expected at least 3 LLM-only templates, got {}",
+            llm_only
+        );
     }
 
     #[test]
@@ -865,7 +914,12 @@ mod tests {
 
         for i in 0..n {
             let trust = assign_clean_trust_level(i);
-            assert!(trust >= 0.05 && trust <= 1.0, "Trust {} out of range: {}", i, trust);
+            assert!(
+                trust >= 0.05 && trust <= 1.0,
+                "Trust {} out of range: {}",
+                i,
+                trust
+            );
             if trust >= 0.7 {
                 high += 1;
             } else if trust >= 0.3 {
@@ -906,7 +960,12 @@ mod tests {
 
         for i in 0..n {
             let trust = assign_poisoned_trust_level(i);
-            assert!(trust >= 0.05 && trust <= 1.0, "Poisoned trust {} out of range: {}", i, trust);
+            assert!(
+                trust >= 0.05 && trust <= 1.0,
+                "Poisoned trust {} out of range: {}",
+                i,
+                trust
+            );
             if trust >= 0.7 {
                 high += 1;
             } else if trust >= 0.3 {
