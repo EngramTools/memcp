@@ -457,10 +457,17 @@ Plans:
 - No new capabilities — every route maps 1:1 to an existing CLI command.
 
 ## Phase 09: Documentation & QA Playbook
-- **Goal**: README overhaul, config reference, architecture guide. Must cover both standalone and engram-bundled usage. Includes a scripted QA playbook (CLI + MCP flows against real Postgres) designed to be run by both humans and an AI QA agent.
+- **Goal**: README overhaul (slim landing page), docs/ folder with config reference, CLI reference, API reference, MCP tools reference, architecture guide. Dual-format QA playbook: human-readable markdown + machine-parseable YAML test cases for AI agent execution.
 - **Status**: Planned
 - **Depends on**: Phases 08.4, 08.5, 08.6, 08.7, 08.8
-- **Note**: QA playbook absorbed from dropped Phase 08.1. Playbook should be structured for AI agent execution (machine-parseable assertions, clear pass/fail criteria) as well as human walkthroughs.
+- **Plans:** 4 plans
+- **Note**: QA playbook absorbed from dropped Phase 08.1. Playbook structured for AI agent execution (machine-parseable assertions, clear pass/fail criteria) as well as human walkthroughs.
+
+Plans:
+- [ ] 09-01-PLAN.md — README overhaul, architecture doc move, memcp.toml.example
+- [ ] 09-02-PLAN.md — Config reference and CLI reference
+- [ ] 09-03-PLAN.md — HTTP API reference and MCP tools reference
+- [ ] 09-04-PLAN.md — QA playbook (YAML schema, test cases, human playbook)
 
 ## Phase 10: Production Hardening
 - **Goal**: Connection pool observability, global rate limiting on HTTP API, Prometheus metrics endpoint, and structured logging improvements. All work targets the daemon process (port 9090).
