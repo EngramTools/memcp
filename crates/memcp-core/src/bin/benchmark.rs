@@ -1,15 +1,15 @@
-/// Benchmark CLI binary for LongMemEval and LoCoMo evaluation.
-///
-/// Dispatches to the appropriate runner based on --benchmark flag:
-///   --benchmark longmemeval (default): LongMemEval accuracy benchmark
-///   --benchmark locomo: LoCoMo F1 benchmark with per-sample isolation
-///
-/// Both runners append results to benchmark_history.jsonl after completion.
-/// Supports single config or "all" for comparison across vector-only / hybrid / hybrid+qi.
-/// CI integration via --subset (LongMemEval) and --min-accuracy (exit code threshold).
-///
-/// Requires the `local-embed` feature (fastembed). Build with:
-///   cargo build --features local-embed --bin benchmark
+//! Benchmark CLI binary for LongMemEval and LoCoMo evaluation.
+//!
+//! Dispatches to the appropriate runner based on --benchmark flag:
+//!   --benchmark longmemeval (default): LongMemEval accuracy benchmark
+//!   --benchmark locomo: LoCoMo F1 benchmark with per-sample isolation
+//!
+//! Both runners append results to benchmark_history.jsonl after completion.
+//! Supports single config or "all" for comparison across vector-only / hybrid / hybrid+qi.
+//! CI integration via --subset (LongMemEval) and --min-accuracy (exit code threshold).
+//!
+//! Requires the `local-embed` feature (fastembed). Build with:
+//!   cargo build --features local-embed --bin benchmark
 
 #[cfg(feature = "local-embed")]
 use clap::Parser;
@@ -21,21 +21,23 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[cfg(feature = "local-embed")]
+use memcp::benchmark::check_database_url_safety;
+#[cfg(feature = "local-embed")]
 use memcp::benchmark::dataset::load_dataset;
+#[cfg(feature = "local-embed")]
+use memcp::benchmark::default_configs;
 #[cfg(feature = "local-embed")]
 use memcp::benchmark::locomo::dataset::load_locomo_dataset;
 #[cfg(feature = "local-embed")]
 use memcp::benchmark::locomo::runner::run_locomo_benchmark;
 #[cfg(feature = "local-embed")]
-use memcp::benchmark::locomo::{
-    LoCoMoIngestionMode, LoCoMoQuestionResult, load_locomo_checkpoint,
-};
+use memcp::benchmark::locomo::{load_locomo_checkpoint, LoCoMoIngestionMode, LoCoMoQuestionResult};
 #[cfg(feature = "local-embed")]
-use memcp::benchmark::report::{self, BenchmarkReport, HistoryEntry, append_history};
+use memcp::benchmark::report::{self, append_history, BenchmarkReport, HistoryEntry};
 #[cfg(feature = "local-embed")]
 use memcp::benchmark::runner::{load_checkpoint, run_benchmark};
 #[cfg(feature = "local-embed")]
-use memcp::benchmark::default_configs;
+use memcp::config::SearchConfig;
 #[cfg(feature = "local-embed")]
 use memcp::embedding::local::LocalEmbeddingProvider;
 #[cfg(feature = "local-embed")]
@@ -46,8 +48,6 @@ use memcp::embedding::pipeline::EmbeddingPipeline;
 use memcp::intelligence::query_intelligence::openai::OpenAIQueryIntelligenceProvider;
 #[cfg(feature = "local-embed")]
 use memcp::intelligence::query_intelligence::QueryIntelligenceProvider;
-#[cfg(feature = "local-embed")]
-use memcp::config::SearchConfig;
 #[cfg(feature = "local-embed")]
 use memcp::store::postgres::PostgresMemoryStore;
 
@@ -114,6 +114,11 @@ struct Cli {
     #[arg(long, default_value = "google/gemini-2.5-flash")]
     qi_model: String,
 
+    /// Acknowledge that this benchmark will create/destroy a 'benchmark' schema.
+    /// Required for safety -- prevents accidental runs against production databases.
+    #[arg(long)]
+    destructive: bool,
+
     /// Keep the benchmark schema after run (default: drop for clean ephemeral isolation)
     #[arg(long)]
     keep_schema: bool,
@@ -163,11 +168,8 @@ async fn build_embedding_provider(
             .map_err(|e| anyhow::anyhow!("Failed to create embedding provider: {}", e))?;
             Ok(Arc::new(provider))
         }
-        "local" | _ => {
-            let model = cli
-                .embedding_model
-                .as_deref()
-                .unwrap_or("BGESmallENV15");
+        _ => {
+            let model = cli.embedding_model.as_deref().unwrap_or("BGESmallENV15");
             let provider = LocalEmbeddingProvider::new(".fastembed_cache", model).await?;
             Ok(Arc::new(provider))
         }
@@ -202,7 +204,27 @@ async fn run() -> Result<(), anyhow::Error> {
         )
         .init();
 
-    // 3. Dispatch based on --benchmark
+    // 3. Safety checks
+    if !cli.destructive {
+        eprintln!("ERROR: Benchmark runs are destructive (TRUNCATE + DROP SCHEMA CASCADE).");
+        eprintln!("Pass --destructive to acknowledge and proceed.");
+        eprintln!();
+        eprintln!("This benchmark will:");
+        eprintln!("  - Create a 'benchmark' schema in the target database");
+        eprintln!("  - TRUNCATE all memory tables within that schema per question");
+        eprintln!("  - DROP the benchmark schema after completion (unless --keep-schema)");
+        std::process::exit(1);
+    }
+
+    if check_database_url_safety(&cli.database_url) {
+        eprintln!("WARNING: Database URL looks like a production database!");
+        eprintln!("  URL: {}", cli.database_url);
+        eprintln!("  The benchmark creates an isolated 'benchmark' schema but shares the database.");
+        eprintln!("  Ensure this is intentional.");
+        eprintln!();
+    }
+
+    // 4. Dispatch based on --benchmark
     match cli.benchmark.as_str() {
         "longmemeval" => run_longmemeval(&cli).await,
         "locomo" => run_locomo(&cli).await,
@@ -217,9 +239,10 @@ async fn run() -> Result<(), anyhow::Error> {
 #[cfg(feature = "local-embed")]
 async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
     let run_ts = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
-    let dataset_path = cli.dataset.clone().unwrap_or_else(|| {
-        PathBuf::from("data/longmemeval/longmemeval_s_cleaned.json")
-    });
+    let dataset_path = cli
+        .dataset
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("data/longmemeval/longmemeval_s_cleaned.json"));
 
     // Load dataset
     tracing::info!(path = %dataset_path.display(), "Loading LongMemEval dataset");
@@ -230,7 +253,11 @@ async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
     if let Some(n) = cli.subset {
         questions.sort_by(|a, b| a.question_id.cmp(&b.question_id));
         questions.truncate(n);
-        tracing::info!(subset = n, "Applied subset — using {} questions", questions.len());
+        tracing::info!(
+            subset = n,
+            "Applied subset — using {} questions",
+            questions.len()
+        );
     }
 
     // Print summary
@@ -297,28 +324,24 @@ async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
         dim = embedding_provider.dimension(),
         "Embedding provider ready"
     );
-    let pipeline = EmbeddingPipeline::new_single(
-        embedding_provider.clone(),
-        store.clone(),
-        1000,
-        None,
-        None,
-    );
+    let pipeline =
+        EmbeddingPipeline::new_single(embedding_provider.clone(), store.clone(), 1000, None, None);
 
     // Construct QI provider if API key provided
-    let qi_provider: Option<Arc<dyn QueryIntelligenceProvider>> =
-        if let Some(ref api_key) = cli.qi_api_key {
-            tracing::info!(base_url = %cli.qi_base_url, model = %cli.qi_model, "Initializing QI provider");
-            let provider = OpenAIQueryIntelligenceProvider::new(
-                cli.qi_base_url.clone(),
-                api_key.clone(),
-                cli.qi_model.clone(),
-            )
-            .map_err(|e| anyhow::anyhow!("Failed to create QI provider: {}", e))?;
-            Some(Arc::new(provider))
-        } else {
-            None
-        };
+    let qi_provider: Option<Arc<dyn QueryIntelligenceProvider>> = if let Some(ref api_key) =
+        cli.qi_api_key
+    {
+        tracing::info!(base_url = %cli.qi_base_url, model = %cli.qi_model, "Initializing QI provider");
+        let provider = OpenAIQueryIntelligenceProvider::new(
+            cli.qi_base_url.clone(),
+            api_key.clone(),
+            cli.qi_model.clone(),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to create QI provider: {}", e))?;
+        Some(Arc::new(provider))
+    } else {
+        None
+    };
 
     // Determine configs to run
     let all_configs = default_configs();
@@ -337,7 +360,11 @@ async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
         vec![found]
     };
 
-    if qi_provider.is_none() && configs_to_run.iter().any(|c| c.qi_expansion || c.qi_reranking) {
+    if qi_provider.is_none()
+        && configs_to_run
+            .iter()
+            .any(|c| c.qi_expansion || c.qi_reranking)
+    {
         tracing::warn!(
             "hybrid+qi config selected but --qi-api-key not provided. \
              QI expansion/reranking will be skipped (results identical to hybrid)."
@@ -350,8 +377,7 @@ async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
     for config in &configs_to_run {
         println!("--- Running config: {} ---", config.name);
 
-        let checkpoint_path = checkpoint_dir
-            .join(format!("{}_checkpoint.json", config.name));
+        let checkpoint_path = checkpoint_dir.join(format!("{}_checkpoint.json", config.name));
 
         let resume_state = if cli.resume {
             match load_checkpoint(&checkpoint_path) {
@@ -394,8 +420,7 @@ async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
         println!();
 
         // Save report with config name + metric type in the timestamped directory
-        let report_path = run_dir
-            .join(format!("{}_accuracy_report.json", config.name));
+        let report_path = run_dir.join(format!("{}_accuracy_report.json", config.name));
         report::save_report(&report, &report_path)?;
         tracing::info!(path = %report_path.display(), "Report saved");
 
@@ -477,7 +502,11 @@ async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
     // Apply subset if specified
     if let Some(n) = cli.subset {
         samples.truncate(n);
-        tracing::info!(subset = n, "Applied subset — using {} samples", samples.len());
+        tracing::info!(
+            subset = n,
+            "Applied subset — using {} samples",
+            samples.len()
+        );
     }
 
     // Print summary
@@ -555,28 +584,24 @@ async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
         dim = embedding_provider.dimension(),
         "Embedding provider ready"
     );
-    let pipeline = EmbeddingPipeline::new_single(
-        embedding_provider.clone(),
-        store.clone(),
-        1000,
-        None,
-        None,
-    );
+    let pipeline =
+        EmbeddingPipeline::new_single(embedding_provider.clone(), store.clone(), 1000, None, None);
 
     // Construct QI provider if API key provided
-    let qi_provider: Option<Arc<dyn QueryIntelligenceProvider>> =
-        if let Some(ref api_key) = cli.qi_api_key {
-            tracing::info!(base_url = %cli.qi_base_url, model = %cli.qi_model, "Initializing QI provider");
-            let provider = OpenAIQueryIntelligenceProvider::new(
-                cli.qi_base_url.clone(),
-                api_key.clone(),
-                cli.qi_model.clone(),
-            )
-            .map_err(|e| anyhow::anyhow!("Failed to create QI provider: {}", e))?;
-            Some(Arc::new(provider))
-        } else {
-            None
-        };
+    let qi_provider: Option<Arc<dyn QueryIntelligenceProvider>> = if let Some(ref api_key) =
+        cli.qi_api_key
+    {
+        tracing::info!(base_url = %cli.qi_base_url, model = %cli.qi_model, "Initializing QI provider");
+        let provider = OpenAIQueryIntelligenceProvider::new(
+            cli.qi_base_url.clone(),
+            api_key.clone(),
+            cli.qi_model.clone(),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to create QI provider: {}", e))?;
+        Some(Arc::new(provider))
+    } else {
+        None
+    };
 
     // Determine configs to run
     let all_configs = default_configs();
@@ -595,7 +620,11 @@ async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
         vec![found]
     };
 
-    if qi_provider.is_none() && configs_to_run.iter().any(|c| c.qi_expansion || c.qi_reranking) {
+    if qi_provider.is_none()
+        && configs_to_run
+            .iter()
+            .any(|c| c.qi_expansion || c.qi_reranking)
+    {
         tracing::warn!(
             "hybrid+qi config selected but --qi-api-key not provided. \
              QI expansion/reranking will be skipped (results identical to hybrid)."
@@ -608,8 +637,7 @@ async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
     for config in &configs_to_run {
         println!("--- Running config: {} ---", config.name);
 
-        let checkpoint_path = checkpoint_dir
-            .join(format!("{}_checkpoint.json", config.name));
+        let checkpoint_path = checkpoint_dir.join(format!("{}_checkpoint.json", config.name));
 
         let resume_state = if cli.resume {
             match load_locomo_checkpoint(&checkpoint_path) {
@@ -654,8 +682,7 @@ async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
         println!();
 
         // Save report with config name + metric type in the timestamped directory
-        let report_path = run_dir
-            .join(format!("{}_f1_report.json", config.name));
+        let report_path = run_dir.join(format!("{}_f1_report.json", config.name));
         let json = serde_json::to_string_pretty(&locomo_report)?;
         std::fs::write(&report_path, json)?;
         tracing::info!(path = %report_path.display(), "LoCoMo report saved");
@@ -769,7 +796,13 @@ fn generate_locomo_report(
         .map(|(&cat_id, f1s)| {
             let mean_f1 = f1s.iter().sum::<f64>() / f1s.len() as f64;
             let label = memcp::benchmark::locomo::category_label(cat_id).to_string();
-            (label, LoCoMoCategoryReport { mean_f1, count: f1s.len() })
+            (
+                label,
+                LoCoMoCategoryReport {
+                    mean_f1,
+                    count: f1s.len(),
+                },
+            )
         })
         .collect();
 
@@ -825,10 +858,7 @@ fn print_locomo_report(report: &LoCoMoRunReport) {
     println!("Date: {}", report.timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
     println!("Questions: {}", report.question_count);
     println!("Overall F1: {:.1}%", report.overall_f1 * 100.0);
-    println!(
-        "Task-Averaged F1: {:.1}%",
-        report.task_averaged_f1 * 100.0
-    );
+    println!("Task-Averaged F1: {:.1}%", report.task_averaged_f1 * 100.0);
     println!();
     println!("Per-Category F1:");
 
