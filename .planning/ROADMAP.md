@@ -614,12 +614,12 @@ Plans:
 
 ## Phase 20: Test Quality Fixes
 - **Goal**: Fix minor test quality issues identified in v1.0 audit. (1) `test_offset_deprecation_warning` (Phase 07.5) doesn't exercise the actual `tracing::warn` code path — fix to verify warning emission. (2) `false_positive_count` in load test trust metrics (Phase 10.2) is hardcoded to 0 — wire actual tracking or remove the placeholder.
-- **Status**: Planned
-- **Plans:** 1 plan
+- **Status**: Complete
+- **Plans:** 1/1 complete
 - **Requirements:** [BENCH-SAFE-01, BENCH-SAFE-02, BENCH-SAFE-03, BENCH-SAFE-04]
 
 Plans:
-- [ ] 20-01-PLAN.md — Fix test quality issues (offset deprecation warning + false_positive_count)
+- [x] 20-01-PLAN.md — Fix test quality issues (offset deprecation warning + false_positive_count) (completed 2026-03-10)
 - **Depends on**: Phase 18
 - **Gap Closure**: Closes code debt items from v1.0 audit (affects phases 07.5, 10.2)
 
