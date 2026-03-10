@@ -6,11 +6,12 @@
 mod common;
 use common::builders::MemoryBuilder;
 
-use std::sync::Arc;
+use memcp::config::Config;
 use memcp::store::postgres::PostgresMemoryStore;
 use memcp::store::{ListFilter, MemoryStore, UpdateMemory};
-use memcp::config::Config;
 use sqlx::PgPool;
+use std::sync::Arc;
+use tracing_test::traced_test;
 
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
 async fn test_store_and_get_memory(pool: PgPool) {
@@ -38,7 +39,12 @@ async fn test_update_memory(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let created = store
-        .store(MemoryBuilder::new().content("Original content").source("test").build())
+        .store(
+            MemoryBuilder::new()
+                .content("Original content")
+                .source("test")
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -65,7 +71,12 @@ async fn test_delete_memory(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let created = store
-        .store(MemoryBuilder::new().content("Memory to delete").source("test").build())
+        .store(
+            MemoryBuilder::new()
+                .content("Memory to delete")
+                .source("test")
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -81,7 +92,12 @@ async fn test_list_memories_with_pagination(pool: PgPool) {
 
     for i in 0..5 {
         store
-            .store(MemoryBuilder::new().content(&format!("Memory {}", i)).source("test").build())
+            .store(
+                MemoryBuilder::new()
+                    .content(&format!("Memory {}", i))
+                    .source("test")
+                    .build(),
+            )
             .await
             .unwrap();
     }
@@ -135,9 +151,20 @@ async fn test_list_memories_with_pagination(pool: PgPool) {
 async fn test_list_memories_with_filter(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
-    for (content, type_hint) in [("Fact 1", "fact"), ("Fact 2", "fact"), ("Pref 1", "preference"), ("Event 1", "event")] {
+    for (content, type_hint) in [
+        ("Fact 1", "fact"),
+        ("Fact 2", "fact"),
+        ("Pref 1", "preference"),
+        ("Event 1", "event"),
+    ] {
         store
-            .store(MemoryBuilder::new().content(content).type_hint(type_hint).source("test").build())
+            .store(
+                MemoryBuilder::new()
+                    .content(content)
+                    .type_hint(type_hint)
+                    .source("test")
+                    .build(),
+            )
             .await
             .unwrap();
     }
@@ -161,13 +188,25 @@ async fn test_bulk_delete(pool: PgPool) {
 
     for i in 0..3 {
         store
-            .store(MemoryBuilder::new().content(&format!("Temp {}", i)).type_hint("temporary").source("test").build())
+            .store(
+                MemoryBuilder::new()
+                    .content(&format!("Temp {}", i))
+                    .type_hint("temporary")
+                    .source("test")
+                    .build(),
+            )
             .await
             .unwrap();
     }
     for i in 0..2 {
         store
-            .store(MemoryBuilder::new().content(&format!("Perm {}", i)).type_hint("permanent").source("test").build())
+            .store(
+                MemoryBuilder::new()
+                    .content(&format!("Perm {}", i))
+                    .type_hint("permanent")
+                    .source("test")
+                    .build(),
+            )
             .await
             .unwrap();
     }
@@ -199,14 +238,19 @@ async fn test_build_status_json_has_sidecar_fields(pool: PgPool) {
     let store = Arc::new(PostgresMemoryStore::from_pool(pool).await.unwrap());
     let config = Config::default();
     let (status, alive, _last_ingest, _pending, _total) =
-        memcp::cli::build_status(&store, &config, false).await.unwrap();
+        memcp::cli::build_status(&store, &config, false)
+            .await
+            .unwrap();
 
     // Should have all top-level sections
     assert!(status.get("sidecar").is_some(), "Missing sidecar section");
     assert!(status.get("model").is_some(), "Missing model section");
     assert!(status.get("daemon").is_some(), "Missing daemon section");
     assert!(status.get("pending").is_some(), "Missing pending section");
-    assert!(status.get("total_memories").is_some(), "Missing total_memories");
+    assert!(
+        status.get("total_memories").is_some(),
+        "Missing total_memories"
+    );
 
     // Daemon should not be alive in test context (no heartbeat written)
     assert!(!alive, "Daemon should not be alive in test context");
@@ -222,15 +266,23 @@ async fn test_build_status_with_check(pool: PgPool) {
     let store = Arc::new(PostgresMemoryStore::from_pool(pool).await.unwrap());
     let config = Config::default();
     let (status, _alive, _last_ingest, _pending, _total) =
-        memcp::cli::build_status(&store, &config, true).await.unwrap();
+        memcp::cli::build_status(&store, &config, true)
+            .await
+            .unwrap();
 
     // Should have checks section when check=true
     assert!(status.get("checks").is_some(), "Missing checks section");
     let checks = status.get("checks").unwrap();
     assert!(checks.get("database").is_some(), "Missing database check");
     assert!(checks.get("ollama").is_some(), "Missing ollama check");
-    assert!(checks.get("model_cache").is_some(), "Missing model_cache check");
-    assert!(checks.get("watch_paths").is_some(), "Missing watch_paths check");
+    assert!(
+        checks.get("model_cache").is_some(),
+        "Missing model_cache check"
+    );
+    assert!(
+        checks.get("watch_paths").is_some(),
+        "Missing watch_paths check"
+    );
 
     // DB should be reachable (we're running in a test with active pool)
     assert_eq!(checks.get("database").unwrap().as_bool(), Some(true));
@@ -255,7 +307,11 @@ async fn test_feedback_useful(pool: PgPool) {
 
     // Store a memory
     let mem = store
-        .store(MemoryBuilder::new().content("Rust is a systems programming language").build())
+        .store(
+            MemoryBuilder::new()
+                .content("Rust is a systems programming language")
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -269,10 +325,7 @@ async fn test_feedback_useful(pool: PgPool) {
     store.apply_feedback(&mem.id, "useful").await.unwrap();
 
     // Read back the salience row and verify stability increased
-    let rows = store
-        .get_salience_data(&[mem.id.clone()])
-        .await
-        .unwrap();
+    let rows = store.get_salience_data(&[mem.id.clone()]).await.unwrap();
     let row = rows.get(&mem.id).unwrap();
 
     assert!(
@@ -294,7 +347,11 @@ async fn test_feedback_irrelevant(pool: PgPool) {
 
     // Store a memory
     let mem = store
-        .store(MemoryBuilder::new().content("Python is a general-purpose scripting language").build())
+        .store(
+            MemoryBuilder::new()
+                .content("Python is a general-purpose scripting language")
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -308,10 +365,7 @@ async fn test_feedback_irrelevant(pool: PgPool) {
     store.apply_feedback(&mem.id, "irrelevant").await.unwrap();
 
     // Read back the salience row and verify stability decreased below 1.0
-    let rows = store
-        .get_salience_data(&[mem.id.clone()])
-        .await
-        .unwrap();
+    let rows = store.get_salience_data(&[mem.id.clone()]).await.unwrap();
     let row = rows.get(&mem.id).unwrap();
 
     assert!(
@@ -337,7 +391,11 @@ async fn test_search_cursor_pagination(pool: PgPool) {
     // Store 5 memories with distinct content
     for i in 0..5usize {
         store
-            .store(MemoryBuilder::new().content(&format!("Unique search content item number {}", i)).build())
+            .store(
+                MemoryBuilder::new()
+                    .content(&format!("Unique search content item number {}", i))
+                    .build(),
+            )
             .await
             .unwrap();
     }
@@ -348,16 +406,27 @@ async fn test_search_cursor_pagination(pool: PgPool) {
     let page1 = store
         .hybrid_search_paged(
             "search content item",
-            None,  // no embedding — BM25 only (daemon offline scenario)
-            2,     // limit
-            None,  // cursor — first page
-            None, None, None, Some(60.0), None, Some(40.0), None, None, None,
+            None, // no embedding — BM25 only (daemon offline scenario)
+            2,    // limit
+            None, // cursor — first page
+            None,
+            None,
+            None,
+            Some(60.0),
+            None,
+            Some(40.0),
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
 
     assert_eq!(page1.hits.len(), 2, "Page 1 should have 2 results");
-    assert!(page1.next_cursor.is_some(), "Page 1 should have a next_cursor");
+    assert!(
+        page1.next_cursor.is_some(),
+        "Page 1 should have a next_cursor"
+    );
 
     // Search page 2 using cursor from page 1
     let page2 = store
@@ -366,7 +435,15 @@ async fn test_search_cursor_pagination(pool: PgPool) {
             None,
             2,
             page1.next_cursor.clone(), // cursor from page 1
-            None, None, None, Some(60.0), None, Some(40.0), None, None, None,
+            None,
+            None,
+            None,
+            Some(60.0),
+            None,
+            Some(40.0),
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -396,7 +473,11 @@ async fn test_search_result_has_id(pool: PgPool) {
 
     // Store a memory
     store
-        .store(MemoryBuilder::new().content("The memory id field must always be present in search results").build())
+        .store(
+            MemoryBuilder::new()
+                .content("The memory id field must always be present in search results")
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -404,13 +485,17 @@ async fn test_search_result_has_id(pool: PgPool) {
     let hits = store
         .hybrid_search(
             "memory id field present",
-            None,      // no embedding
-            10,        // limit
-            None, None, None,
+            None, // no embedding
+            10,   // limit
+            None,
+            None,
+            None,
             Some(60.0), // bm25_k
             None,       // vector_k
             Some(40.0), // symbolic_k
-            None, None, None,
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -425,39 +510,35 @@ async fn test_search_result_has_id(pool: PgPool) {
     }
 }
 
-/// SCF-05: Offset-based pagination still works (backward compat) — no crash.
+/// SCF-05: Offset-based pagination emits a deprecation warning via tracing::warn.
 ///
-/// This test verifies that passing offset > 0 to hybrid_search does not crash
-/// the process. The deprecation warning is emitted to tracing (hard to assert
-/// in tests), but backward compatibility must be preserved.
+/// Calls `search_similar()` with `offset > 0` and `cursor: None`, then asserts
+/// that the deprecation warning text is captured. The warning fires at the top
+/// of `search_similar()` before any DB query, so an empty result set is fine.
+#[traced_test]
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
 async fn test_offset_deprecation_warning(pool: PgPool) {
+    use memcp::store::SearchFilter;
+
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
-    // Store a memory so the search has something to find
-    store
-        .store(MemoryBuilder::new().content("Offset pagination backward compatibility test").build())
-        .await
-        .unwrap();
+    // Call search_similar with offset > 0 and no cursor — triggers the warn!
+    let filter = SearchFilter {
+        offset: 1,
+        ..SearchFilter::default()
+    };
+    let result = store.search_similar(&filter).await;
 
-    // Run search with offset=1 — should complete without error (backward compat)
-    // The deprecation warning is a tracing event emitted to stderr, not assertable here.
-    let result = store
-        .hybrid_search(
-            "offset pagination",
-            None,
-            10,
-            None, None, None,
-            Some(60.0),
-            None,
-            Some(40.0),
-            None, None, None,
-        )
-        .await;
+    // Primary assertion: deprecation warning was emitted
+    assert!(
+        logs_contain("Offset-based search pagination is deprecated"),
+        "Expected deprecation warning to be emitted via tracing::warn"
+    );
 
+    // Secondary: backward compat — search_similar should still return Ok
     assert!(
         result.is_ok(),
-        "hybrid_search with offset should not crash, got error: {:?}",
+        "search_similar with offset should not crash, got error: {:?}",
         result.err()
     );
 }
@@ -491,12 +572,22 @@ async fn test_store_dedup_within_window(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let first = store
-        .store(MemoryBuilder::new().content("hello world").source("test").build())
+        .store(
+            MemoryBuilder::new()
+                .content("hello world")
+                .source("test")
+                .build(),
+        )
         .await
         .unwrap();
 
     let second = store
-        .store(MemoryBuilder::new().content("hello world").source("test").build())
+        .store(
+            MemoryBuilder::new()
+                .content("hello world")
+                .source("test")
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -518,13 +609,24 @@ async fn test_store_dedup_expired_window(pool: PgPool) {
     // When dedup_window_secs is 60 (default), this is outside the window.
     let old_time = chrono::Utc::now() - Duration::seconds(3600);
     let first = store
-        .store(MemoryBuilder::new().content("dedup expiry test").source("test").created_at(old_time).build())
+        .store(
+            MemoryBuilder::new()
+                .content("dedup expiry test")
+                .source("test")
+                .created_at(old_time)
+                .build(),
+        )
         .await
         .unwrap();
 
     // Store same content now — the first entry is outside the 60s window.
     let second = store
-        .store(MemoryBuilder::new().content("dedup expiry test").source("test").build())
+        .store(
+            MemoryBuilder::new()
+                .content("dedup expiry test")
+                .source("test")
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -540,12 +642,24 @@ async fn test_idempotency_key_returns_original(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let first = store
-        .store(MemoryBuilder::new().content("content A").source("test").idempotency_key("test-key-abc").build())
+        .store(
+            MemoryBuilder::new()
+                .content("content A")
+                .source("test")
+                .idempotency_key("test-key-abc")
+                .build(),
+        )
         .await
         .unwrap();
 
     let second = store
-        .store(MemoryBuilder::new().content("content A").source("test").idempotency_key("test-key-abc").build())
+        .store(
+            MemoryBuilder::new()
+                .content("content A")
+                .source("test")
+                .idempotency_key("test-key-abc")
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -562,13 +676,25 @@ async fn test_idempotency_key_conflict(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let first = store
-        .store(MemoryBuilder::new().content("content A").source("test").idempotency_key("conflict-key-k1").build())
+        .store(
+            MemoryBuilder::new()
+                .content("content A")
+                .source("test")
+                .idempotency_key("conflict-key-k1")
+                .build(),
+        )
         .await
         .unwrap();
 
     // Different content, same key — must return original (first wins)
     let second = store
-        .store(MemoryBuilder::new().content("content B — different!").source("test").idempotency_key("conflict-key-k1").build())
+        .store(
+            MemoryBuilder::new()
+                .content("content B — different!")
+                .source("test")
+                .idempotency_key("conflict-key-k1")
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -592,12 +718,19 @@ async fn test_store_decision_stability(pool: PgPool) {
     store.set_retention_config(memcp::config::RetentionConfig::default());
 
     let memory = store
-        .store(MemoryBuilder::new().content("Architecture decision: use PostgreSQL").type_hint("decision").build())
+        .store(
+            MemoryBuilder::new()
+                .content("Architecture decision: use PostgreSQL")
+                .type_hint("decision")
+                .build(),
+        )
         .await
         .unwrap();
 
     let salience_map = store.get_salience_data(&[memory.id.clone()]).await.unwrap();
-    let salience = salience_map.get(&memory.id).expect("salience row should exist");
+    let salience = salience_map
+        .get(&memory.id)
+        .expect("salience row should exist");
     assert!(
         (salience.stability - 5.0).abs() < 0.01,
         "decision type should have stability=5.0, got {}",
@@ -611,12 +744,19 @@ async fn test_store_observation_stability(pool: PgPool) {
     store.set_retention_config(memcp::config::RetentionConfig::default());
 
     let memory = store
-        .store(MemoryBuilder::new().content("I noticed the sky was clear today").type_hint("observation").build())
+        .store(
+            MemoryBuilder::new()
+                .content("I noticed the sky was clear today")
+                .type_hint("observation")
+                .build(),
+        )
         .await
         .unwrap();
 
     let salience_map = store.get_salience_data(&[memory.id.clone()]).await.unwrap();
-    let salience = salience_map.get(&memory.id).expect("salience row should exist");
+    let salience = salience_map
+        .get(&memory.id)
+        .expect("salience row should exist");
     assert!(
         (salience.stability - 1.0).abs() < 0.01,
         "observation type should have stability=1.0, got {}",
@@ -631,13 +771,20 @@ async fn test_store_untyped_stability(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let memory = store
-        .store(MemoryBuilder::new().content("Some generic memory").type_hint("fact").build())
+        .store(
+            MemoryBuilder::new()
+                .content("Some generic memory")
+                .type_hint("fact")
+                .build(),
+        )
         .await
         .unwrap();
 
     // Without retention config, no salience row is written — get_salience_data returns default (1.0)
     let salience_map = store.get_salience_data(&[memory.id.clone()]).await.unwrap();
-    let salience = salience_map.get(&memory.id).expect("get_salience_data always returns an entry");
+    let salience = salience_map
+        .get(&memory.id)
+        .expect("get_salience_data always returns an entry");
     assert!(
         (salience.stability - 1.0).abs() < 0.01,
         "without retention config, stability should be SalienceRow default (1.0), got {}",
@@ -653,13 +800,20 @@ async fn test_store_fact_stability_no_extra_write(pool: PgPool) {
     store.set_retention_config(memcp::config::RetentionConfig::default());
 
     let memory = store
-        .store(MemoryBuilder::new().content("A factual piece of info").type_hint("fact").build())
+        .store(
+            MemoryBuilder::new()
+                .content("A factual piece of info")
+                .type_hint("fact")
+                .build(),
+        )
         .await
         .unwrap();
 
     // fact stability (2.5) == default_stability (2.5), so no DB write — returns SalienceRow default (1.0)
     let salience_map = store.get_salience_data(&[memory.id.clone()]).await.unwrap();
-    let salience = salience_map.get(&memory.id).expect("get_salience_data always returns an entry");
+    let salience = salience_map
+        .get(&memory.id)
+        .expect("get_salience_data always returns an entry");
     assert!(
         (salience.stability - 1.0).abs() < 0.01,
         "fact type (stability==default) should not write salience row — returns default 1.0, got {}",
