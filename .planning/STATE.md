@@ -3,24 +3,25 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 09-03-PLAN.md
-last_updated: "2026-03-10T23:20:19.086Z"
+stopped_at: Completed 09-01-PLAN.md
+last_updated: "2026-03-10T23:22:33.139Z"
 progress:
   total_phases: 58
   completed_phases: 36
   total_plans: 135
-  completed_plans: 106
-  percent: 81
+  completed_plans: 107
+  percent: 80
 ---
 
 # Project State
 
 ## Current Phase
-Phase 21-pii-and-secret-redaction — Plan 2 of 2 complete (PHASE COMPLETE)
+Phase 09-documentation — Plan 1 of 4 complete
 
-Progress: [████████████████░░░░] 106/131 plans (81%)
+Progress: [████████████████░░░░] 107/135 plans (80%)
 
 ## Active Context
+- Last completed: Phase 09-01 -- Documentation Overhaul (slim README landing page, docs/architecture.md with pipeline coverage, annotated memcp.toml.example)
 - Last completed: Phase 21-02 -- Ingestion Integration (redaction wired into CLI, HTTP API, MCP, auto-store; 10 integration tests)
 - Last completed: Phase 21-01 -- RedactionEngine Core (two-phase regex scan, 13 secret patterns, PII masking, entropy filter, allowlist, 25 unit tests)
 - Last completed: Phase 20-01 -- Test Quality Fixes (offset deprecation warning test fixed to exercise search_similar(), false_positive_count wired in load test SecurityReport)
@@ -63,8 +64,8 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 **Current focus:** Phase 19 — Requirements Traceability
 
 ## Session Continuity
-Last session: 2026-03-10T23:20:19.081Z
-Stopped at: Completed 09-03-PLAN.md
+Last session: 2026-03-10T23:22:33.133Z
+Stopped at: Completed 09-01-PLAN.md
 Resume file: None
 
 ## Accumulated Context
