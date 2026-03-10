@@ -57,7 +57,18 @@ pub struct SearchRequest {
     pub cursor: Option<String>,
 }
 
-fn default_search_limit() -> u32 { 10 }
+fn default_search_limit() -> u32 {
+    10
+}
+
+/// Redaction metadata included in store responses when content was redacted.
+#[derive(Serialize, Clone, Debug)]
+pub struct RedactionInfo {
+    /// Number of individual redactions applied.
+    pub count: usize,
+    /// Unique categories of redacted content (e.g., "aws_key", "github_pat").
+    pub categories: Vec<String>,
+}
 
 /// Request body for POST /v1/store.
 #[derive(Deserialize)]
@@ -98,12 +109,23 @@ pub struct StoreRequest {
     /// Agent's role when creating this memory (e.g., coder, reviewer, planner).
     #[serde(default)]
     pub agent_role: Option<String>,
+    /// When true, bypasses secret/PII redaction. Default: false (redaction enabled).
+    #[serde(default)]
+    pub skip_redaction: bool,
 }
 
-fn default_type_hint() -> String { "fact".to_string() }
-fn default_source() -> String { "api".to_string() }
-fn default_actor_type() -> String { "agent".to_string() }
-fn default_audience() -> String { "global".to_string() }
+fn default_type_hint() -> String {
+    "fact".to_string()
+}
+fn default_source() -> String {
+    "api".to_string()
+}
+fn default_actor_type() -> String {
+    "agent".to_string()
+}
+fn default_audience() -> String {
+    "global".to_string()
+}
 
 /// Request body for POST /v1/annotate.
 #[derive(Deserialize)]

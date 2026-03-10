@@ -9,11 +9,11 @@ use axum::{extract::State, http::StatusCode, Json};
 use chrono::Utc;
 use serde_json::json;
 
+use super::types::{error_json, RedactionInfo, StoreRequest};
 use crate::embedding::build_embedding_text;
 use crate::pipeline::temporal::extract_event_time;
 use crate::store::{CreateMemory, Memory, MemoryStore};
 use crate::transport::health::AppState;
-use super::types::{StoreRequest, error_json};
 
 /// POST /v1/store
 ///
@@ -27,17 +27,28 @@ pub async fn store_handler(
     Json(req): Json<StoreRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     if !state.ready.load(Ordering::Acquire) {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(error_json("daemon not ready")));
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(error_json("daemon not ready")),
+        );
     }
 
     let store = match &state.store {
         Some(s) => s.clone(),
-        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(error_json("store not available"))),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_json("store not available")),
+            )
+        }
     };
 
     // Validate required field
     if req.content.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(error_json("content is required and must not be empty")));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_json("content is required and must not be empty")),
+        );
     }
 
     // Resource cap check: replicate cmd_store lines 251-266
@@ -71,15 +82,50 @@ pub async fn store_handler(
         }
     }
 
+    // Redact secrets/PII before any further processing (before content_filter, before embedding)
+    let mut redaction_info: Option<RedactionInfo> = None;
+    let content = if !req.skip_redaction {
+        if let Some(ref engine) = state.redaction_engine {
+            match engine.redact(&req.content) {
+                Ok(result) => {
+                    if result.was_redacted {
+                        tracing::warn!(
+                            categories = ?result.categories,
+                            count = result.redaction_count,
+                            "Content redacted"
+                        );
+                        redaction_info = Some(RedactionInfo {
+                            count: result.redaction_count,
+                            categories: result.categories,
+                        });
+                    }
+                    result.content
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Redaction failed — rejecting store (fail-closed)");
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(error_json("Store rejected: redaction error")),
+                    );
+                }
+            }
+        } else {
+            req.content.clone()
+        }
+    } else {
+        req.content.clone()
+    };
+
     // Extract temporal event time from content.
-    let temporal_result = extract_event_time(&req.content, state.config.user.birth_year, Utc::now());
+    let temporal_result =
+        extract_event_time(&content, state.config.user.birth_year, Utc::now());
     let (event_time, event_time_precision) = match temporal_result {
         Some((dt, precision)) => (Some(dt), Some(precision.as_str().to_string())),
         None => (None, None),
     };
 
     let input = CreateMemory {
-        content: req.content.clone(),
+        content,
         type_hint: req.type_hint,
         source: req.source,
         tags: req.tags,
@@ -103,7 +149,10 @@ pub async fn store_handler(
         Ok(m) => m,
         Err(e) => {
             tracing::warn!(error = %e, "store failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(error_json(&format!("Store failed: {}", e))));
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(error_json(&format!("Store failed: {}", e))),
+            );
         }
     };
 
@@ -126,6 +175,14 @@ pub async fn store_handler(
 
     // Build initial response
     let mut response_json = format_memory_json(&memory);
+    if let Some(ref info) = redaction_info {
+        if let serde_json::Value::Object(ref mut map) = response_json {
+            map.insert(
+                "redactions".to_string(),
+                json!({ "count": info.count, "categories": info.categories }),
+            );
+        }
+    }
 
     // wait=true: poll embedding_status until complete or timeout
     if req.wait {

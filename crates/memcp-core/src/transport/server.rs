@@ -85,6 +85,7 @@ use crate::config::{
 use crate::content_filter::{ContentFilter, FilterVerdict};
 use crate::embedding::{EmbeddingJob, EmbeddingProvider};
 use crate::errors::MemcpError;
+use crate::pipeline::redaction::RedactionEngine;
 use crate::extraction::ExtractionJob;
 use crate::search::salience::{dedup_parent_chunks, SalienceInput};
 use crate::search::{SalienceScorer, ScoredHit};
@@ -108,6 +109,7 @@ pub struct MemoryService {
         Option<Arc<dyn crate::query_intelligence::QueryIntelligenceProvider + Send + Sync>>,
     qi_config: crate::config::QueryIntelligenceConfig,
     content_filter: Option<Arc<dyn ContentFilter>>,
+    redaction_engine: Option<Arc<RedactionEngine>>,
     idempotency_config: IdempotencyConfig,
     recall_config: RecallConfig,
     resource_caps: ResourceCapsConfig,
@@ -138,6 +140,7 @@ impl MemoryService {
         >,
         qi_config: crate::config::QueryIntelligenceConfig,
         content_filter: Option<Arc<dyn ContentFilter>>,
+        redaction_engine: Option<Arc<RedactionEngine>>,
     ) -> Self {
         Self {
             store,
@@ -152,6 +155,7 @@ impl MemoryService {
             qi_reranking_provider,
             qi_config,
             content_filter,
+            redaction_engine,
             idempotency_config: IdempotencyConfig::default(),
             recall_config: RecallConfig::default(),
             resource_caps: ResourceCapsConfig::default(),
@@ -286,6 +290,9 @@ pub struct StoreMemoryParams {
     pub session_id: Option<String>,
     /// Agent's role when creating this memory (e.g., coder, reviewer, planner). Free-text, nullable.
     pub agent_role: Option<String>,
+    /// When true, bypasses secret/PII redaction. Default: false (redaction enabled).
+    #[serde(default)]
+    pub skip_redaction: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -572,7 +579,8 @@ audience (global|personal|team:X), idempotency_key (optional string), \
 wait (bool, default false — when true, blocks until embedding completes; returns embedding_status and embedding_dimension), \
 trust_level (float 0.0-1.0, omit to auto-infer from source/actor_type), \
 session_id (string, groups memories by conversation session), \
-agent_role (string, e.g. coder/reviewer/planner).\n\
+agent_role (string, e.g. coder/reviewer/planner), \
+skip_redaction (bool, default false — when true, bypasses secret/PII redaction).\n\
 Dedup: identical content within the server dedup window returns the existing memory (no duplicate). \
 Optional idempotency_key for caller-controlled at-most-once semantics — same key always returns original result.\n\
 Callable from code_execution_20260120 sandboxes."
@@ -610,9 +618,42 @@ Callable from code_execution_20260120 sandboxes."
             }
         }
 
+        // Redact secrets/PII before any further processing (before content_filter, before embedding)
+        let mut redaction_count: usize = 0;
+        let mut redaction_categories: Vec<String> = Vec::new();
+        let content = if !params.skip_redaction.unwrap_or(false) {
+            if let Some(ref engine) = self.redaction_engine {
+                match engine.redact(&params.content) {
+                    Ok(result) => {
+                        if result.was_redacted {
+                            tracing::warn!(
+                                categories = ?result.categories,
+                                count = result.redaction_count,
+                                "Content redacted"
+                            );
+                            redaction_count = result.redaction_count;
+                            redaction_categories = result.categories;
+                        }
+                        result.content
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Redaction failed — rejecting store (fail-closed)");
+                        return Ok(CallToolResult::structured_error(json!({
+                            "isError": true,
+                            "error": "Store rejected: redaction error",
+                        })));
+                    }
+                }
+            } else {
+                params.content.clone()
+            }
+        } else {
+            params.content.clone()
+        };
+
         // Content filter check (before storage)
         if let Some(ref filter) = self.content_filter {
-            match filter.check(&params.content).await {
+            match filter.check(&content).await {
                 Ok(FilterVerdict::Allow) => {}
                 Ok(FilterVerdict::Drop { reason }) => {
                     tracing::info!(reason = %reason, "store_memory: content filtered, not storing");
@@ -653,7 +694,7 @@ Callable from code_execution_20260120 sandboxes."
         }
 
         let input = CreateMemory {
-            content: params.content,
+            content,
             type_hint: params.type_hint.unwrap_or_else(|| "fact".to_string()),
             source: params.source.unwrap_or_else(|| "mcp".to_string()),
             tags: params.tags,
@@ -730,6 +771,14 @@ Callable from code_execution_20260120 sandboxes."
                     "audience": memory.audience,
                     "hint": "Use get_memory with this ID to retrieve, or update_memory to modify"
                 });
+
+                // Add redaction metadata to response when content was redacted
+                if redaction_count > 0 {
+                    response_obj["redactions"] = json!({
+                        "count": redaction_count,
+                        "categories": redaction_categories,
+                    });
+                }
 
                 // Sync store: wait for embedding completion
                 if let Some(rx) = completion_rx {

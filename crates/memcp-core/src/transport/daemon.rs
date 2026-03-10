@@ -5,34 +5,34 @@
 //! Writes heartbeat to `daemon_status` table every 30 seconds.
 //! Polls for pending embedding/extraction work every 10 seconds.
 
-use std::sync::Arc;
-use std::time::Duration;
 use anyhow::Result;
 use chrono::Utc;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::signal;
 
 use crate::config::{Config, EmbeddingTierConfig};
 use crate::consolidation::ConsolidationWorker;
 use crate::content_filter::CompositeFilter;
-use crate::embedding::EmbeddingProvider;
-use crate::embedding::router::EmbeddingRouter;
+use crate::curation::{self, create_curation_provider};
 #[cfg(feature = "local-embed")]
 use crate::embedding::local::LocalEmbeddingProvider;
 use crate::embedding::openai::OpenAIEmbeddingProvider;
-use crate::embedding::pipeline::{EmbeddingPipeline, backfill};
-use crate::extraction::{ExtractionJob, ExtractionProvider};
+use crate::embedding::pipeline::{backfill, EmbeddingPipeline};
+use crate::embedding::router::EmbeddingRouter;
+use crate::embedding::EmbeddingProvider;
+use crate::enrichment::create_enrichment_provider;
+use crate::enrichment::worker::run_enrichment;
 use crate::extraction::ollama::OllamaExtractionProvider;
 use crate::extraction::openai::OpenAIExtractionProvider;
 use crate::extraction::pipeline::ExtractionPipeline;
+use crate::extraction::{ExtractionJob, ExtractionProvider};
 use crate::gc::{self, DedupWorker};
 use crate::ipc::{embed_socket_path, start_embed_listener};
-use crate::query_intelligence::QueryIntelligenceProvider;
 use crate::query_intelligence::ollama::OllamaQueryIntelligenceProvider;
 use crate::query_intelligence::openai::OpenAIQueryIntelligenceProvider;
+use crate::query_intelligence::QueryIntelligenceProvider;
 use crate::store::postgres::PostgresMemoryStore;
-use crate::curation::{self, create_curation_provider};
-use crate::enrichment::create_enrichment_provider;
-use crate::enrichment::worker::run_enrichment;
 use crate::summarization::create_summarization_provider;
 
 /// Main daemon entry point.
@@ -55,7 +55,9 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
                 run_migrations,
                 &config.search,
                 config.resource_caps.max_db_connections,
-            ).await {
+            )
+            .await
+            {
                 Ok(mut s) => {
                     tracing::info!(database_url = %config.database_url, "PostgreSQL store initialized");
                     // Apply type-specific FSRS stability config before wrapping in Arc
@@ -82,20 +84,27 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     // 2. Build embedding router (single-tier or multi-tier based on config)
     let router = build_embedding_router(config).await?;
     let router = Arc::new(router);
-    let provider_for_filter: Arc<dyn EmbeddingProvider + Send + Sync> = router.default_provider().clone();
+    let provider_for_filter: Arc<dyn EmbeddingProvider + Send + Sync> =
+        router.default_provider().clone();
 
     // 2.5. Ensure HNSW indexes exist for all configured tiers.
     // In single-tier mode, creates one index. In multi-tier mode, creates a
     // partial index per tier with the correct dimension cast.
     if router.is_multi_model() {
         for (tier, dim) in router.tier_dimensions() {
-            store.ensure_hnsw_index_for_tier(tier, dim).await
-                .map_err(|e| anyhow::anyhow!("Failed to ensure HNSW index for tier {}: {}", tier, e))?;
+            store
+                .ensure_hnsw_index_for_tier(tier, dim)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to ensure HNSW index for tier {}: {}", tier, e)
+                })?;
             tracing::info!(tier, dimension = dim, "HNSW index ready for tier");
         }
     } else {
         let dim = router.dimension();
-        store.ensure_hnsw_index(dim).await
+        store
+            .ensure_hnsw_index(dim)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to ensure HNSW index: {}", e))?;
         tracing::info!(dimension = dim, "HNSW index ready");
     }
@@ -147,22 +156,24 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         let socket_path = embed_socket_path();
 
         // Create QI reranking provider if reranking is enabled.
-        let qi_provider: Option<Arc<dyn QueryIntelligenceProvider + Send + Sync>> =
-            if config.query_intelligence.reranking_enabled {
-                match create_qi_reranking_provider(config) {
-                    Ok(p) => {
-                        tracing::info!("QI reranking provider available for IPC (CLI re-ranking)");
-                        Some(p)
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "QI reranking init failed — IPC rerank will no-op");
-                        None
-                    }
+        let qi_provider: Option<Arc<dyn QueryIntelligenceProvider + Send + Sync>> = if config
+            .query_intelligence
+            .reranking_enabled
+        {
+            match create_qi_reranking_provider(config) {
+                Ok(p) => {
+                    tracing::info!("QI reranking provider available for IPC (CLI re-ranking)");
+                    Some(p)
                 }
-            } else {
-                tracing::debug!("QI reranking disabled — IPC rerank will no-op");
-                None
-            };
+                Err(e) => {
+                    tracing::warn!(error = %e, "QI reranking init failed — IPC rerank will no-op");
+                    None
+                }
+            }
+        } else {
+            tracing::debug!("QI reranking disabled — IPC rerank will no-op");
+            None
+        };
 
         // Pass router+store for multi-tier embed_multi IPC when multi-model is active.
         // Single-model daemons pass None — CLI falls back to single embed.
@@ -180,7 +191,40 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
 
     // 4. Create embedding pipeline (uses router for multi-tier support)
     // Must be created before health server so embed_sender can be shared via AppState.
-    let pipeline = EmbeddingPipeline::new(router.clone(), store.clone(), 1000, consolidation_sender, dedup_sender);
+    let pipeline = EmbeddingPipeline::new(
+        router.clone(),
+        store.clone(),
+        1000,
+        consolidation_sender,
+        dedup_sender,
+    );
+
+    // 2.6. Construct redaction engine if enabled (secrets_enabled or pii_enabled)
+    let redaction_engine: Option<Arc<crate::pipeline::redaction::RedactionEngine>> =
+        if config.redaction.secrets_enabled || config.redaction.pii_enabled {
+            match crate::pipeline::redaction::RedactionEngine::from_config(&config.redaction) {
+                Ok(engine) => {
+                    tracing::info!(
+                        secrets_enabled = config.redaction.secrets_enabled,
+                        pii_enabled = config.redaction.pii_enabled,
+                        "Redaction engine initialized"
+                    );
+                    Some(Arc::new(engine))
+                }
+                Err(e) => {
+                    // Fail-closed: if secrets_enabled is true (default), redaction MUST work
+                    if config.redaction.secrets_enabled {
+                        tracing::error!(error = %e, "Failed to initialize redaction engine — exiting (fail-closed)");
+                        std::process::exit(1);
+                    }
+                    tracing::warn!(error = %e, "Failed to initialize redaction engine — redaction disabled");
+                    None
+                }
+            }
+        } else {
+            tracing::info!("Redaction disabled (secrets_enabled=false, pii_enabled=false)");
+            None
+        };
 
     // 2.7. Spawn health HTTP server if enabled
     // AppState carries config, embed_provider, and embed_sender for /v1/* API handlers.
@@ -210,6 +254,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             embed_provider: Some(router.default_provider().clone()),
             embed_sender: Some(pipeline.sender()),
             metrics_handle,
+            redaction_engine: redaction_engine.clone(),
         };
         Some(tokio::spawn(crate::health::serve(addr, state)))
     } else {
@@ -220,7 +265,10 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     // 5. Run startup embedding backfill
     let queued = backfill(&store, &pipeline.sender()).await;
     if queued > 0 {
-        tracing::info!(count = queued, "Startup backfill queued memories for embedding");
+        tracing::info!(
+            count = queued,
+            "Startup backfill queued memories for embedding"
+        );
     }
 
     // 6. Create extraction pipeline if enabled, backfill pending extractions
@@ -239,7 +287,10 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
                             });
                         }
                         if count > 0 {
-                            tracing::info!(count = count, "Startup backfill queued memories for extraction");
+                            tracing::info!(
+                                count = count,
+                                "Startup backfill queued memories for extraction"
+                            );
                         }
                     }
                     Err(e) => {
@@ -259,30 +310,28 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     };
 
     // 7. Build content filter if enabled
-    let content_filter: Option<Arc<dyn crate::content_filter::ContentFilter>> =
-        if config.content_filter.enabled {
-            match CompositeFilter::from_config(
-                &config.content_filter,
-                Some(provider_for_filter),
-            )
-            .await
-            {
-                Ok(filter) => {
-                    tracing::info!(
-                        regex_patterns = config.content_filter.regex_patterns.len(),
-                        excluded_topics = config.content_filter.excluded_topics.len(),
-                        "Content filter enabled"
-                    );
-                    Some(Arc::new(filter))
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to initialize content filter -- filtering disabled");
-                    None
-                }
+    let content_filter: Option<Arc<dyn crate::content_filter::ContentFilter>> = if config
+        .content_filter
+        .enabled
+    {
+        match CompositeFilter::from_config(&config.content_filter, Some(provider_for_filter)).await
+        {
+            Ok(filter) => {
+                tracing::info!(
+                    regex_patterns = config.content_filter.regex_patterns.len(),
+                    excluded_topics = config.content_filter.excluded_topics.len(),
+                    "Content filter enabled"
+                );
+                Some(Arc::new(filter))
             }
-        } else {
-            None
-        };
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to initialize content filter -- filtering disabled");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // 7.5. Create summarization provider if enabled
     let summarization_provider = match create_summarization_provider(&config.summarization) {
@@ -318,10 +367,13 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             );
         }
         if config.auto_store.watch_paths.is_empty() {
-            tracing::warn!("Auto-store enabled but watch_paths is empty — nothing will be ingested");
+            tracing::warn!(
+                "Auto-store enabled but watch_paths is empty — nothing will be ingested"
+            );
         }
         // Resolve project: MEMCP_PROJECT env var overrides config default (MEMCP_WORKSPACE as fallback)
-        let resolved_project = std::env::var("MEMCP_PROJECT").ok()
+        let resolved_project = std::env::var("MEMCP_PROJECT")
+            .ok()
             .or_else(|| std::env::var("MEMCP_WORKSPACE").ok())
             .or_else(|| config.project.default_project.clone());
 
@@ -347,12 +399,16 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         let gc_config = config.gc.clone();
         let recall_config = config.recall.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(gc_config.gc_interval_secs));
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(gc_config.gc_interval_secs));
             loop {
                 interval.tick().await;
                 match gc::run_gc(&gc_store, &gc_config, false).await {
                     Ok(result) => {
-                        if result.pruned_count > 0 || result.expired_count > 0 || result.hard_purged_count > 0 {
+                        if result.pruned_count > 0
+                            || result.expired_count > 0
+                            || result.hard_purged_count > 0
+                        {
                             tracing::info!(
                                 pruned = result.pruned_count,
                                 expired = result.expired_count,
@@ -369,10 +425,15 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
                 match gc_store.cleanup_expired_idempotency_keys().await {
                     Ok(0) => {}
                     Ok(n) => tracing::debug!(count = n, "Cleaned up expired idempotency keys"),
-                    Err(e) => tracing::warn!(error = %e, "Failed to clean up expired idempotency keys"),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to clean up expired idempotency keys")
+                    }
                 }
                 // Session recall auto-expiry: clean up sessions idle > session_idle_secs
-                match gc_store.cleanup_expired_sessions(recall_config.session_idle_secs).await {
+                match gc_store
+                    .cleanup_expired_sessions(recall_config.session_idle_secs)
+                    .await
+                {
                     Ok(0) => {}
                     Ok(cleaned) => tracing::info!(cleaned, "Cleaned up expired recall sessions"),
                     Err(e) => tracing::warn!(error = %e, "Session cleanup failed"),
@@ -399,11 +460,19 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             }
         };
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(curation_config.interval_secs));
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(curation_config.interval_secs));
             loop {
                 interval.tick().await;
                 let provider_ref = curation_provider.as_deref();
-                match curation::worker::run_curation(&curation_store, &curation_config, provider_ref, false).await {
+                match curation::worker::run_curation(
+                    &curation_store,
+                    &curation_config,
+                    provider_ref,
+                    false,
+                )
+                .await
+                {
                     Ok(result) => {
                         if let Some(reason) = &result.skipped_reason {
                             tracing::debug!(reason = %reason, "Curation pass skipped");
@@ -426,7 +495,11 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         });
         tracing::info!(
             interval_secs = config.curation.interval_secs,
-            provider = config.curation.llm_provider.as_deref().unwrap_or("algorithmic"),
+            provider = config
+                .curation
+                .llm_provider
+                .as_deref()
+                .unwrap_or("algorithmic"),
             "Curation worker started"
         );
     } else {
@@ -439,7 +512,8 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             let enrichment_store = store.clone();
             let enrichment_config = config.enrichment.clone();
             // Use a watch channel for shutdown signaling (matches run_enrichment signature)
-            let (enrichment_shutdown_tx, enrichment_shutdown_rx) = tokio::sync::watch::channel(false);
+            let (enrichment_shutdown_tx, enrichment_shutdown_rx) =
+                tokio::sync::watch::channel(false);
             tokio::spawn(async move {
                 if let Err(e) = run_enrichment(
                     enrichment_store,
@@ -474,20 +548,27 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         if let Some(quality_tier_config) = config.embedding.tiers.get("quality") {
             if let Some(ref promotion_config) = quality_tier_config.promotion {
                 let sweep_store = store.clone();
-                let quality_provider = router.provider("quality")
+                let quality_provider = router
+                    .provider("quality")
                     .expect("quality tier configured but provider missing")
                     .clone();
                 let promo_config = promotion_config.clone();
 
                 tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(
-                        Duration::from_secs(promo_config.sweep_interval_minutes * 60)
-                    );
+                    let mut interval = tokio::time::interval(Duration::from_secs(
+                        promo_config.sweep_interval_minutes * 60,
+                    ));
                     loop {
                         interval.tick().await;
                         match crate::promotion::worker::run_promotion_sweep(
-                            &sweep_store, &quality_provider, &promo_config, "fast", "quality"
-                        ).await {
+                            &sweep_store,
+                            &quality_provider,
+                            &promo_config,
+                            "fast",
+                            "quality",
+                        )
+                        .await
+                        {
                             Ok(result) => {
                                 if let Some(reason) = &result.skipped_reason {
                                     tracing::debug!(reason = %reason, "Promotion sweep skipped");
@@ -551,7 +632,10 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
 
         // Count watched JSONL files using existing watcher utilities
         let watched_count: i32 = if config.auto_store.enabled {
-            config.auto_store.watch_paths.iter()
+            config
+                .auto_store
+                .watch_paths
+                .iter()
                 .map(|p| {
                     let expanded = crate::auto_store::watcher::expand_tilde(p);
                     if expanded.is_dir() {
@@ -570,7 +654,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         if let Err(e) = sqlx::query(
             "UPDATE daemon_status SET \
                  embedding_model = $1, embedding_dimension = $2, watched_file_count = $3 \
-             WHERE id = 1"
+             WHERE id = 1",
         )
         .bind(model_name)
         .bind(model_dim)
@@ -689,7 +773,9 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         shutdown_store.pool().close().await;
 
         tracing::info!("Clean shutdown complete");
-    }).await {
+    })
+    .await
+    {
         Ok(_) => {}
         Err(_) => {
             tracing::warn!("Shutdown timeout (10s) exceeded — forcing exit");
@@ -728,11 +814,10 @@ async fn write_heartbeat(store: &PostgresMemoryStore) {
 
 /// Clear heartbeat on shutdown (set heartbeat and pid to NULL).
 async fn clear_heartbeat(store: &PostgresMemoryStore) {
-    if let Err(e) = sqlx::query(
-        "UPDATE daemon_status SET last_heartbeat = NULL, pid = NULL WHERE id = 1",
-    )
-    .execute(store.pool())
-    .await
+    if let Err(e) =
+        sqlx::query("UPDATE daemon_status SET last_heartbeat = NULL, pid = NULL WHERE id = 1")
+            .execute(store.pool())
+            .await
     {
         tracing::warn!(error = %e, "Failed to clear daemon heartbeat");
     }
@@ -868,7 +953,8 @@ pub async fn create_embedding_provider(
         }
         #[cfg(feature = "local-embed")]
         _ => Ok(Arc::new(
-            LocalEmbeddingProvider::new(&config.embedding.cache_dir, &config.embedding.local_model).await?,
+            LocalEmbeddingProvider::new(&config.embedding.cache_dir, &config.embedding.local_model)
+                .await?,
         )),
         #[cfg(not(feature = "local-embed"))]
         "local" => {
@@ -998,7 +1084,9 @@ async fn create_tier_provider(
 ) -> Result<Arc<dyn EmbeddingProvider + Send + Sync>> {
     match tier.provider.as_str() {
         "openai" => {
-            let api_key = tier.openai_api_key.clone()
+            let api_key = tier
+                .openai_api_key
+                .clone()
                 .or_else(|| config.embedding.openai_api_key.clone())
                 .ok_or_else(|| {
                     anyhow::anyhow!(
@@ -1006,7 +1094,9 @@ async fn create_tier_provider(
                          Set openai_api_key on the tier or top-level embedding config."
                     )
                 })?;
-            let model = tier.model.clone()
+            let model = tier
+                .model
+                .clone()
                 .unwrap_or_else(|| config.embedding.openai_model.clone());
             let provider = OpenAIEmbeddingProvider::new(
                 api_key,
@@ -1018,7 +1108,9 @@ async fn create_tier_provider(
         }
         #[cfg(feature = "local-embed")]
         _ => {
-            let model = tier.model.clone()
+            let model = tier
+                .model
+                .clone()
                 .unwrap_or_else(|| config.embedding.local_model.clone());
             Ok(Arc::new(
                 LocalEmbeddingProvider::new(&config.embedding.cache_dir, &model).await?,

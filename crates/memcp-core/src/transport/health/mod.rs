@@ -4,18 +4,19 @@
 //! (component health + resource usage). Runs on separate configurable port.
 //! Spawned by transport/daemon, queries storage/ for live metrics.
 
-use axum::{Router, Json, extract::State, routing::get, http::StatusCode};
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Serialize;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tower_http::trace::TraceLayer;
 
 use crate::config::{Config, ResourceCapsConfig};
-use crate::embedding::{EmbeddingProvider, EmbeddingJob};
+use crate::embedding::{EmbeddingJob, EmbeddingProvider};
+use crate::pipeline::redaction::RedactionEngine;
 
 /// Shared state for the health and API server.
 ///
@@ -42,6 +43,9 @@ pub struct AppState {
     pub embed_sender: Option<mpsc::Sender<EmbeddingJob>>,
     /// Prometheus scrape handle for /metrics endpoint.
     pub metrics_handle: PrometheusHandle,
+    /// Redaction engine for secret/PII masking on store operations.
+    /// None when redaction is disabled (both secrets_enabled=false and pii_enabled=false).
+    pub redaction_engine: Option<Arc<RedactionEngine>>,
 }
 
 #[derive(Serialize)]
@@ -55,31 +59,43 @@ async fn health_handler(State(state): State<AppState>) -> (StatusCode, Json<Heal
     if state.ready.load(Ordering::Acquire) {
         (StatusCode::OK, Json(HealthResponse { status: "ok" }))
     } else {
-        (StatusCode::SERVICE_UNAVAILABLE, Json(HealthResponse { status: "starting" }))
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(HealthResponse { status: "starting" }),
+        )
     }
 }
 
 /// GET /status — operational status with component health and resource usage.
 /// Also exposed as pub for use as /v1/status alias.
-pub async fn status_handler(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
+pub async fn status_handler(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<serde_json::Value>) {
     let is_ready = state.ready.load(Ordering::Acquire);
     let uptime = state.started_at.elapsed().as_secs();
 
     // Check DB connectivity and gather resource counts + pool breakdown
-    let (db_status, memory_count, db_conn_count, pool_active, pool_idle) = if let Some(ref store) = state.store {
-        // Quick connectivity check via pool
-        let pool = store.pool();
-        let pool_size = pool.size() as u64;
-        let idle = pool.num_idle() as u64;
-        let active = pool_size.saturating_sub(idle);
+    let (db_status, memory_count, db_conn_count, pool_active, pool_idle) =
+        if let Some(ref store) = state.store {
+            // Quick connectivity check via pool
+            let pool = store.pool();
+            let pool_size = pool.size() as u64;
+            let idle = pool.num_idle() as u64;
+            let active = pool_size.saturating_sub(idle);
 
-        match store.count_live_memories().await {
-            Ok(count) => ("ok", Some(count as u64), Some(pool_size), Some(active), Some(idle)),
-            Err(_) => ("degraded", None, Some(pool_size), Some(active), Some(idle)),
-        }
-    } else {
-        ("down", None, None, None, None)
-    };
+            match store.count_live_memories().await {
+                Ok(count) => (
+                    "ok",
+                    Some(count as u64),
+                    Some(pool_size),
+                    Some(active),
+                    Some(idle),
+                ),
+                Err(_) => ("degraded", None, Some(pool_size), Some(active), Some(idle)),
+            }
+        } else {
+            ("down", None, None, None, None)
+        };
 
     // Pending embedding count — real-time backlog visible to operators
     let pending_embeddings: Option<i64> = if let Some(ref store) = state.store {
@@ -91,7 +107,7 @@ pub async fn status_handler(State(state): State<AppState>) -> (StatusCode, Json<
     // Check HNSW index presence
     let hnsw_status = if let Some(ref store) = state.store {
         match sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'idx_memory_embeddings_hnsw'"
+            "SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'idx_memory_embeddings_hnsw'",
         )
         .fetch_one(store.pool())
         .await
@@ -160,7 +176,11 @@ pub async fn status_handler(State(state): State<AppState>) -> (StatusCode, Json<
         "uptime_secs": uptime,
     });
 
-    let code = if is_ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    let code = if is_ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
     (code, Json(resp))
 }
 
@@ -171,10 +191,9 @@ pub async fn status_handler(State(state): State<AppState>) -> (StatusCode, Json<
 pub async fn serve(addr: SocketAddr, state: AppState) {
     // Apply per-endpoint rate limits, then wrap with metrics middleware.
     // /health, /status, and /metrics are NOT in api_routes — they are never metered.
-    let api_routes = crate::transport::api::router(&state.config.rate_limit)
-        .layer(axum::middleware::from_fn(
-            crate::transport::metrics::metrics_middleware,
-        ));
+    let api_routes = crate::transport::api::router(&state.config.rate_limit).layer(
+        axum::middleware::from_fn(crate::transport::metrics::metrics_middleware),
+    );
 
     let app = Router::new()
         .route("/health", get(health_handler))
@@ -185,16 +204,15 @@ pub async fn serve(addr: SocketAddr, state: AppState) {
         // TraceLayer is the outermost layer — every HTTP request gets a span with
         // request_id, method, and endpoint for structured log correlation.
         .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(|req: &axum::http::Request<_>| {
-                    let request_id = uuid::Uuid::new_v4().to_string();
-                    tracing::info_span!(
-                        "http_request",
-                        request_id = %request_id,
-                        method = %req.method(),
-                        endpoint = %req.uri().path(),
-                    )
-                }),
+            TraceLayer::new_for_http().make_span_with(|req: &axum::http::Request<_>| {
+                let request_id = uuid::Uuid::new_v4().to_string();
+                tracing::info_span!(
+                    "http_request",
+                    request_id = %request_id,
+                    method = %req.method(),
+                    endpoint = %req.uri().path(),
+                )
+            }),
         );
 
     tracing::info!(%addr, "Health HTTP server starting");

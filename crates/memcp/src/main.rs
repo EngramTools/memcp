@@ -1,36 +1,39 @@
 use anyhow::Result;
-use std::io::BufRead as _;
 use clap::{Parser, Subcommand};
-use std::sync::Arc;
-use std::time::Duration;
 use memcp::cli;
 use memcp::config::Config;
 use memcp::consolidation::ConsolidationWorker;
-use memcp::embedding::EmbeddingProvider;
+use memcp::content_filter::CompositeFilter;
 use memcp::embedding::model_dimension;
-use memcp::embedding::pipeline::{EmbeddingPipeline, backfill};
+use memcp::embedding::pipeline::{backfill, EmbeddingPipeline};
+use memcp::embedding::EmbeddingProvider;
+use memcp::extraction::pipeline::ExtractionPipeline;
 use memcp::extraction::ExtractionJob;
 use memcp::extraction::ExtractionProvider;
-use memcp::extraction::pipeline::ExtractionPipeline;
+use memcp::import::chatgpt::ChatGptReader;
+use memcp::import::checkpoint::{find_latest_import_dir, load_filtered, save_filtered};
+use memcp::import::claude_ai::ClaudeAiReader;
+use memcp::import::claude_code::ClaudeCodeReader;
+use memcp::import::curate::ImportCurator;
+use memcp::import::export::{ExportEngine, ExportFormat, ExportOpts};
+use memcp::import::history::{
+    append_record, default_history_path, find_record, ImportHistoryRecord,
+};
+use memcp::import::jsonl::JsonlReader;
+use memcp::import::markdown::MarkdownReader;
+use memcp::import::openclaw::OpenClawReader;
+use memcp::import::{
+    discover_all_sources, DiscoveredSource, ImportEngine, ImportOpts, ImportSource,
+};
 use memcp::logging;
-use memcp::query_intelligence::QueryIntelligenceProvider;
 use memcp::query_intelligence::ollama::OllamaQueryIntelligenceProvider;
 use memcp::query_intelligence::openai::OpenAIQueryIntelligenceProvider;
-use memcp::content_filter::CompositeFilter;
+use memcp::query_intelligence::QueryIntelligenceProvider;
 use memcp::server::MemoryService;
 use memcp::store::postgres::PostgresMemoryStore;
-use memcp::import::{ImportEngine, ImportOpts, ImportSource, DiscoveredSource, discover_all_sources};
-use memcp::import::jsonl::JsonlReader;
-use memcp::import::export::{ExportEngine, ExportFormat, ExportOpts};
-use memcp::import::openclaw::OpenClawReader;
-use memcp::import::claude_code::ClaudeCodeReader;
-use memcp::import::chatgpt::ChatGptReader;
-use memcp::import::claude_ai::ClaudeAiReader;
-use memcp::import::markdown::MarkdownReader;
-use memcp::import::curate::ImportCurator;
-use memcp::import::checkpoint::{find_latest_import_dir, load_filtered, save_filtered};
-use memcp::import::history::{ImportHistoryRecord, append_record, find_record, default_history_path};
 use rmcp::ServiceExt;
+use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Parser)]
 #[command(
@@ -57,7 +60,7 @@ use rmcp::ServiceExt;
         memcp statusline install    Install Claude Code status line\n  \
         memcp statusline remove     Remove Claude Code status line\n  \
         memcp gc [--dry-run]        Run garbage collection\n\n\
-        OUTPUT: JSON to stdout. Errors to stderr with non-zero exit code.",
+        OUTPUT: JSON to stdout. Errors to stderr with non-zero exit code."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -670,12 +673,16 @@ fn print_import_summary(results: &[(String, memcp::import::ImportResult)]) {
 }
 
 /// Create the extraction provider based on configuration.
-fn create_extraction_provider(config: &Config) -> Result<Arc<dyn ExtractionProvider + Send + Sync>> {
+fn create_extraction_provider(
+    config: &Config,
+) -> Result<Arc<dyn ExtractionProvider + Send + Sync>> {
     memcp::daemon::create_extraction_provider(config)
 }
 
 /// Create the QI expansion provider based on configuration.
-fn create_qi_expansion_provider(config: &Config) -> Result<Arc<dyn QueryIntelligenceProvider + Send + Sync>> {
+fn create_qi_expansion_provider(
+    config: &Config,
+) -> Result<Arc<dyn QueryIntelligenceProvider + Send + Sync>> {
     match config.query_intelligence.expansion_provider.as_str() {
         "openai" => {
             let api_key = config.query_intelligence.openai_api_key.clone()
@@ -687,25 +694,28 @@ fn create_qi_expansion_provider(config: &Config) -> Result<Arc<dyn QueryIntellig
                 config.query_intelligence.openai_base_url.clone(),
                 api_key,
                 config.query_intelligence.expansion_openai_model.clone(),
-            ).map_err(|e| anyhow::anyhow!("{}", e))?;
+            )
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
             Ok(Arc::new(provider))
         }
-        "ollama" | _ => {
-            Ok(Arc::new(OllamaQueryIntelligenceProvider::new(
-                config.query_intelligence.ollama_base_url.clone(),
-                config.query_intelligence.expansion_ollama_model.clone(),
-            )))
-        }
+        _ => Ok(Arc::new(OllamaQueryIntelligenceProvider::new(
+            config.query_intelligence.ollama_base_url.clone(),
+            config.query_intelligence.expansion_ollama_model.clone(),
+        ))),
     }
 }
 
 /// Create the QI reranking provider based on configuration.
-fn create_qi_reranking_provider(config: &Config) -> Result<Arc<dyn QueryIntelligenceProvider + Send + Sync>> {
+fn create_qi_reranking_provider(
+    config: &Config,
+) -> Result<Arc<dyn QueryIntelligenceProvider + Send + Sync>> {
     memcp::daemon::create_qi_reranking_provider(config)
 }
 
 /// Create the embedding provider based on configuration.
-async fn create_embedding_provider(config: &Config) -> Result<Arc<dyn EmbeddingProvider + Send + Sync>> {
+async fn create_embedding_provider(
+    config: &Config,
+) -> Result<Arc<dyn EmbeddingProvider + Send + Sync>> {
     memcp::daemon::create_embedding_provider(config).await
 }
 
@@ -748,7 +758,8 @@ async fn main() -> Result<()> {
                     println!("Starting embedding backfill...");
                     let provider = create_embedding_provider(&config).await?;
                     // No consolidation or dedup during manual backfill — these are live triggers only
-                    let pipeline = EmbeddingPipeline::new_single(provider, store.clone(), 1000, None, None);
+                    let pipeline =
+                        EmbeddingPipeline::new_single(provider, store.clone(), 1000, None, None);
                     let count = backfill(&store, &pipeline.sender()).await;
                     println!("Queued {} memories for embedding.", count);
                     // Wait briefly for some embeddings to process
@@ -760,7 +771,11 @@ async fn main() -> Result<()> {
                     let stats = store.embedding_stats().await?;
                     println!("{}", serde_json::to_string_pretty(&stats)?);
                 }
-                EmbedAction::SwitchModel { model, dry_run, yes } => {
+                EmbedAction::SwitchModel {
+                    model,
+                    dry_run,
+                    yes,
+                } => {
                     // Resolve target model dimension from the known model registry
                     let target_dim = match model_dimension(&model) {
                         Some(d) => d,
@@ -785,12 +800,11 @@ async fn main() -> Result<()> {
                     let current_dim = store.current_embedding_dimension().await?;
 
                     // Count total memories (for dry-run and output)
-                    let total_memories = sqlx::query_scalar::<_, i64>(
-                        "SELECT COUNT(*) FROM memories"
-                    )
-                    .fetch_one(store.pool())
-                    .await
-                    .unwrap_or(0) as u64;
+                    let total_memories =
+                        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM memories")
+                            .fetch_one(store.pool())
+                            .await
+                            .unwrap_or(0) as u64;
 
                     match current_dim {
                         None => {
@@ -798,11 +812,19 @@ async fn main() -> Result<()> {
                             println!("No existing embeddings found.");
                             println!("Target model: {} ({} dims)", model, target_dim);
                             println!();
-                            println!("No purge needed. Update your memcp.toml to set the new model:");
+                            println!(
+                                "No purge needed. Update your memcp.toml to set the new model:"
+                            );
                             println!("  [embedding]");
-                            println!("  local_model = \"{}\"   # or openai_model for OpenAI", model);
+                            println!(
+                                "  local_model = \"{}\"   # or openai_model for OpenAI",
+                                model
+                            );
                             println!();
-                            println!("Then restart the daemon to begin embedding {} memories.", total_memories);
+                            println!(
+                                "Then restart the daemon to begin embedding {} memories.",
+                                total_memories
+                            );
                         }
                         Some(current) if current == target_dim => {
                             // Same dimension — safe swap, just mark stale
@@ -810,7 +832,9 @@ async fn main() -> Result<()> {
                                 println!("DRY RUN — Same-dimension model switch");
                                 println!("  Current dimension: {} dims", current);
                                 println!("  Target model:      {} ({} dims)", model, target_dim);
-                                println!("  Operation:         mark-stale (safe — no purge needed)");
+                                println!(
+                                    "  Operation:         mark-stale (safe — no purge needed)"
+                                );
                                 println!();
                                 println!("Would mark all current embeddings as stale (is_current = false).");
                                 println!("Would reset embedding_status = 'pending' for affected memories.");
@@ -818,12 +842,18 @@ async fn main() -> Result<()> {
                                 println!();
                                 println!("Run without --dry-run to apply.");
                             } else {
-                                println!("Switching to model '{}' (same dimension: {} dims)...", model, target_dim);
+                                println!(
+                                    "Switching to model '{}' (same dimension: {} dims)...",
+                                    model, target_dim
+                                );
                                 let stale_count = store.mark_all_embeddings_stale().await?;
                                 println!("Marked {} embeddings as stale.", stale_count);
                                 println!();
                                 println!("Next steps:");
-                                println!("  1. Update memcp.toml: set embedding.local_model = \"{}\"", model);
+                                println!(
+                                    "  1. Update memcp.toml: set embedding.local_model = \"{}\"",
+                                    model
+                                );
                                 println!("     (or embedding.openai_model for OpenAI models)");
                                 println!("  2. Run 'memcp embed backfill' to re-embed with the new model.");
                             }
@@ -834,23 +864,39 @@ async fn main() -> Result<()> {
                                 println!("DRY RUN — Cross-dimension model switch (DESTRUCTIVE)");
                                 println!("  Current dimension: {} dims", current);
                                 println!("  Target model:      {} ({} dims)", model, target_dim);
-                                println!("  Operation:         PURGE all embeddings + drop HNSW index");
+                                println!(
+                                    "  Operation:         PURGE all embeddings + drop HNSW index"
+                                );
                                 println!();
-                                println!("WARNING: Dimensions differ ({} -> {}).", current, target_dim);
-                                println!("Existing embeddings are incompatible with the new model.");
+                                println!(
+                                    "WARNING: Dimensions differ ({} -> {}).",
+                                    current, target_dim
+                                );
+                                println!(
+                                    "Existing embeddings are incompatible with the new model."
+                                );
                                 println!();
                                 println!("Would perform:");
                                 println!("  - Drop HNSW index (idx_memory_embeddings_hnsw)");
                                 println!("  - Delete ALL embedding rows from memory_embeddings");
-                                println!("  - Reset embedding_status = 'pending' for all {} memories", total_memories);
+                                println!(
+                                    "  - Reset embedding_status = 'pending' for all {} memories",
+                                    total_memories
+                                );
                                 println!();
                                 println!("Source memories are NOT deleted — only embedding vectors are removed.");
                                 println!("After switch + daemon restart, all {} memories will be re-embedded.", total_memories);
                                 println!();
                                 println!("Run with --yes (and without --dry-run) to apply.");
                             } else if !yes {
-                                eprintln!("WARNING: Switching from {} dims to {} dims.", current, target_dim);
-                                eprintln!("This will purge ALL existing embeddings ({} rows).", total_memories);
+                                eprintln!(
+                                    "WARNING: Switching from {} dims to {} dims.",
+                                    current, target_dim
+                                );
+                                eprintln!(
+                                    "This will purge ALL existing embeddings ({} rows).",
+                                    total_memories
+                                );
                                 eprintln!("Source memories are not deleted — only embedding vectors are removed.");
                                 eprintln!();
                                 eprintln!("Re-run with --yes to confirm:");
@@ -858,18 +904,30 @@ async fn main() -> Result<()> {
                                 std::process::exit(1);
                             } else {
                                 // --yes confirmed — execute destructive switch
-                                println!("Cross-dimension switch: {} dims -> {} dims", current, target_dim);
+                                println!(
+                                    "Cross-dimension switch: {} dims -> {} dims",
+                                    current, target_dim
+                                );
                                 println!("Dropping HNSW index...");
                                 store.drop_hnsw_index().await?;
                                 println!("Purging all embeddings...");
                                 let purged = store.purge_all_embeddings().await?;
-                                println!("Purged {} embedding rows. {} memories reset to pending.", purged, total_memories);
+                                println!(
+                                    "Purged {} embedding rows. {} memories reset to pending.",
+                                    purged, total_memories
+                                );
                                 println!();
                                 println!("Next steps:");
-                                println!("  1. Update memcp.toml: set embedding.local_model = \"{}\"", model);
+                                println!(
+                                    "  1. Update memcp.toml: set embedding.local_model = \"{}\"",
+                                    model
+                                );
                                 println!("     (or embedding.openai_model for OpenAI models)");
                                 println!("  2. Restart the daemon — it will recreate the HNSW index ({} dims)", target_dim);
-                                println!("     and begin re-embedding all {} memories.", total_memories);
+                                println!(
+                                    "     and begin re-embedding all {} memories.",
+                                    total_memories
+                                );
                             }
                         }
                     }
@@ -878,7 +936,22 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        Commands::Store { content, stdin, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, project, trust_level, session_id, agent_role } => {
+        Commands::Store {
+            content,
+            stdin,
+            type_hint,
+            source,
+            tags,
+            actor,
+            actor_type,
+            audience,
+            idempotency_key,
+            wait,
+            project,
+            trust_level,
+            session_id,
+            agent_role,
+        } => {
             let resolved = cli::resolve_content_arg(content, stdin)?;
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
@@ -901,11 +974,44 @@ async fn main() -> Result<()> {
             } else {
                 let store = cli::connect_store(&config, cli.skip_migrate).await?;
                 let project = cli::resolve_project(project, &config);
-                cli::cmd_store(&store, &config, resolved, type_hint, source, tags, actor, actor_type, audience, idempotency_key, wait, project, trust_level, session_id, agent_role).await?;
+                cli::cmd_store(
+                    &store,
+                    &config,
+                    resolved,
+                    type_hint,
+                    source,
+                    tags,
+                    actor,
+                    actor_type,
+                    audience,
+                    idempotency_key,
+                    wait,
+                    project,
+                    trust_level,
+                    session_id,
+                    agent_role,
+                )
+                .await?;
             }
         }
 
-        Commands::Search { query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience, project } => {
+        Commands::Search {
+            query,
+            limit,
+            created_after,
+            created_before,
+            tags,
+            source,
+            audience,
+            type_hint,
+            verbose,
+            json,
+            compact,
+            cursor,
+            fields,
+            min_salience,
+            project,
+        } => {
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
                     "query": query,
@@ -924,19 +1030,72 @@ async fn main() -> Result<()> {
             } else {
                 let store = cli::connect_store(&config, cli.skip_migrate).await?;
                 let project = cli::resolve_project(project, &config);
-                cli::cmd_search(&store, &config, query, limit, created_after, created_before, tags, source, audience, type_hint, verbose, json, compact, cursor, fields, min_salience, project).await?;
+                cli::cmd_search(
+                    &store,
+                    &config,
+                    query,
+                    limit,
+                    created_after,
+                    created_before,
+                    tags,
+                    source,
+                    audience,
+                    type_hint,
+                    verbose,
+                    json,
+                    compact,
+                    cursor,
+                    fields,
+                    min_salience,
+                    project,
+                )
+                .await?;
             }
         }
 
-        Commands::Recent { since, source, actor, limit, verbose } => {
+        Commands::Recent {
+            since,
+            source,
+            actor,
+            limit,
+            verbose,
+        } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
             cli::cmd_recent(&store, since, source, actor, limit, verbose).await?;
         }
 
-        Commands::List { type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose, project } => {
+        Commands::List {
+            type_hint,
+            source,
+            created_after,
+            created_before,
+            updated_after,
+            updated_before,
+            limit,
+            cursor,
+            actor,
+            audience,
+            verbose,
+            project,
+        } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
             let project = cli::resolve_project(project, &config);
-            cli::cmd_list(&store, type_hint, source, created_after, created_before, updated_after, updated_before, limit, cursor, actor, audience, verbose, project).await?;
+            cli::cmd_list(
+                &store,
+                type_hint,
+                source,
+                created_after,
+                created_before,
+                updated_after,
+                updated_before,
+                limit,
+                cursor,
+                actor,
+                audience,
+                verbose,
+                project,
+            )
+            .await?;
         }
 
         Commands::Get { id } => {
@@ -959,25 +1118,25 @@ async fn main() -> Result<()> {
             cli::cmd_status(&store, &config, pretty, check).await?;
         }
 
-        Commands::Daemon { action } => {
-            match action {
-                Some(DaemonAction::Install) => {
-                    memcp::daemon::install_service()?;
-                }
-                None => {
-                    memcp::daemon::run_daemon(&config, cli.skip_migrate).await?;
-                }
+        Commands::Daemon { action } => match action {
+            Some(DaemonAction::Install) => {
+                memcp::daemon::install_service()?;
             }
-        }
-
-        Commands::Statusline { action } => {
-            match action {
-                StatuslineAction::Install => cli::cmd_statusline_install()?,
-                StatuslineAction::Remove => cli::cmd_statusline_remove()?,
+            None => {
+                memcp::daemon::run_daemon(&config, cli.skip_migrate).await?;
             }
-        }
+        },
 
-        Commands::Gc { dry_run, salience_threshold, min_age_days } => {
+        Commands::Statusline { action } => match action {
+            StatuslineAction::Install => cli::cmd_statusline_install()?,
+            StatuslineAction::Remove => cli::cmd_statusline_remove()?,
+        },
+
+        Commands::Gc {
+            dry_run,
+            salience_threshold,
+            min_age_days,
+        } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
             cli::cmd_gc(&store, &config, dry_run, salience_threshold, min_age_days).await?;
         }
@@ -985,12 +1144,23 @@ async fn main() -> Result<()> {
         Commands::Feedback { id, signal } => {
             let store = cli::connect_store(&config, cli.skip_migrate).await?;
             if let Err(e) = cli::cmd_feedback(&store, &id, &signal).await {
-                println!("{}", serde_json::json!({"ok": false, "error": e.to_string()}));
+                println!(
+                    "{}",
+                    serde_json::json!({"ok": false, "error": e.to_string()})
+                );
                 std::process::exit(1);
             }
         }
 
-        Commands::Recall { query, session_id, reset, project, first, limit, boost_tags } => {
+        Commands::Recall {
+            query,
+            session_id,
+            reset,
+            project,
+            first,
+            limit,
+            boost_tags,
+        } => {
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
                     "query": query.as_deref().unwrap_or(""),
@@ -1007,7 +1177,18 @@ async fn main() -> Result<()> {
                 let store = cli::connect_store(&config, cli.skip_migrate).await?;
                 let project = cli::resolve_project(project, &config);
                 let query_str = query.unwrap_or_default();
-                cli::cmd_recall(&store, &config, &query_str, session_id, reset, project, first, limit, &boost_tags).await?;
+                cli::cmd_recall(
+                    &store,
+                    &config,
+                    &query_str,
+                    session_id,
+                    reset,
+                    project,
+                    first,
+                    limit,
+                    &boost_tags,
+                )
+                .await?;
             }
         }
 
@@ -1026,7 +1207,12 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Annotate { id, tags, replace_tags, salience } => {
+        Commands::Annotate {
+            id,
+            tags,
+            replace_tags,
+            salience,
+        } => {
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
                     "id": id,
@@ -1042,7 +1228,15 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Update { id, content, stdin, type_hint, source, tags, wait } => {
+        Commands::Update {
+            id,
+            content,
+            stdin,
+            type_hint,
+            source,
+            tags,
+            wait,
+        } => {
             let resolved = cli::resolve_content_arg(content, stdin)?;
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
@@ -1056,7 +1250,8 @@ async fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 let store = cli::connect_store(&config, cli.skip_migrate).await?;
-                cli::cmd_update(&store, &config, id, resolved, type_hint, source, tags, wait).await?;
+                cli::cmd_update(&store, &config, id, resolved, type_hint, source, tags, wait)
+                    .await?;
             }
         }
 
@@ -1079,7 +1274,9 @@ async fn main() -> Result<()> {
                     let since_dt = if let Some(ref s) = since {
                         Some(
                             chrono::DateTime::parse_from_rfc3339(s)
-                                .map_err(|e| anyhow::anyhow!("Invalid --since timestamp '{}': {}", s, e))?
+                                .map_err(|e| {
+                                    anyhow::anyhow!("Invalid --since timestamp '{}': {}", s, e)
+                                })?
                                 .with_timezone(&chrono::Utc),
                         )
                     } else {
@@ -1125,20 +1322,28 @@ async fn main() -> Result<()> {
                 } => {
                     let store = cli::connect_store(&config, cli.skip_migrate).await?;
                     let since_dt = if let Some(ref s) = since {
-                        Some(chrono::DateTime::parse_from_rfc3339(s)
-                            .map_err(|e| anyhow::anyhow!("Invalid --since timestamp '{}': {}", s, e))?
-                            .with_timezone(&chrono::Utc))
-                    } else { None };
+                        Some(
+                            chrono::DateTime::parse_from_rfc3339(s)
+                                .map_err(|e| {
+                                    anyhow::anyhow!("Invalid --since timestamp '{}': {}", s, e)
+                                })?
+                                .with_timezone(&chrono::Utc),
+                        )
+                    } else {
+                        None
+                    };
                     let reader = OpenClawReader::new(agent, &config.embedding);
                     let import_path = match path {
                         Some(p) => p,
                         None => {
-                            let sources: Vec<DiscoveredSource> = ImportSource::discover(&reader).await?;
-                            sources.into_iter().next().map(|s| s.path)
-                                .ok_or_else(|| anyhow::anyhow!(
+                            let sources: Vec<DiscoveredSource> =
+                                ImportSource::discover(&reader).await?;
+                            sources.into_iter().next().map(|s| s.path).ok_or_else(|| {
+                                anyhow::anyhow!(
                                     "No OpenClaw database found at ~/.openclaw/memory/. \
                                      Provide a path explicitly with: memcp import openclaw <path>"
-                                ))?
+                                )
+                            })?
                         }
                     };
                     let mut skip_patterns = skip_pattern.unwrap_or_default();
@@ -1158,7 +1363,9 @@ async fn main() -> Result<()> {
                     let engine = ImportEngine::new(store, opts);
                     let result = engine.run(&reader, &import_path).await?;
                     println!("{}", serde_json::to_string_pretty(&result)?);
-                    if result.failed > 0 { std::process::exit(1); }
+                    if result.failed > 0 {
+                        std::process::exit(1);
+                    }
                 }
                 ImportAction::ClaudeCode {
                     path,
@@ -1174,19 +1381,24 @@ async fn main() -> Result<()> {
                 } => {
                     let store = cli::connect_store(&config, cli.skip_migrate).await?;
                     let since_dt = if let Some(ref s) = since {
-                        Some(chrono::DateTime::parse_from_rfc3339(s)
-                            .map_err(|e| anyhow::anyhow!("Invalid --since timestamp '{}': {}", s, e))?
-                            .with_timezone(&chrono::Utc))
-                    } else { None };
+                        Some(
+                            chrono::DateTime::parse_from_rfc3339(s)
+                                .map_err(|e| {
+                                    anyhow::anyhow!("Invalid --since timestamp '{}': {}", s, e)
+                                })?
+                                .with_timezone(&chrono::Utc),
+                        )
+                    } else {
+                        None
+                    };
                     let reader = ClaudeCodeReader::new(include_history);
                     let import_path = match path {
                         Some(p) => p,
-                        None => {
-                            ClaudeCodeReader::default_base_path()
-                                .ok_or_else(|| anyhow::anyhow!(
-                                    "Could not determine home directory for Claude Code auto-detection"
-                                ))?
-                        }
+                        None => ClaudeCodeReader::default_base_path().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Could not determine home directory for Claude Code auto-detection"
+                            )
+                        })?,
                     };
                     let mut skip_patterns = skip_pattern.unwrap_or_default();
                     skip_patterns.extend(config.import.noise_patterns.iter().cloned());
@@ -1205,7 +1417,9 @@ async fn main() -> Result<()> {
                     let engine = ImportEngine::new(store, opts);
                     let result = engine.run(&reader, &import_path).await?;
                     println!("{}", serde_json::to_string_pretty(&result)?);
-                    if result.failed > 0 { std::process::exit(1); }
+                    if result.failed > 0 {
+                        std::process::exit(1);
+                    }
                 }
                 ImportAction::Chatgpt {
                     path,
@@ -1235,12 +1449,18 @@ async fn main() -> Result<()> {
                         remote_url: cli.remote.clone(),
                         no_filter,
                     };
-                    let curator = if curate { ImportCurator::new(&config) } else { None };
+                    let curator = if curate {
+                        ImportCurator::new(&config)
+                    } else {
+                        None
+                    };
                     let reader = ChatGptReader;
                     let engine = ImportEngine::new(store, opts).with_curator(curator);
                     let result = engine.run(&reader, &path).await?;
                     println!("{}", serde_json::to_string_pretty(&result)?);
-                    if result.failed > 0 { std::process::exit(1); }
+                    if result.failed > 0 {
+                        std::process::exit(1);
+                    }
                 }
                 ImportAction::Claude {
                     path,
@@ -1270,12 +1490,18 @@ async fn main() -> Result<()> {
                         remote_url: cli.remote.clone(),
                         no_filter,
                     };
-                    let curator = if curate { ImportCurator::new(&config) } else { None };
+                    let curator = if curate {
+                        ImportCurator::new(&config)
+                    } else {
+                        None
+                    };
                     let reader = ClaudeAiReader;
                     let engine = ImportEngine::new(store, opts).with_curator(curator);
                     let result = engine.run(&reader, &path).await?;
                     println!("{}", serde_json::to_string_pretty(&result)?);
-                    if result.failed > 0 { std::process::exit(1); }
+                    if result.failed > 0 {
+                        std::process::exit(1);
+                    }
                 }
                 ImportAction::Markdown {
                     path,
@@ -1305,29 +1531,39 @@ async fn main() -> Result<()> {
                         remote_url: cli.remote.clone(),
                         no_filter,
                     };
-                    let curator = if curate { ImportCurator::new(&config) } else { None };
+                    let curator = if curate {
+                        ImportCurator::new(&config)
+                    } else {
+                        None
+                    };
                     let reader = MarkdownReader;
                     let engine = ImportEngine::new(store, opts).with_curator(curator);
                     let result = engine.run(&reader, &path).await?;
                     println!("{}", serde_json::to_string_pretty(&result)?);
-                    if result.failed > 0 { std::process::exit(1); }
+                    if result.failed > 0 {
+                        std::process::exit(1);
+                    }
                 }
                 ImportAction::Discover { yes } => {
                     let sources = discover_all_sources(&config.embedding).await;
-                    let history_path = default_history_path();
+                    let _history_path = default_history_path();
 
                     // Help text for sources needing manual export.
-                    let help_text: std::collections::HashMap<&str, &str> = std::collections::HashMap::from([
-                        ("chatgpt", "export from Settings > Data Controls > Export"),
-                        ("claude-ai", "export from Account Settings"),
-                    ]);
+                    let help_text: std::collections::HashMap<&str, &str> =
+                        std::collections::HashMap::from([
+                            ("chatgpt", "export from Settings > Data Controls > Export"),
+                            ("claude-ai", "export from Account Settings"),
+                        ]);
 
                     let store = cli::connect_store(&config, cli.skip_migrate).await?;
                     let mut results: Vec<(String, memcp::import::ImportResult)> = Vec::new();
 
                     for source in &sources {
                         if source.item_count == 0 {
-                            let help = help_text.get(source.source_type.as_str()).copied().unwrap_or("not found on this machine");
+                            let help = help_text
+                                .get(source.source_type.as_str())
+                                .copied()
+                                .unwrap_or("not found on this machine");
                             eprintln!("  {} — not found ({})", source.source_type, help);
                             continue;
                         }
@@ -1347,7 +1583,10 @@ async fn main() -> Result<()> {
                         let should_import = if yes {
                             true
                         } else {
-                            eprint!("  Import {} ({} chunks)? [Y/n] ", source.source_type, source.item_count);
+                            eprint!(
+                                "  Import {} ({} chunks)? [Y/n] ",
+                                source.source_type, source.item_count
+                            );
                             let mut input = String::new();
                             std::io::stdin().read_line(&mut input)?;
                             let trimmed = input.trim().to_lowercase();
@@ -1385,7 +1624,10 @@ async fn main() -> Result<()> {
                                 engine.run(&reader, &source.path).await?
                             }
                             _ => {
-                                eprintln!("  {} — unsupported source type, skipping", source.source_type);
+                                eprintln!(
+                                    "  {} — unsupported source type, skipping",
+                                    source.source_type
+                                );
                                 continue;
                             }
                         };
@@ -1409,8 +1651,9 @@ async fn main() -> Result<()> {
                 ImportAction::Review { last } => {
                     // Find the import directory to review.
                     let dir = if last {
-                        find_latest_import_dir()
-                            .ok_or_else(|| anyhow::anyhow!("No import runs found in ~/.memcp/imports/"))?
+                        find_latest_import_dir().ok_or_else(|| {
+                            anyhow::anyhow!("No import runs found in ~/.memcp/imports/")
+                        })?
                     } else {
                         find_latest_import_dir()
                             .ok_or_else(|| anyhow::anyhow!("No import runs found in ~/.memcp/imports/. Use --last to review the most recent run."))?
@@ -1423,7 +1666,9 @@ async fn main() -> Result<()> {
                     let mut llm_count = 0usize;
                     let mut dedup_count = 0usize;
                     for item in &items {
-                        if item.rescued { continue; }
+                        if item.rescued {
+                            continue;
+                        }
                         if item.reason.starts_with("noise:") {
                             noise_count += 1;
                         } else if item.reason.starts_with("llm:") {
@@ -1436,7 +1681,10 @@ async fn main() -> Result<()> {
                     let unrescued: Vec<&_> = items.iter().filter(|i| !i.rescued).collect();
                     let total = unrescued.len();
 
-                    eprintln!("{} items filtered (noise: {}, llm: {}, dedup: {})", total, noise_count, llm_count, dedup_count);
+                    eprintln!(
+                        "{} items filtered (noise: {}, llm: {}, dedup: {})",
+                        total, noise_count, llm_count, dedup_count
+                    );
                     eprintln!("Import dir: {}", dir.display());
                     eprintln!();
 
@@ -1450,8 +1698,9 @@ async fn main() -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&unrescued)?);
                 }
                 ImportAction::Rescue { id, all } => {
-                    let dir = find_latest_import_dir()
-                        .ok_or_else(|| anyhow::anyhow!("No import runs found in ~/.memcp/imports/"))?;
+                    let dir = find_latest_import_dir().ok_or_else(|| {
+                        anyhow::anyhow!("No import runs found in ~/.memcp/imports/")
+                    })?;
 
                     let mut items = load_filtered(&dir);
                     let store = cli::connect_store(&config, cli.skip_migrate).await?;
@@ -1459,18 +1708,29 @@ async fn main() -> Result<()> {
 
                     // Collect items to rescue.
                     let to_rescue: Vec<usize> = if all {
-                        items.iter().enumerate()
+                        items
+                            .iter()
+                            .enumerate()
                             .filter(|(_, item)| !item.rescued)
                             .map(|(i, _)| i)
                             .collect()
                     } else if let Some(ref rescue_id) = id {
                         // Support full UUID or short 8-char prefix.
-                        let matched: Vec<usize> = items.iter().enumerate()
-                            .filter(|(_, item)| !item.rescued && (item.id == *rescue_id || item.id.starts_with(rescue_id.as_str())))
+                        let matched: Vec<usize> = items
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, item)| {
+                                !item.rescued
+                                    && (item.id == *rescue_id
+                                        || item.id.starts_with(rescue_id.as_str()))
+                            })
                             .map(|(i, _)| i)
                             .collect();
                         if matched.is_empty() {
-                            return Err(anyhow::anyhow!("No filtered item found with id '{}'", rescue_id));
+                            return Err(anyhow::anyhow!(
+                                "No filtered item found with id '{}'",
+                                rescue_id
+                            ));
                         }
                         matched
                     } else {
@@ -1478,7 +1738,8 @@ async fn main() -> Result<()> {
                     };
 
                     // Convert to ImportChunks and batch insert.
-                    let chunks: Vec<memcp::import::ImportChunk> = to_rescue.iter()
+                    let chunks: Vec<memcp::import::ImportChunk> = to_rescue
+                        .iter()
                         .map(|&idx| {
                             let item = &items[idx];
                             memcp::import::ImportChunk {
@@ -1515,7 +1776,9 @@ async fn main() -> Result<()> {
                         let mut count = 0;
                         for chunk in &chunks {
                             let mut tags = chunk.tags.clone();
-                            if !tags.iter().any(|t| t == "imported") { tags.push("imported".to_string()); }
+                            if !tags.iter().any(|t| t == "imported") {
+                                tags.push("imported".to_string());
+                            }
                             tags.push("rescued".to_string());
                             tags.sort();
                             tags.dedup();
@@ -1574,13 +1837,23 @@ async fn main() -> Result<()> {
             if let Some(ref remote_url) = cli.remote {
                 // Remote export: GET /v1/export with query params via dispatch_remote_get.
                 let mut params: Vec<(&str, String)> = vec![("format", format.clone())];
-                if let Some(ref p) = project { params.push(("project", p.clone())); }
-                if let Some(ref t) = tags {
-                    for tag in t { params.push(("tag", tag.clone())); }
+                if let Some(ref p) = project {
+                    params.push(("project", p.clone()));
                 }
-                if let Some(ref s) = since { params.push(("since", s.clone())); }
-                if include_embeddings { params.push(("include_embeddings", "true".to_string())); }
-                if include_state { params.push(("include_state", "true".to_string())); }
+                if let Some(ref t) = tags {
+                    for tag in t {
+                        params.push(("tag", tag.clone()));
+                    }
+                }
+                if let Some(ref s) = since {
+                    params.push(("since", s.clone()));
+                }
+                if include_embeddings {
+                    params.push(("include_embeddings", "true".to_string()));
+                }
+                if include_state {
+                    params.push(("include_state", "true".to_string()));
+                }
 
                 let response = cli::dispatch_remote_get(remote_url, "export", &params).await?;
 
@@ -1592,8 +1865,8 @@ async fn main() -> Result<()> {
                 }
             } else {
                 // Local export: direct Postgres connection.
-                let export_format = ExportFormat::from_str(&format)
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+                let export_format =
+                    ExportFormat::from_str(&format).map_err(|e| anyhow::anyhow!("{}", e))?;
 
                 let opts = ExportOpts {
                     format: export_format,
@@ -1619,7 +1892,14 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Discover { query, min_similarity, max_similarity, limit, project, json } => {
+        Commands::Discover {
+            query,
+            min_similarity,
+            max_similarity,
+            limit,
+            project,
+            json,
+        } => {
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
                     "query": query,
@@ -1633,16 +1913,22 @@ async fn main() -> Result<()> {
             } else {
                 let store = cli::connect_store(&config, cli.skip_migrate).await?;
                 let project = cli::resolve_project(project, &config);
-                cli::cmd_discover(&store, query, min_similarity, max_similarity, limit, project, json).await?;
+                cli::cmd_discover(
+                    &store,
+                    query,
+                    min_similarity,
+                    max_similarity,
+                    limit,
+                    project,
+                    json,
+                )
+                .await?;
             }
         }
 
         Commands::Serve => {
             // Start the MCP server
-            tracing::info!(
-                version = env!("CARGO_PKG_VERSION"),
-                "memcp server starting"
-            );
+            tracing::info!(version = env!("CARGO_PKG_VERSION"), "memcp server starting");
 
             // 5. Initialize PostgreSQL store
             let run_migrations = !cli.skip_migrate;
@@ -1655,9 +1941,10 @@ async fn main() -> Result<()> {
             tracing::info!(database_url = %config.database_url, "PostgreSQL store initialized");
 
             // 6. Create embedding provider and pipeline
-            let provider = create_embedding_provider(&config).await
+            let provider = create_embedding_provider(&config)
+                .await
                 .expect("Failed to initialize embedding provider");
-            let provider_for_search = provider.clone();  // Clone for MemoryService search
+            let provider_for_search = provider.clone(); // Clone for MemoryService search
 
             // 6b. Create consolidation worker if enabled (must happen before embedding pipeline)
             // Consolidation is triggered indirectly via the embedding pipeline's completion callback.
@@ -1681,12 +1968,21 @@ async fn main() -> Result<()> {
             };
 
             // Serve mode: no dedup sender (serve path is lightweight, dedup handled by daemon)
-            let pipeline = EmbeddingPipeline::new_single(provider, store.clone(), 1000, consolidation_sender, None);
+            let pipeline = EmbeddingPipeline::new_single(
+                provider,
+                store.clone(),
+                1000,
+                consolidation_sender,
+                None,
+            );
 
             // 7. Run startup backfill — queue any un-embedded memories from previous runs
             let queued = backfill(&store, &pipeline.sender()).await;
             if queued > 0 {
-                tracing::info!(count = queued, "Startup backfill queued memories for embedding");
+                tracing::info!(
+                    count = queued,
+                    "Startup backfill queued memories for embedding"
+                );
             }
 
             // 8. Create extraction pipeline if enabled
@@ -1706,7 +2002,10 @@ async fn main() -> Result<()> {
                                     });
                                 }
                                 if count > 0 {
-                                    tracing::info!(count = count, "Startup backfill queued memories for extraction");
+                                    tracing::info!(
+                                        count = count,
+                                        "Startup backfill queued memories for extraction"
+                                    );
                                 }
                             }
                             Err(e) => {
@@ -1726,11 +2025,16 @@ async fn main() -> Result<()> {
             };
 
             // 8b. Build content filter if enabled
-            let content_filter: Option<Arc<dyn memcp::content_filter::ContentFilter>> = if config.content_filter.enabled {
+            let content_filter: Option<Arc<dyn memcp::content_filter::ContentFilter>> = if config
+                .content_filter
+                .enabled
+            {
                 match CompositeFilter::from_config(
                     &config.content_filter,
                     Some(provider_for_search.clone()),
-                ).await {
+                )
+                .await
+                {
                     Ok(filter) => {
                         tracing::info!(
                             regex_patterns = config.content_filter.regex_patterns.len(),
@@ -1797,6 +2101,32 @@ async fn main() -> Result<()> {
                 None
             };
 
+            // 9b. Construct redaction engine if enabled
+            let redaction_engine: Option<
+                Arc<memcp::redaction::RedactionEngine>,
+            > = if config.redaction.secrets_enabled || config.redaction.pii_enabled {
+                match memcp::redaction::RedactionEngine::from_config(&config.redaction) {
+                    Ok(engine) => {
+                        tracing::info!(
+                            secrets_enabled = config.redaction.secrets_enabled,
+                            pii_enabled = config.redaction.pii_enabled,
+                            "Redaction engine initialized"
+                        );
+                        Some(Arc::new(engine))
+                    }
+                    Err(e) => {
+                        if config.redaction.secrets_enabled {
+                            tracing::error!(error = %e, "Failed to initialize redaction engine — exiting (fail-closed)");
+                            std::process::exit(1);
+                        }
+                        tracing::warn!(error = %e, "Failed to initialize redaction engine — redaction disabled");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
             // 10. Create service with store, pipeline, embedding provider, salience config, extraction pipeline, and QI providers
             let pg_store_for_search = store.clone();
             let mut service = MemoryService::new(
@@ -1811,6 +2141,7 @@ async fn main() -> Result<()> {
                 qi_reranking_provider,
                 config.query_intelligence.clone(),
                 content_filter,
+                redaction_engine,
             );
             service.set_recall_config(config.recall.clone(), config.extraction.enabled);
             service.set_resource_caps(config.resource_caps.clone());
