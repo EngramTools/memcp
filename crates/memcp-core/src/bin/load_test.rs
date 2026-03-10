@@ -10,33 +10,39 @@
 //!   DATABASE_URL=postgres://... cargo run --bin load-test -- --help
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::Result;
-use axum::Router;
 use axum::routing::get;
-use clap::Parser;
+use axum::Router;
 use chrono::Utc;
+use clap::Parser;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tokio::net::TcpListener;
 use tokio::time::Instant;
 
-use memcp::MIGRATOR;
 use memcp::config::{Config, CurationConfig, RateLimitConfig};
-use memcp::load_test::{LoadTestConfig, LoadTestReport, SecurityReport, TrustCorpusConfig, TrustWorkloadResult, WorkloadProfile};
-use memcp::load_test::{client, corpus, metrics as lt_metrics, report};
 use memcp::load_test::trust::{self, MockLlmProvider, TrustWorkloadState};
+use memcp::load_test::{client, corpus, metrics as lt_metrics, report};
+use memcp::load_test::{
+    LoadTestConfig, LoadTestReport, SecurityReport, TrustCorpusConfig, TrustWorkloadResult,
+    WorkloadProfile,
+};
 use memcp::store::postgres::PostgresMemoryStore;
-use memcp::transport::health::AppState;
 use memcp::transport::api;
+use memcp::transport::health::AppState;
+use memcp::MIGRATOR;
 
 // ─── CLI Definition ───────────────────────────────────────────────────────────
 
 #[derive(Parser, Debug)]
-#[command(name = "memcp-load-test", about = "HTTP load test harness for memcp capacity sizing")]
+#[command(
+    name = "memcp-load-test",
+    about = "HTTP load test harness for memcp capacity sizing"
+)]
 struct Cli {
     /// Corpus size: number of memories to seed before testing.
     /// If not specified, tests run at 100, 1000, and 10000.
@@ -95,6 +101,11 @@ struct Cli {
     /// Use real Ollama LLM instead of mock provider for curation (trust profile only)
     #[arg(long)]
     real_llm: bool,
+
+    /// Acknowledge that this load test will TRUNCATE tables in the target database.
+    /// Required for safety -- the load test operates on the PUBLIC schema (no isolation).
+    #[arg(long)]
+    destructive: bool,
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -110,6 +121,27 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+
+    // ── Safety checks ─────────────────────────────────────────────────────────
+    if !cli.destructive {
+        eprintln!("ERROR: Load test runs are destructive (TRUNCATE on public schema).");
+        eprintln!("Unlike benchmarks, load tests operate directly on the public schema.");
+        eprintln!("Pass --destructive to acknowledge and proceed.");
+        eprintln!();
+        eprintln!("This load test will:");
+        eprintln!("  - TRUNCATE memories, memory_embeddings tables");
+        eprintln!("  - TRUNCATE curation_runs table (trust profile)");
+        eprintln!("  - Seed test data that overwrites existing data");
+        std::process::exit(1);
+    }
+
+    if memcp::benchmark::check_database_url_safety(&cli.database_url) {
+        eprintln!("WARNING: Database URL looks like a production database!");
+        eprintln!("  URL: {}", cli.database_url);
+        eprintln!("  The load test TRUNCATES tables on the PUBLIC schema -- this WILL destroy data.");
+        eprintln!("  Ensure this is intentional.");
+        eprintln!();
+    }
 
     // Create output directory
     std::fs::create_dir_all(&cli.output_dir)?;
@@ -135,7 +167,7 @@ async fn main() -> Result<()> {
         "trust" => {
             return run_trust_workload_cli(&cli, &pool).await;
         }
-        "standard" | _ => {
+        _ => {
             // existing flow below
         }
     }
@@ -187,11 +219,16 @@ async fn main() -> Result<()> {
         // Clear and re-seed corpus for this corpus size
         println!("  Clearing corpus...");
         corpus::clear_corpus(&pool).await?;
-        println!("  Seeding {} memories across {} projects...", corpus_size, cli.num_projects);
+        println!(
+            "  Seeding {} memories across {} projects...",
+            corpus_size, cli.num_projects
+        );
         corpus::seed_corpus(&pool, corpus_size, cli.num_projects).await?;
 
         for &concurrency in &concurrency_levels {
-            let total_ops = cli.total_ops.unwrap_or_else(|| (concurrency * 100).max(1000));
+            let total_ops = cli
+                .total_ops
+                .unwrap_or_else(|| (concurrency * 100).max(1000));
 
             println!(
                 "\n  Concurrency: {} | Ops: {} | RW: {}",
@@ -208,10 +245,7 @@ async fn main() -> Result<()> {
             };
 
             for (mode_label, rate_limits_enabled) in &modes {
-                println!(
-                    "    Running {} workload...",
-                    mode_label
-                );
+                println!("    Running {} workload...", mode_label);
 
                 // Build rate limit config
                 let rl_config = if *rate_limits_enabled {
@@ -225,8 +259,10 @@ async fn main() -> Result<()> {
 
                 // Build AppState for this test server instance
                 let store = PostgresMemoryStore::from_pool(pool.clone()).await?;
-                let mut config = Config::default();
-                config.rate_limit = rl_config.clone();
+                let config = Config {
+                    rate_limit: rl_config.clone(),
+                    ..Config::default()
+                };
 
                 // Use a non-global Prometheus recorder to avoid panic if metrics
                 // already initialized in a previous iteration
@@ -330,7 +366,10 @@ async fn main() -> Result<()> {
                 if search_p95 > 0 {
                     println!("    │ Search p95:   {}ms", search_p95);
                 }
-                println!("    │ Fly.io tier:  {}", fly_tier.lines().next().unwrap_or(&fly_tier));
+                println!(
+                    "    │ Fly.io tier:  {}",
+                    fly_tier.lines().next().unwrap_or(&fly_tier)
+                );
                 println!("    │ Reports:      {}", json_path.display());
                 println!("    └───────────────────────────────────────────");
 
@@ -388,7 +427,9 @@ async fn spawn_test_server(state: AppState, rl_config: &RateLimitConfig) -> Stri
         .merge(api_routes)
         .with_state(state);
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind random port");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind random port");
     let addr = listener.local_addr().expect("get local addr");
 
     tokio::spawn(async move {
@@ -410,7 +451,11 @@ async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
     };
 
     println!("\n== Trust Workload ==");
-    println!("Corpus size: {} ({} poisoned)", corpus_size, trust_config.poison_count());
+    println!(
+        "Corpus size: {} ({} poisoned)",
+        corpus_size,
+        trust_config.poison_count()
+    );
     println!("Concurrency: {}", concurrency);
     println!("Real LLM: {}", cli.real_llm);
 
@@ -476,7 +521,10 @@ async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
 
     // 6. Optionally run HTTP workload concurrently
     let duration_secs = cli.duration;
-    println!("\nRunning trust workload for {}s with curation loop...", duration_secs);
+    println!(
+        "\nRunning trust workload for {}s with curation loop...",
+        duration_secs
+    );
 
     // Run HTTP workload if we have a server
     let rl_config = RateLimitConfig {
@@ -484,8 +532,10 @@ async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
         ..RateLimitConfig::default()
     };
     let app_store = PostgresMemoryStore::from_pool(pool.clone()).await?;
-    let mut config = Config::default();
-    config.rate_limit = rl_config.clone();
+    let config = Config {
+        rate_limit: rl_config.clone(),
+        ..Config::default()
+    };
     let metrics_handle = PrometheusBuilder::new().build_recorder().handle();
 
     let app_state = AppState {
@@ -505,7 +555,9 @@ async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
         .pool_max_idle_per_host(concurrency)
         .build()?;
 
-    let total_ops = cli.total_ops.unwrap_or_else(|| (concurrency * 100).max(1000));
+    let total_ops = cli
+        .total_ops
+        .unwrap_or_else(|| (concurrency * 100).max(1000));
 
     let load_config = LoadTestConfig {
         corpus_size,
@@ -540,7 +592,7 @@ async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
     let quarantined = state.quarantined_ids.read().await;
     let poisoned = state.poisoned_ids.read().await;
 
-    let detection_rate = if poisoned.len() > 0 {
+    let detection_rate = if !poisoned.is_empty() {
         quarantined.len() as f64 / poisoned.len() as f64
     } else {
         0.0
@@ -551,10 +603,15 @@ async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
         quarantined_count: quarantined.len(),
         detection_rate,
         false_positive_count: 0, // Would need tracking clean IDs that got flagged
-        violations: violations.iter().map(|v| {
-            format!("{:?}: memory={} expected={} actual={}",
-                v.violation_type, v.memory_id, v.expected, v.actual)
-        }).collect(),
+        violations: violations
+            .iter()
+            .map(|v| {
+                format!(
+                    "{:?}: memory={} expected={} actual={}",
+                    v.violation_type, v.memory_id, v.expected, v.actual
+                )
+            })
+            .collect(),
         curation_cycles: curation_metrics.cycle_count,
         p1_drain_ms: curation_metrics.p1_drain_ms.clone(),
         p2_drain_ms: curation_metrics.p2_drain_ms.clone(),
@@ -565,8 +622,16 @@ async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
     // 10. Build standard report
     let per_endpoint = lt_metrics::aggregate_results(&results);
     let total_errors: usize = results.iter().filter(|r| r.is_error).count();
-    let error_rate = if total_ops > 0 { total_errors as f64 / total_ops as f64 } else { 0.0 };
-    let ops_per_sec = if elapsed_secs > 0.0 { total_ops as f64 / elapsed_secs } else { 0.0 };
+    let error_rate = if total_ops > 0 {
+        total_errors as f64 / total_ops as f64
+    } else {
+        0.0
+    };
+    let ops_per_sec = if elapsed_secs > 0.0 {
+        total_ops as f64 / elapsed_secs
+    } else {
+        0.0
+    };
 
     let load_report = LoadTestReport {
         timestamp: Utc::now(),
@@ -600,7 +665,10 @@ async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
     println!("\n== Trust Workload Results ==");
     println!("Poisoned seeded:     {}", security_report.poisoned_seeded);
     println!("Quarantined:         {}", security_report.quarantined_count);
-    println!("Detection rate:      {:.1}%", security_report.detection_rate * 100.0);
+    println!(
+        "Detection rate:      {:.1}%",
+        security_report.detection_rate * 100.0
+    );
     println!("Violations:          {}", security_report.violations.len());
     println!("Curation cycles:     {}", security_report.curation_cycles);
     println!("HTTP ops/sec:        {:.1}", ops_per_sec);
