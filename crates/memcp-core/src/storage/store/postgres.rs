@@ -394,7 +394,17 @@ impl PostgresMemoryStore {
     /// Truncate all benchmark-relevant tables: memories, memory_embeddings, memory_salience, memory_consolidations.
     /// Uses TRUNCATE ... CASCADE for speed. Benchmark-only — not exposed via MCP.
     /// Retries up to 5 times on deadlock (embedding worker may hold locks).
+    ///
+    /// Safety: Requires a named schema (e.g. "benchmark"). Refuses to operate on the
+    /// public schema to prevent accidental production data destruction.
     pub async fn truncate_all(&self) -> Result<(), MemcpError> {
+        if self.schema.is_none() {
+            return Err(MemcpError::Storage(
+                "truncate_all() requires a named schema for safety. \
+                 Use new_with_schema() to isolate destructive operations."
+                    .to_string(),
+            ));
+        }
         for attempt in 0..5u32 {
             match sqlx::query("TRUNCATE memories, memory_embeddings, memory_salience, memory_consolidations CASCADE")
                 .execute(&self.pool)

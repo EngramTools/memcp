@@ -3,11 +3,6 @@
 //! Provides dataset ingestion, search evaluation, and reporting for
 //! benchmarking the memcp search pipeline. Used by the benchmark binary.
 
-/// Benchmark module for LongMemEval evaluation pipeline.
-///
-/// Provides dataset types, ingestion logic, and shared result types
-/// for benchmarking the memcp search pipeline against the LongMemEval dataset.
-
 pub mod dataset;
 pub mod evaluate;
 pub mod ingest;
@@ -84,4 +79,78 @@ pub struct BenchmarkState {
     pub completed_question_ids: Vec<String>,
     pub results: Vec<QuestionResult>,
     pub started_at: DateTime<Utc>,
+}
+
+/// Check if a database URL looks like a production database.
+/// Returns true if the URL contains suspicious indicators (cloud provider domains,
+/// "prod"/"production" in hostname or path).
+pub fn check_database_url_safety(url: &str) -> bool {
+    let suspicious = [
+        "prod",
+        "production",
+        "rds.amazonaws.com",
+        "neon.tech",
+        "supabase.co",
+        "fly.dev",
+        ".railway.app",
+        "aiven.io",
+    ];
+    let lower = url.to_lowercase();
+    suspicious.iter().any(|s| lower.contains(s))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_url_safety_safe() {
+        assert!(!check_database_url_safety(
+            "postgres://localhost:5433/memcp"
+        ));
+        assert!(!check_database_url_safety(
+            "postgres://memcp:memcp@localhost:5433/memcp"
+        ));
+        assert!(!check_database_url_safety(
+            "postgres://user@10.0.0.1:5432/mydb"
+        ));
+    }
+
+    #[test]
+    fn test_url_safety_rds() {
+        assert!(check_database_url_safety(
+            "postgres://prod-db.rds.amazonaws.com/mydb"
+        ));
+    }
+
+    #[test]
+    fn test_url_safety_neon() {
+        assert!(check_database_url_safety(
+            "postgres://user@db.neon.tech/mydb"
+        ));
+    }
+
+    #[test]
+    fn test_url_safety_supabase() {
+        assert!(check_database_url_safety(
+            "postgres://user@db.supabase.co/mydb"
+        ));
+    }
+
+    #[test]
+    fn test_url_safety_fly() {
+        assert!(check_database_url_safety(
+            "postgres://user@db.fly.dev/mydb"
+        ));
+    }
+
+    #[test]
+    fn test_url_safety_production_keyword() {
+        assert!(check_database_url_safety(
+            "postgres://user@myhost/production"
+        ));
+        assert!(check_database_url_safety(
+            "postgres://prod-server:5432/mydb"
+        ));
+    }
 }
