@@ -582,7 +582,7 @@ Plans:
 - **Goal**: Apply trust weighting to the recall path. Currently `recall/mod.rs` hardcodes `trust_level: 0.5` — untrusted memories are recalled with equal weight to trusted ones. Wire actual `trust_level` from stored memories into recall scoring, matching what search already does.
 - **Status**: Planned
 - **Plans:** 1/1 plans complete
-- **Requirements:** [TWR-RECALL-01, TWR-RECALL-02, TWR-RECALL-03, TWR-RECALL-04]
+- **Requirements:** [BENCH-SAFE-01, BENCH-SAFE-02, BENCH-SAFE-03, BENCH-SAFE-04]
 
 Plans:
 - [ ] 17-01-PLAN.md — Wire trust_level into both recall paths + integration tests
@@ -592,8 +592,8 @@ Plans:
 ## Phase 18: Benchmark Safety Hardening
 - **Goal**: Harden benchmark runner against accidental data destruction. Current implementation uses TRUNCATE on the same store instance — running benchmarks against a production DB would destroy data. Add safety guards: require explicit `--destructive` flag or separate DB URL, warn on non-benchmark schemas, document safe usage.
 - **Status**: Planned
-- **Plans:** 2 plans
-- **Requirements:** [TWR-RECALL-01, TWR-RECALL-02, TWR-RECALL-03, TWR-RECALL-04]
+- **Plans:** 1/2 plans executed
+- **Requirements:** [BENCH-SAFE-01, BENCH-SAFE-02, BENCH-SAFE-03, BENCH-SAFE-04]
 
 Plans:
 - [ ] 18-01-PLAN.md — Schema-guard truncate_all() + URL safety + --destructive flag on benchmark binary
@@ -605,7 +605,7 @@ Plans:
 - **Goal**: Backfill REQUIREMENTS.md with a formal traceability table. Collate all REQ-IDs claimed across 50 phase SUMMARY files into a master table with phase assignments and completion status. Establishes the traceability record needed for milestone closure.
 - **Status**: Planned
 - **Plans:** 1 plan
-- **Requirements:** [TWR-RECALL-01, TWR-RECALL-02, TWR-RECALL-03, TWR-RECALL-04]
+- **Requirements:** [BENCH-SAFE-01, BENCH-SAFE-02, BENCH-SAFE-03, BENCH-SAFE-04]
 
 Plans:
 - [ ] 17-01-PLAN.md — Wire trust_level into both recall paths + integration tests
@@ -616,7 +616,7 @@ Plans:
 - **Goal**: Fix minor test quality issues identified in v1.0 audit. (1) `test_offset_deprecation_warning` (Phase 07.5) doesn't exercise the actual `tracing::warn` code path — fix to verify warning emission. (2) `false_positive_count` in load test trust metrics (Phase 10.2) is hardcoded to 0 — wire actual tracking or remove the placeholder.
 - **Status**: Planned
 - **Plans:** 1 plan
-- **Requirements:** [TWR-RECALL-01, TWR-RECALL-02, TWR-RECALL-03, TWR-RECALL-04]
+- **Requirements:** [BENCH-SAFE-01, BENCH-SAFE-02, BENCH-SAFE-03, BENCH-SAFE-04]
 
 Plans:
 - [ ] 17-01-PLAN.md — Wire trust_level into both recall paths + integration tests
