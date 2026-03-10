@@ -7,16 +7,16 @@
 //! content with nearly identical BM25 relevance but different trust_level.
 //! The trust gap (e.g., 0.9 vs 0.1) dominates the composite score difference.
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
-use axum::Router;
 use axum::routing::get;
-use memcp::MIGRATOR;
+use axum::Router;
 use memcp::config::Config;
 use memcp::store::postgres::PostgresMemoryStore;
 use memcp::transport::api;
 use memcp::transport::health::AppState;
+use memcp::MIGRATOR;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use sqlx::PgPool;
 use tokio::time::Instant;
@@ -40,6 +40,7 @@ async fn make_test_state(pool: PgPool, ready: bool) -> AppState {
         embed_provider: None,
         embed_sender: None,
         metrics_handle,
+        redaction_engine: None,
     }
 }
 
@@ -60,11 +61,7 @@ async fn spawn_test_server(state: AppState) -> String {
 
 /// Store a memory with explicit trust_level via raw SQL, bypassing content-hash dedup.
 /// This allows storing identical content with different trust_level values.
-async fn store_trusted_memory(
-    pool: &PgPool,
-    content: &str,
-    trust_level: f32,
-) -> String {
+async fn store_trusted_memory(pool: &PgPool, content: &str, trust_level: f32) -> String {
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at,
@@ -353,9 +350,18 @@ async fn test_search_results_ordered_by_trust_weighted_score(pool: PgPool) {
     );
 
     // The highest-trust memory should have the highest composite score
-    let high_result = results.iter().find(|r| r["id"].as_str().unwrap() == high_id).unwrap();
-    let mid_result = results.iter().find(|r| r["id"].as_str().unwrap() == mid_id).unwrap();
-    let low_result = results.iter().find(|r| r["id"].as_str().unwrap() == low_id).unwrap();
+    let high_result = results
+        .iter()
+        .find(|r| r["id"].as_str().unwrap() == high_id)
+        .unwrap();
+    let mid_result = results
+        .iter()
+        .find(|r| r["id"].as_str().unwrap() == mid_id)
+        .unwrap();
+    let low_result = results
+        .iter()
+        .find(|r| r["id"].as_str().unwrap() == low_id)
+        .unwrap();
 
     let high_score = high_result["composite_score"].as_f64().unwrap();
     let mid_score = mid_result["composite_score"].as_f64().unwrap();
@@ -364,6 +370,11 @@ async fn test_search_results_ordered_by_trust_weighted_score(pool: PgPool) {
     assert!(
         high_score >= mid_score && mid_score >= low_score,
         "Scores should follow trust order: high({})={} >= mid({})={} >= low({})={}",
-        high_id, high_score, mid_id, mid_score, low_id, low_score
+        high_id,
+        high_score,
+        mid_id,
+        mid_score,
+        low_id,
+        low_score
     );
 }

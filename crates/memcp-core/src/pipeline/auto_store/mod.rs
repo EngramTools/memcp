@@ -13,22 +13,23 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
-use crate::config::{AutoStoreConfig, ChunkingConfig};
 use crate::chunking::chunk_content;
+use crate::config::{AutoStoreConfig, ChunkingConfig};
 use crate::content_filter::{ContentFilter, FilterVerdict};
-use crate::embedding::{EmbeddingJob, build_embedding_text};
 use crate::embedding::pipeline::EmbeddingPipeline;
 use crate::embedding::router::EmbeddingRouter;
-use crate::extraction::ExtractionJob;
+use crate::embedding::{build_embedding_text, EmbeddingJob};
 use crate::extraction::pipeline::ExtractionPipeline;
+use crate::extraction::ExtractionJob;
+use crate::pipeline::redaction::RedactionEngine;
 use crate::pipeline::temporal::extract_event_time;
-use crate::store::{CreateMemory, MemoryStore};
 use crate::store::postgres::PostgresMemoryStore;
+use crate::store::{CreateMemory, MemoryStore};
 use crate::summarization::SummarizationProvider;
 
-use self::filter::{FilterStrategy, create_filter};
-use self::parser::{LogParser, create_parser};
-use self::watcher::{WatchEvent, spawn_watcher};
+use self::filter::{create_filter, FilterStrategy};
+use self::parser::{create_parser, LogParser};
+use self::watcher::{spawn_watcher, WatchEvent};
 
 /// Background worker that watches log files and auto-stores memories.
 pub struct AutoStoreWorker;
@@ -57,6 +58,7 @@ impl AutoStoreWorker {
         embedding_router: Option<Arc<EmbeddingRouter>>,
         project: Option<String>,
         birth_year: Option<u32>,
+        redaction_engine: Option<Arc<RedactionEngine>>,
     ) -> JoinHandle<()> {
         let parser = create_parser(&config.format);
         let filter = create_filter(
@@ -114,6 +116,7 @@ impl AutoStoreWorker {
                 embedding_router,
                 project,
                 birth_year,
+                redaction_engine,
             )
             .await;
         })
@@ -146,6 +149,7 @@ async fn run_worker(
     embedding_router: Option<Arc<EmbeddingRouter>>,
     project: Option<String>,
     birth_year: Option<u32>,
+    redaction_engine: Option<Arc<RedactionEngine>>,
 ) {
     // Channel for watch events
     let (tx, mut rx) = tokio::sync::mpsc::channel::<WatchEvent>(1000);
@@ -184,13 +188,39 @@ async fn run_worker(
             last_dedup_cleanup = now;
         }
 
+        // Redaction (BEFORE content filter — always applied, no bypass for auto-store)
+        let entry_content = if let Some(ref engine) = redaction_engine {
+            match engine.redact(&entry.content) {
+                Ok(result) => {
+                    if result.was_redacted {
+                        tracing::warn!(
+                            categories = ?result.categories,
+                            count = result.redaction_count,
+                            "Auto-store: content redacted"
+                        );
+                    }
+                    result.content
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        content_preview = %entry.content.chars().take(50).collect::<String>(),
+                        "Auto-store: redaction failed — skipping memory (fail-closed)"
+                    );
+                    continue;
+                }
+            }
+        } else {
+            entry.content.clone()
+        };
+
         // Content exclusion filter (BEFORE relevance filter — cheaper and deterministic)
         if let Some(ref cf) = content_filter {
-            match cf.check(&entry.content).await {
+            match cf.check(&entry_content).await {
                 Ok(FilterVerdict::Drop { reason }) => {
                     tracing::debug!(
                         reason = %reason,
-                        content_preview = %entry.content.chars().take(50).collect::<String>(),
+                        content_preview = %entry_content.chars().take(50).collect::<String>(),
                         "Auto-store: content excluded by filter"
                     );
                     continue;
@@ -223,13 +253,17 @@ async fn run_worker(
         };
 
         // Summarize assistant responses, store user messages raw
-        let is_assistant = entry.metadata.get("role").map(|r| r == "assistant").unwrap_or(false);
+        let is_assistant = entry
+            .metadata
+            .get("role")
+            .map(|r| r == "assistant")
+            .unwrap_or(false);
         let (store_content, is_summarized) = if is_assistant {
             if let Some(ref provider) = summarization_provider {
-                match provider.summarize(&entry.content).await {
+                match provider.summarize(&entry_content).await {
                     Ok(summary) => {
                         tracing::debug!(
-                            original_len = entry.content.len(),
+                            original_len = entry_content.len(),
                             summary_len = summary.len(),
                             "Auto-store: summarized assistant response"
                         );
@@ -238,17 +272,17 @@ async fn run_worker(
                     Err(e) => {
                         tracing::warn!(
                             error = %e,
-                            content_preview = %entry.content.chars().take(50).collect::<String>(),
+                            content_preview = %entry_content.chars().take(50).collect::<String>(),
                             "Auto-store: summarization failed, storing raw (fail-open)"
                         );
-                        (entry.content.clone(), false)
+                        (entry_content.clone(), false)
                     }
                 }
             } else {
-                (entry.content.clone(), false)
+                (entry_content.clone(), false)
             }
         } else {
-            (entry.content.clone(), false)
+            (entry_content.clone(), false)
         };
 
         // Build tags
@@ -270,21 +304,28 @@ async fn run_worker(
         // Derive companion file path for ID emission: conversation.jsonl -> conversation.ids.jsonl
         let companion_path = {
             let stem = event.path.file_stem().unwrap_or_default();
-            event.path.with_file_name(format!("{}.ids.jsonl", stem.to_string_lossy()))
+            event
+                .path
+                .with_file_name(format!("{}.ids.jsonl", stem.to_string_lossy()))
         };
 
         // Extract event time inline (regex-based, fast + deterministic)
         let now_utc = chrono::Utc::now();
-        let (event_time, event_time_precision) = match extract_event_time(&store_content, birth_year, now_utc) {
-            Some((et, precision)) => (Some(et), Some(precision.as_str().to_string())),
-            None => (None, None),
-        };
+        let (event_time, event_time_precision) =
+            match extract_event_time(&store_content, birth_year, now_utc) {
+                Some((et, precision)) => (Some(et), Some(precision.as_str().to_string())),
+                None => (None, None),
+            };
 
         // Store the memory
         let role = entry.metadata.get("role").cloned().unwrap_or_default();
         let create = CreateMemory {
             content: store_content,
-            type_hint: if is_summarized { "summary".to_string() } else { "auto".to_string() },
+            type_hint: if is_summarized {
+                "summary".to_string()
+            } else {
+                "auto".to_string()
+            },
             source: entry.source.clone(),
             tags: Some(tags.clone()),
             created_at: entry.timestamp,
@@ -323,7 +364,10 @@ async fn run_worker(
                     Some(cr) if cr.action == "store-low" => 1.5,
                     _ => 2.5,
                 };
-                if let Err(e) = store.upsert_salience(&memory.id, stability, 5.0, 0, None).await {
+                if let Err(e) = store
+                    .upsert_salience(&memory.id, stability, 5.0, 0, None)
+                    .await
+                {
                     tracing::warn!(error = %e, memory_id = %memory.id, "Failed to seed salience for auto-store");
                 }
 
@@ -337,7 +381,7 @@ async fn run_worker(
                              ELSE 1 \
                          END, \
                          ingest_date = $1 \
-                     WHERE id = 1"
+                     WHERE id = 1",
                 )
                 .bind(today)
                 .execute(store.pool())
@@ -359,7 +403,9 @@ async fn run_worker(
                 // The tier is recorded on the job so the pipeline uses the correct provider.
                 let type_hint_str = if is_summarized { "summary" } else { "auto" };
                 let tier = if let Some(ref router) = embedding_router {
-                    router.route(Some(type_hint_str), None, memory.content.len()).to_string()
+                    router
+                        .route(Some(type_hint_str), None, memory.content.len())
+                        .to_string()
                 } else {
                     "fast".to_string()
                 };
@@ -396,11 +442,19 @@ async fn run_worker(
 
                     for chunk_output in &chunks {
                         let mut chunk_tags = tags.clone();
-                        chunk_tags.push(format!("chunk:{}/{}", chunk_output.index + 1, chunk_output.total));
+                        chunk_tags.push(format!(
+                            "chunk:{}/{}",
+                            chunk_output.index + 1,
+                            chunk_output.total
+                        ));
 
                         let chunk_create = CreateMemory {
                             content: chunk_output.content.clone(),
-                            type_hint: if is_summarized { "summary".to_string() } else { "auto".to_string() },
+                            type_hint: if is_summarized {
+                                "summary".to_string()
+                            } else {
+                                "auto".to_string()
+                            },
                             source: entry.source.clone(),
                             tags: Some(chunk_tags),
                             created_at: entry.timestamp,
@@ -422,13 +476,17 @@ async fn run_worker(
                         match store.store(chunk_create).await {
                             Ok(chunk_mem) => {
                                 // Seed chunk salience from parent values
-                                if let Err(e) = store.upsert_salience(&chunk_mem.id, 2.5, 5.0, 0, None).await {
+                                if let Err(e) = store
+                                    .upsert_salience(&chunk_mem.id, 2.5, 5.0, 0, None)
+                                    .await
+                                {
                                     tracing::warn!(error = %e, chunk_id = %chunk_mem.id, "Failed to seed chunk salience");
                                 }
 
                                 // Enqueue chunk to embedding pipeline (same tier as parent)
                                 if let Some(ref sender) = embedding_sender {
-                                    let text = build_embedding_text(&chunk_mem.content, &chunk_mem.tags);
+                                    let text =
+                                        build_embedding_text(&chunk_mem.content, &chunk_mem.tags);
                                     let _ = sender.try_send(EmbeddingJob {
                                         memory_id: chunk_mem.id.clone(),
                                         text,
@@ -508,4 +566,3 @@ async fn append_id_emission(path: &std::path::Path, payload: &serde_json::Value)
         }
     }
 }
-

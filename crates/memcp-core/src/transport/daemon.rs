@@ -389,6 +389,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             Some(router.clone()),
             resolved_project,
             config.user.birth_year,
+            redaction_engine.clone(),
         );
         tracing::info!("Auto-store sidecar spawned");
     }

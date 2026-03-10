@@ -353,10 +353,41 @@ pub async fn cmd_store(
     trust_level: Option<f32>,
     session_id: Option<String>,
     agent_role: Option<String>,
+    no_redact: bool,
 ) -> Result<()> {
     let content = content.ok_or_else(|| {
         anyhow::anyhow!("Content is required — provide as argument or use --stdin")
     })?;
+
+    // Redact secrets/PII unless --no-redact is set
+    let content = if !no_redact
+        && (config.redaction.secrets_enabled || config.redaction.pii_enabled)
+    {
+        match crate::pipeline::redaction::RedactionEngine::from_config(&config.redaction) {
+            Ok(engine) => match engine.redact(&content) {
+                Ok(result) => {
+                    if result.was_redacted {
+                        eprintln!(
+                            "Warning: {} items redacted (categories: {})",
+                            result.redaction_count,
+                            result.categories.join(", ")
+                        );
+                    }
+                    result.content
+                }
+                Err(e) => {
+                    eprintln!("Error: redaction failed — {}", e);
+                    std::process::exit(1);
+                }
+            },
+            Err(e) => {
+                eprintln!("Error: failed to initialize redaction engine — {}", e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        content
+    };
 
     // Resource cap: max_memories — hard reject at hard_cap_percent
     if let Some(max) = config.resource_caps.max_memories {

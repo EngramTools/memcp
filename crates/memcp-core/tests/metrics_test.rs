@@ -6,17 +6,17 @@
 //! times in the same process would panic). All tests share the same recorder — safe
 //! because Prometheus counters are additive and tests only assert presence, not exact values.
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::sync::OnceLock;
 
-use axum::Router;
 use axum::routing::get;
-use memcp::MIGRATOR;
-use memcp::store::postgres::PostgresMemoryStore;
+use axum::Router;
 use memcp::config::Config;
-use memcp::transport::health::AppState;
+use memcp::store::postgres::PostgresMemoryStore;
 use memcp::transport::api;
+use memcp::transport::health::AppState;
+use memcp::MIGRATOR;
 use metrics_exporter_prometheus::PrometheusHandle;
 use sqlx::PgPool;
 use tokio::time::Instant;
@@ -53,16 +53,16 @@ async fn make_test_state(pool: PgPool, ready: bool) -> AppState {
         embed_provider: None,
         embed_sender: None,
         metrics_handle: handle,
+        redaction_engine: None,
     }
 }
 
 /// Spawn the full app (health + /metrics + /v1/* routes with metrics middleware) on a random port.
 /// Matches the production serve() layout from health/mod.rs.
 async fn spawn_test_server(state: AppState) -> String {
-    let api_routes = api::router(&state.config.rate_limit)
-        .layer(axum::middleware::from_fn(
-            memcp::transport::metrics::metrics_middleware,
-        ));
+    let api_routes = api::router(&state.config.rate_limit).layer(axum::middleware::from_fn(
+        memcp::transport::metrics::metrics_middleware,
+    ));
 
     let app = Router::new()
         .route("/health", get(memcp::transport::health::status_handler))
@@ -117,12 +117,24 @@ async fn test_metrics_endpoint_returns_prometheus_text(pool: PgPool) {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200, "Expected 200 OK from /metrics after recording");
+    assert_eq!(
+        resp.status(),
+        200,
+        "Expected 200 OK from /metrics after recording"
+    );
     let body = resp.text().await.unwrap();
 
     // Must be Prometheus exposition format with help/type annotations
-    assert!(body.contains("# HELP"), "Expected # HELP in /metrics output, got:\n{}", body);
-    assert!(body.contains("# TYPE"), "Expected # TYPE in /metrics output, got:\n{}", body);
+    assert!(
+        body.contains("# HELP"),
+        "Expected # HELP in /metrics output, got:\n{}",
+        body
+    );
+    assert!(
+        body.contains("# TYPE"),
+        "Expected # TYPE in /metrics output, got:\n{}",
+        body
+    );
 
     // Core metric names declared in describe_metrics() must appear
     assert!(
@@ -146,8 +158,16 @@ async fn test_metrics_endpoint_not_metered(pool: PgPool) {
     let client = reqwest::Client::new();
 
     // Hit /metrics twice to confirm it never gets counted
-    client.get(format!("{}/metrics", base)).send().await.unwrap();
-    let resp = client.get(format!("{}/metrics", base)).send().await.unwrap();
+    client
+        .get(format!("{}/metrics", base))
+        .send()
+        .await
+        .unwrap();
+    let resp = client
+        .get(format!("{}/metrics", base))
+        .send()
+        .await
+        .unwrap();
     let body = resp.text().await.unwrap();
 
     // There should be no memcp_requests_total line with endpoint="/metrics"
@@ -172,7 +192,11 @@ async fn test_health_endpoint_not_metered(pool: PgPool) {
 
     // Hit /health and then check /metrics for any health-related counter entry
     client.get(format!("{}/health", base)).send().await.unwrap();
-    let metrics_resp = client.get(format!("{}/metrics", base)).send().await.unwrap();
+    let metrics_resp = client
+        .get(format!("{}/metrics", base))
+        .send()
+        .await
+        .unwrap();
     let body = metrics_resp.text().await.unwrap();
 
     let has_health_metered = body
@@ -208,7 +232,11 @@ async fn test_api_request_increments_counter(pool: PgPool) {
     assert_eq!(store_resp.status(), 200, "Store request must succeed");
 
     // Check /metrics for the counter
-    let metrics_resp = client.get(format!("{}/metrics", base)).send().await.unwrap();
+    let metrics_resp = client
+        .get(format!("{}/metrics", base))
+        .send()
+        .await
+        .unwrap();
     let body = metrics_resp.text().await.unwrap();
 
     let has_store_counter = body
@@ -238,7 +266,11 @@ async fn test_api_request_records_duration(pool: PgPool) {
         .await
         .unwrap();
 
-    let metrics_resp = client.get(format!("{}/metrics", base)).send().await.unwrap();
+    let metrics_resp = client
+        .get(format!("{}/metrics", base))
+        .send()
+        .await
+        .unwrap();
     let body = metrics_resp.text().await.unwrap();
 
     assert!(
@@ -262,11 +294,7 @@ async fn test_status_shows_pool_details(pool: PgPool) {
     let base = spawn_test_server(state).await;
     let client = reqwest::Client::new();
 
-    let resp = client
-        .get(format!("{}/status", base))
-        .send()
-        .await
-        .unwrap();
+    let resp = client.get(format!("{}/status", base)).send().await.unwrap();
 
     assert_eq!(resp.status(), 200, "Expected 200 from /status when ready");
 

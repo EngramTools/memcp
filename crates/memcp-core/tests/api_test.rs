@@ -3,16 +3,16 @@
 //! Each test spawns a full axum server on a random port with a real ephemeral DB.
 //! Uses reqwest to hit each endpoint and validates request/response contracts.
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
-use axum::Router;
 use axum::routing::get;
-use memcp::MIGRATOR;
-use memcp::store::postgres::PostgresMemoryStore;
+use axum::Router;
 use memcp::config::Config;
-use memcp::transport::health::AppState;
+use memcp::store::postgres::PostgresMemoryStore;
 use memcp::transport::api;
+use memcp::transport::health::AppState;
+use memcp::MIGRATOR;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use sqlx::PgPool;
 use tokio::time::Instant;
@@ -39,6 +39,7 @@ async fn make_test_state(pool: PgPool, ready: bool) -> AppState {
         embed_provider: None,
         embed_sender: None,
         metrics_handle,
+        redaction_engine: None,
     }
 }
 
@@ -87,7 +88,10 @@ async fn test_store_and_get(pool: PgPool) {
     assert!(!id.is_empty(), "id must not be empty");
     // Validate id is a valid UUID (36 chars with hyphens)
     assert_eq!(id.len(), 36, "id must be a UUID");
-    assert!(body["embedding_status"].as_str().is_some(), "embedding_status must be present");
+    assert!(
+        body["embedding_status"].as_str().is_some(),
+        "embedding_status must be present"
+    );
 }
 
 /// POST /v1/store with missing content → 400
@@ -163,7 +167,11 @@ async fn test_update_not_found(pool: PgPool) {
 
     let status = resp.status().as_u16();
     // Not found → 404 or 500 (store error surfaced differently depending on DB error type)
-    assert!(status == 404 || status == 500, "Expected 404 or 500, got {}", status);
+    assert!(
+        status == 404 || status == 500,
+        "Expected 404 or 500, got {}",
+        status
+    );
 }
 
 /// POST /v1/annotate — store then annotate with new tags → 200 + diff
@@ -209,7 +217,9 @@ async fn test_search(pool: PgPool) {
     // Store something first
     client
         .post(format!("{}/v1/store", base))
-        .json(&serde_json::json!({"content": "Rust programming language systems", "tags": ["rust"]}))
+        .json(
+            &serde_json::json!({"content": "Rust programming language systems", "tags": ["rust"]}),
+        )
         .send()
         .await
         .unwrap();
@@ -243,12 +253,21 @@ async fn test_recall_queryless(pool: PgPool) {
 
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["session_id"].is_string(), "session_id must be a string");
+    assert!(
+        body["session_id"].is_string(),
+        "session_id must be a string"
+    );
     assert!(body["memories"].is_array(), "memories must be an array");
     assert!(body["count"].is_number(), "count must be a number");
     // first=true → preamble and current_datetime should be present
-    assert!(body["preamble"].is_string(), "preamble must be present when first=true");
-    assert!(body["current_datetime"].is_string(), "current_datetime must be present when first=true");
+    assert!(
+        body["preamble"].is_string(),
+        "preamble must be present when first=true"
+    );
+    assert!(
+        body["current_datetime"].is_string(),
+        "current_datetime must be present when first=true"
+    );
 }
 
 /// POST /v1/recall with query but no embed_provider → 503
@@ -284,7 +303,11 @@ async fn test_status_alias(pool: PgPool) {
     // Note: /v1/status is an alias for /health in our test app setup
     // In full daemon it's aliased to /status which returns the full status JSON
     let status = resp.status().as_u16();
-    assert!(status == 200 || status == 503, "Expected 200 or 503, got {}", status);
+    assert!(
+        status == 200 || status == 503,
+        "Expected 200 or 503, got {}",
+        status
+    );
 }
 
 /// /v1/store when not ready → 503
@@ -331,16 +354,23 @@ async fn test_dispatch_remote_store(pool: PgPool) {
     let state = make_test_state(pool, true).await;
     let base = spawn_test_server(state).await;
 
-    let result = memcp::cli::dispatch_remote(&base, "store", serde_json::json!({
-        "content": "remote test memory"
-    }))
+    let result = memcp::cli::dispatch_remote(
+        &base,
+        "store",
+        serde_json::json!({
+            "content": "remote test memory"
+        }),
+    )
     .await
     .expect("dispatch_remote store should succeed");
 
     assert!(result.get("id").is_some(), "response must have id field");
     let id = result["id"].as_str().expect("id must be a string");
     assert_eq!(id.len(), 36, "id must be a UUID");
-    assert!(result.get("embedding_status").is_some(), "embedding_status must be present");
+    assert!(
+        result.get("embedding_status").is_some(),
+        "embedding_status must be present"
+    );
 }
 
 /// dispatch_remote() recall queryless: sends HTTP POST and returns session_id + memories.
@@ -349,13 +379,20 @@ async fn test_dispatch_remote_recall_queryless(pool: PgPool) {
     let state = make_test_state(pool, true).await;
     let base = spawn_test_server(state).await;
 
-    let result = memcp::cli::dispatch_remote(&base, "recall", serde_json::json!({
-        "first": true
-    }))
+    let result = memcp::cli::dispatch_remote(
+        &base,
+        "recall",
+        serde_json::json!({
+            "first": true
+        }),
+    )
     .await
     .expect("dispatch_remote recall should succeed");
 
-    assert!(result["session_id"].is_string(), "session_id must be a string");
+    assert!(
+        result["session_id"].is_string(),
+        "session_id must be a string"
+    );
     assert!(result["memories"].is_array(), "memories must be an array");
     assert!(result["count"].is_number(), "count must be a number");
 }
@@ -366,9 +403,13 @@ async fn test_dispatch_remote_error_handling(pool: PgPool) {
     let state = make_test_state(pool, false).await; // ready = false
     let base = spawn_test_server(state).await;
 
-    let err = memcp::cli::dispatch_remote(&base, "store", serde_json::json!({
-        "content": "should fail"
-    }))
+    let err = memcp::cli::dispatch_remote(
+        &base,
+        "store",
+        serde_json::json!({
+            "content": "should fail"
+        }),
+    )
     .await
     .expect_err("dispatch_remote should fail when server not ready");
 
@@ -395,7 +436,10 @@ async fn test_dispatch_remote_invalid_url() {
     let msg = err.to_string();
     // reqwest wraps the OS error; check it's a network/connection error
     assert!(
-        msg.contains("Remote request") || msg.contains("connection") || msg.contains("refused") || msg.contains("error"),
+        msg.contains("Remote request")
+            || msg.contains("connection")
+            || msg.contains("refused")
+            || msg.contains("error"),
         "Expected a connection error, got: {}",
         msg
     );

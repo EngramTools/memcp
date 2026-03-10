@@ -5,17 +5,17 @@
 //! Strategy: configure extremely low limits (rps=1, burst=1) so a burst of rapid requests
 //! guarantees a 429 without requiring real-time measurement.
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::sync::OnceLock;
 
-use axum::Router;
 use axum::routing::get;
-use memcp::MIGRATOR;
-use memcp::store::postgres::PostgresMemoryStore;
+use axum::Router;
 use memcp::config::{Config, RateLimitConfig};
-use memcp::transport::health::AppState;
+use memcp::store::postgres::PostgresMemoryStore;
 use memcp::transport::api;
+use memcp::transport::health::AppState;
+use memcp::MIGRATOR;
 use metrics_exporter_prometheus::PrometheusHandle;
 use sqlx::PgPool;
 use tokio::time::Instant;
@@ -80,6 +80,7 @@ async fn make_rate_limited_state(pool: PgPool, store_rps: u32, burst_multiplier:
         embed_provider: None,
         embed_sender: None,
         metrics_handle: handle,
+        redaction_engine: None,
     }
 }
 
@@ -98,6 +99,7 @@ async fn make_unlimited_state(pool: PgPool) -> AppState {
         embed_provider: None,
         embed_sender: None,
         metrics_handle: handle,
+        redaction_engine: None,
     }
 }
 

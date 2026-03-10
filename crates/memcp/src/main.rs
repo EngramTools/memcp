@@ -117,6 +117,9 @@ enum Commands {
         /// Agent's role when creating this memory (e.g., coder, reviewer, planner).
         #[arg(long)]
         agent_role: Option<String>,
+        /// Bypass secret/PII redaction. By default, secrets are redacted before storing.
+        #[arg(long)]
+        no_redact: bool,
     },
     /// Search memories by keyword + metadata matching with salience ranking
     Search {
@@ -951,6 +954,7 @@ async fn main() -> Result<()> {
             trust_level,
             session_id,
             agent_role,
+            no_redact,
         } => {
             let resolved = cli::resolve_content_arg(content, stdin)?;
             if let Some(ref remote_url) = cli.remote {
@@ -968,6 +972,7 @@ async fn main() -> Result<()> {
                     "trust_level": trust_level,
                     "session_id": session_id,
                     "agent_role": agent_role,
+                    "skip_redaction": no_redact,
                 });
                 let result = cli::dispatch_remote(remote_url, "store", body).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -990,6 +995,7 @@ async fn main() -> Result<()> {
                     trust_level,
                     session_id,
                     agent_role,
+                    no_redact,
                 )
                 .await?;
             }
@@ -2052,6 +2058,32 @@ async fn main() -> Result<()> {
                 None
             };
 
+            // 8b2. Construct redaction engine if enabled
+            let redaction_engine: Option<
+                Arc<memcp::redaction::RedactionEngine>,
+            > = if config.redaction.secrets_enabled || config.redaction.pii_enabled {
+                match memcp::redaction::RedactionEngine::from_config(&config.redaction) {
+                    Ok(engine) => {
+                        tracing::info!(
+                            secrets_enabled = config.redaction.secrets_enabled,
+                            pii_enabled = config.redaction.pii_enabled,
+                            "Redaction engine initialized"
+                        );
+                        Some(Arc::new(engine))
+                    }
+                    Err(e) => {
+                        if config.redaction.secrets_enabled {
+                            tracing::error!(error = %e, "Failed to initialize redaction engine — exiting (fail-closed)");
+                            std::process::exit(1);
+                        }
+                        tracing::warn!(error = %e, "Failed to initialize redaction engine — redaction disabled");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
             // 8c. Spawn auto-store sidecar if enabled
             if config.auto_store.enabled {
                 let _auto_store_handle = memcp::auto_store::AutoStoreWorker::spawn(
@@ -2066,6 +2098,7 @@ async fn main() -> Result<()> {
                     None, // No router in serve mode (single-tier)
                     None, // project: None (global auto-store in serve mode)
                     None, // birth_year: None (no birth year hint in serve mode)
+                    redaction_engine.clone(),
                 );
                 tracing::info!("Auto-store sidecar spawned");
             }
@@ -2094,32 +2127,6 @@ async fn main() -> Result<()> {
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "Failed to init reranking provider — reranking disabled");
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-
-            // 9b. Construct redaction engine if enabled
-            let redaction_engine: Option<
-                Arc<memcp::redaction::RedactionEngine>,
-            > = if config.redaction.secrets_enabled || config.redaction.pii_enabled {
-                match memcp::redaction::RedactionEngine::from_config(&config.redaction) {
-                    Ok(engine) => {
-                        tracing::info!(
-                            secrets_enabled = config.redaction.secrets_enabled,
-                            pii_enabled = config.redaction.pii_enabled,
-                            "Redaction engine initialized"
-                        );
-                        Some(Arc::new(engine))
-                    }
-                    Err(e) => {
-                        if config.redaction.secrets_enabled {
-                            tracing::error!(error = %e, "Failed to initialize redaction engine — exiting (fail-closed)");
-                            std::process::exit(1);
-                        }
-                        tracing::warn!(error = %e, "Failed to initialize redaction engine — redaction disabled");
                         None
                     }
                 }
