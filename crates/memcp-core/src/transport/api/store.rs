@@ -143,6 +143,7 @@ pub async fn store_handler(
         trust_level: req.trust_level,
         session_id: req.session_id,
         agent_role: req.agent_role,
+        write_path: req.write_path,
     };
 
     let memory = match store.store(input).await {

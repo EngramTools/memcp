@@ -109,6 +109,9 @@ pub struct StoreRequest {
     /// Agent's role when creating this memory (e.g., coder, reviewer, planner).
     #[serde(default)]
     pub agent_role: Option<String>,
+    /// How this memory was created: "session_summary", "explicit_store", "annotation", "import".
+    #[serde(default)]
+    pub write_path: Option<String>,
     /// When true, bypasses secret/PII redaction. Default: false (redaction enabled).
     #[serde(default)]
     pub skip_redaction: bool,

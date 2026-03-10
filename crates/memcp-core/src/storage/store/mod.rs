@@ -74,6 +74,8 @@ pub struct Memory {
     pub session_id: Option<String>,
     /// Role of the agent that created this memory (e.g., "coder", "reviewer", "planner").
     pub agent_role: Option<String>,
+    /// How this memory was created: "session_summary", "explicit_store", "annotation", "import".
+    pub write_path: Option<String>,
     /// Extensible metadata JSONB (trust_history, annotations, etc.).
     pub metadata: serde_json::Value,
 }
@@ -138,6 +140,9 @@ pub struct CreateMemory {
     /// Role of the agent that created this memory (e.g., "coder", "reviewer", "planner").
     #[serde(default)]
     pub agent_role: Option<String>,
+    /// How this memory was created: "session_summary", "explicit_store", "annotation", "import".
+    #[serde(default)]
+    pub write_path: Option<String>,
 }
 
 fn default_type_hint() -> String {
@@ -322,18 +327,21 @@ pub fn encode_search_keyset_cursor(salience_score: f64, id: &str) -> String {
 /// Returns `MemcpError::Validation` on malformed cursor or wrong cursor type.
 pub fn decode_search_keyset_cursor(cursor: &str) -> Result<(f64, String), MemcpError> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|e| MemcpError::Validation {
-        message: format!("Invalid search cursor encoding: {}", e),
-        field: Some("cursor".to_string()),
-    })?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(cursor)
+        .map_err(|e| MemcpError::Validation {
+            message: format!("Invalid search cursor encoding: {}", e),
+            field: Some("cursor".to_string()),
+        })?;
     let raw = String::from_utf8(bytes).map_err(|e| MemcpError::Validation {
         message: format!("Invalid search cursor content: {}", e),
         field: Some("cursor".to_string()),
     })?;
-    let val: serde_json::Value = serde_json::from_str(&raw).map_err(|e| MemcpError::Validation {
-        message: format!("Invalid search cursor JSON: {}", e),
-        field: Some("cursor".to_string()),
-    })?;
+    let val: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| MemcpError::Validation {
+            message: format!("Invalid search cursor JSON: {}", e),
+            field: Some("cursor".to_string()),
+        })?;
 
     // Verify type field is "s" (search cursor)
     let t = val.get("t").and_then(|v| v.as_str()).unwrap_or("");
@@ -344,14 +352,21 @@ pub fn decode_search_keyset_cursor(cursor: &str) -> Result<(f64, String), MemcpE
         });
     }
 
-    let score = val.get("s").and_then(|v| v.as_f64()).ok_or_else(|| MemcpError::Validation {
-        message: "Search cursor missing salience score field".to_string(),
-        field: Some("cursor".to_string()),
-    })?;
-    let id = val.get("i").and_then(|v| v.as_str()).ok_or_else(|| MemcpError::Validation {
-        message: "Search cursor missing id field".to_string(),
-        field: Some("cursor".to_string()),
-    })?.to_string();
+    let score = val
+        .get("s")
+        .and_then(|v| v.as_f64())
+        .ok_or_else(|| MemcpError::Validation {
+            message: "Search cursor missing salience score field".to_string(),
+            field: Some("cursor".to_string()),
+        })?;
+    let id = val
+        .get("i")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| MemcpError::Validation {
+            message: "Search cursor missing id field".to_string(),
+            field: Some("cursor".to_string()),
+        })?
+        .to_string();
 
     Ok((score, id))
 }
@@ -370,10 +385,12 @@ pub fn encode_search_cursor(offset: i64) -> String {
 /// Decode a search pagination cursor back into an offset value.
 pub fn decode_search_cursor(cursor: &str) -> Result<i64, MemcpError> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|e| MemcpError::Validation {
-        message: format!("Invalid search cursor encoding: {}", e),
-        field: Some("cursor".to_string()),
-    })?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(cursor)
+        .map_err(|e| MemcpError::Validation {
+            message: format!("Invalid search cursor encoding: {}", e),
+            field: Some("cursor".to_string()),
+        })?;
     let raw = String::from_utf8(bytes).map_err(|e| MemcpError::Validation {
         message: format!("Invalid search cursor content: {}", e),
         field: Some("cursor".to_string()),

@@ -719,6 +719,7 @@ fn row_to_memory(row: &PgRow) -> Result<Memory, MemcpError> {
         trust_level: row.try_get("trust_level").unwrap_or(0.5),
         session_id: row.try_get("session_id").unwrap_or(None),
         agent_role: row.try_get("agent_role").unwrap_or(None),
+        write_path: row.try_get("write_path").unwrap_or(None),
         metadata: row
             .try_get("metadata")
             .unwrap_or_else(|_| serde_json::json!({})),
@@ -747,7 +748,7 @@ impl MemoryStore for PostgresMemoryStore {
                  m.is_consolidated_original, m.consolidated_into, m.actor, m.actor_type, m.audience, \
                  m.parent_id, m.chunk_index, m.total_chunks, \
                  m.event_time, m.event_time_precision, m.project, \
-                 m.trust_level, m.session_id, m.agent_role, m.metadata \
+                 m.trust_level, m.session_id, m.agent_role, m.write_path, m.metadata \
                  FROM idempotency_keys ik \
                  JOIN memories m ON m.id = ik.memory_id \
                  WHERE ik.key = $1 AND ik.expires_at > NOW() AND m.deleted_at IS NULL",
@@ -774,7 +775,7 @@ impl MemoryStore for PostgresMemoryStore {
                  is_consolidated_original, consolidated_into, actor, actor_type, audience, \
                  parent_id, chunk_index, total_chunks, \
                  event_time, event_time_precision, project, \
-                 trust_level, session_id, agent_role, metadata \
+                 trust_level, session_id, agent_role, write_path, metadata \
                  FROM memories \
                  WHERE content_hash = $1 AND deleted_at IS NULL \
                    AND created_at > NOW() - ($2 || ' seconds')::interval \
@@ -813,8 +814,8 @@ impl MemoryStore for PostgresMemoryStore {
         let empty_metadata = serde_json::json!({});
 
         sqlx::query(
-            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks, event_time, event_time_precision, project, trust_level, session_id, agent_role, metadata) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)",
+            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks, event_time, event_time_precision, project, trust_level, session_id, agent_role, write_path, metadata) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
         )
         .bind(&id)
         .bind(&input.content)
@@ -836,6 +837,7 @@ impl MemoryStore for PostgresMemoryStore {
         .bind(resolved_trust)
         .bind(&input.session_id)
         .bind(&input.agent_role)
+        .bind(&input.write_path)
         .bind(&empty_metadata)
         .execute(&self.pool)
         .await
@@ -918,6 +920,7 @@ impl MemoryStore for PostgresMemoryStore {
             trust_level: resolved_trust,
             session_id: input.session_id,
             agent_role: input.agent_role,
+            write_path: input.write_path,
             metadata: serde_json::json!({}),
         })
     }
@@ -928,7 +931,7 @@ impl MemoryStore for PostgresMemoryStore {
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
-             trust_level, session_id, agent_role, metadata \
+             trust_level, session_id, agent_role, write_path, metadata \
              FROM memories WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(id)
@@ -1024,7 +1027,7 @@ impl MemoryStore for PostgresMemoryStore {
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
-             trust_level, session_id, agent_role, metadata \
+             trust_level, session_id, agent_role, write_path, metadata \
              FROM memories WHERE id = $1",
         )
         .bind(id)
@@ -1130,7 +1133,7 @@ impl MemoryStore for PostgresMemoryStore {
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
-             trust_level, session_id, agent_role, metadata \
+             trust_level, session_id, agent_role, write_path, metadata \
              FROM memories {} ORDER BY created_at DESC, id ASC LIMIT ${}",
             where_clause, param_idx
         );
@@ -1446,7 +1449,7 @@ impl PostgresMemoryStore {
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
-             trust_level, session_id, agent_role, metadata \
+             trust_level, session_id, agent_role, write_path, metadata \
              FROM memories WHERE embedding_status IN ('pending', 'failed') AND deleted_at IS NULL \
              ORDER BY created_at ASC LIMIT $1",
         )
@@ -1472,7 +1475,7 @@ impl PostgresMemoryStore {
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
-             trust_level, session_id, agent_role, metadata \
+             trust_level, session_id, agent_role, write_path, metadata \
              FROM memories \
              WHERE deleted_at IS NULL \
                AND embedding_status = 'complete' \
@@ -1916,7 +1919,7 @@ impl PostgresMemoryStore {
                     m.actor, m.actor_type, m.audience, \
                     m.parent_id, m.chunk_index, m.total_chunks, \
                     m.event_time, m.event_time_precision, m.project, \
-                    m.trust_level, m.session_id, m.agent_role, m.metadata, \
+                    m.trust_level, m.session_id, m.agent_role, m.write_path, m.metadata, \
                     (1 - (me.embedding <=> $1)) AS similarity \
              FROM memories m \
              JOIN memory_embeddings me ON me.memory_id = m.id \
@@ -2044,7 +2047,7 @@ impl PostgresMemoryStore {
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
-             trust_level, session_id, agent_role, metadata \
+             trust_level, session_id, agent_role, write_path, metadata \
              FROM memories WHERE id = ANY($1) AND deleted_at IS NULL",
         )
         .bind(ids)
@@ -3839,7 +3842,7 @@ impl PostgresMemoryStore {
              m.is_consolidated_original, m.consolidated_into, \
              m.actor, m.actor_type, m.audience, m.parent_id, m.chunk_index, m.total_chunks, \
              m.event_time, m.event_time_precision, m.project, \
-             m.trust_level, m.session_id, m.agent_role, m.metadata, \
+             m.trust_level, m.session_id, m.agent_role, m.write_path, m.metadata, \
              COALESCE(s.stability, 1.0) as sal_stability, \
              COALESCE(s.difficulty, 5.0) as sal_difficulty, \
              COALESCE(s.reinforcement_count, 0) as sal_reinforcement_count, \
@@ -3859,7 +3862,7 @@ impl PostgresMemoryStore {
              m.is_consolidated_original, m.consolidated_into, \
              m.actor, m.actor_type, m.audience, m.parent_id, m.chunk_index, m.total_chunks, \
              m.event_time, m.event_time_precision, m.project, \
-             m.trust_level, m.session_id, m.agent_role, m.metadata, \
+             m.trust_level, m.session_id, m.agent_role, m.write_path, m.metadata, \
              COALESCE(s.stability, 1.0) as sal_stability, \
              COALESCE(s.difficulty, 5.0) as sal_difficulty, \
              COALESCE(s.reinforcement_count, 0) as sal_reinforcement_count, \
@@ -4264,7 +4267,7 @@ impl PostgresMemoryStore {
              is_consolidated_original, consolidated_into, \
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
-             trust_level, session_id, agent_role, metadata \
+             trust_level, session_id, agent_role, write_path, metadata \
              FROM memories WHERE parent_id = $1 AND deleted_at IS NULL \
              ORDER BY chunk_index ASC",
         )
@@ -4429,7 +4432,7 @@ impl PostgresMemoryStore {
                     m.actor, m.actor_type, m.audience, \
                     m.parent_id, m.chunk_index, m.total_chunks, \
                     m.event_time, m.event_time_precision, m.project, \
-                    m.trust_level, m.session_id, m.agent_role, m.metadata, \
+                    m.trust_level, m.session_id, m.agent_role, m.write_path, m.metadata, \
                     (1.0 - (me.embedding <=> $1)) AS similarity \
              FROM memories m \
              JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = TRUE \
@@ -4448,7 +4451,7 @@ impl PostgresMemoryStore {
                     m.actor, m.actor_type, m.audience, \
                     m.parent_id, m.chunk_index, m.total_chunks, \
                     m.event_time, m.event_time_precision, m.project, \
-                    m.trust_level, m.session_id, m.agent_role, m.metadata, \
+                    m.trust_level, m.session_id, m.agent_role, m.write_path, m.metadata, \
                     (1.0 - (me.embedding <=> $1)) AS similarity \
              FROM memories m \
              JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = TRUE \
