@@ -45,3 +45,9 @@ mod extraction;
 
 #[path = "unit/consolidation.rs"]
 mod consolidation;
+
+#[path = "unit/redaction.rs"]
+mod redaction;
+
+#[path = "unit/entropy.rs"]
+mod entropy;

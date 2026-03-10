@@ -3,21 +3,13 @@
 //! Uses figment for layered config (defaults -> file -> env). Every subsystem has its own
 //! config struct (EmbeddingConfig, SalienceConfig, GcConfig, etc.) nested under the root Config.
 
-/// Configuration management using figment
-///
-/// Loads configuration with this precedence (highest wins):
-/// 1. Defaults (hardcoded)
-/// 2. TOML file: memcp.toml (in working directory)
-/// 3. Environment variables: DATABASE_URL (standard PostgreSQL convention)
-/// 4. Environment variables: prefixed MEMCP_ (e.g., MEMCP_LOG_LEVEL=debug)
-
-use std::collections::HashMap;
+use crate::errors::MemcpError;
 use figment::{
+    providers::{Env, Format, Serialized, Toml},
     Figment,
-    providers::{Env, Format, Toml, Serialized},
 };
 use serde::{Deserialize, Serialize};
-use crate::errors::MemcpError;
+use std::collections::HashMap;
 
 /// Configuration for the search subsystem.
 ///
@@ -89,11 +81,21 @@ pub struct SalienceConfig {
     pub debug_scoring: bool,
 }
 
-fn default_w_recency() -> f64 { 0.25 }
-fn default_w_access() -> f64 { 0.15 }
-fn default_w_semantic() -> f64 { 0.45 }
-fn default_w_reinforce() -> f64 { 0.15 }
-fn default_recency_lambda() -> f64 { 0.01 }
+fn default_w_recency() -> f64 {
+    0.25
+}
+fn default_w_access() -> f64 {
+    0.15
+}
+fn default_w_semantic() -> f64 {
+    0.45
+}
+fn default_w_reinforce() -> f64 {
+    0.15
+}
+fn default_recency_lambda() -> f64 {
+    0.01
+}
 
 impl Default for SalienceConfig {
     fn default() -> Self {
@@ -208,9 +210,15 @@ pub struct ConsolidationConfig {
     pub max_consolidation_group: usize,
 }
 
-fn default_consolidation_enabled() -> bool { true }
-fn default_similarity_threshold() -> f64 { 0.92 }
-fn default_max_consolidation_group() -> usize { 5 }
+fn default_consolidation_enabled() -> bool {
+    true
+}
+fn default_similarity_threshold() -> f64 {
+    0.92
+}
+fn default_max_consolidation_group() -> usize {
+    5
+}
 
 impl Default for ConsolidationConfig {
     fn default() -> Self {
@@ -375,10 +383,18 @@ pub struct PromotionConfig {
     pub batch_cap: usize,
 }
 
-fn default_min_reinforcements() -> u32 { 3 }
-fn default_min_stability_promotion() -> f64 { 0.8 }
-fn default_sweep_interval_minutes() -> u64 { 60 }
-fn default_batch_cap() -> usize { 15 }
+fn default_min_reinforcements() -> u32 {
+    3
+}
+fn default_min_stability_promotion() -> f64 {
+    0.8
+}
+fn default_sweep_interval_minutes() -> u64 {
+    60
+}
+fn default_batch_cap() -> usize {
+    15
+}
 
 impl Default for PromotionConfig {
     fn default() -> Self {
@@ -493,7 +509,12 @@ fn default_embedding_provider() -> String {
 
 fn default_cache_dir() -> String {
     dirs::cache_dir()
-        .map(|p| p.join("memcp").join("models").to_string_lossy().into_owned())
+        .map(|p| {
+            p.join("memcp")
+                .join("models")
+                .to_string_lossy()
+                .into_owned()
+        })
         .unwrap_or_else(|| "/tmp/memcp_models".to_string())
 }
 
@@ -534,7 +555,11 @@ impl EmbeddingConfig {
             if self.tiers.contains_key("fast") {
                 "fast"
             } else {
-                self.tiers.keys().next().map(|s| s.as_str()).unwrap_or("fast")
+                self.tiers
+                    .keys()
+                    .next()
+                    .map(|s| s.as_str())
+                    .unwrap_or("fast")
             }
         } else {
             &self.provider
@@ -585,8 +610,12 @@ pub struct CategoryFilterConfig {
     pub llm_model: Option<String>,
 }
 
-fn default_category_filter_enabled() -> bool { true }
-fn default_block_tool_narration() -> bool { true }
+fn default_category_filter_enabled() -> bool {
+    true
+}
+fn default_block_tool_narration() -> bool {
+    true
+}
 
 fn default_category_actions() -> std::collections::HashMap<String, String> {
     let mut m = std::collections::HashMap::new();
@@ -666,12 +695,24 @@ pub struct AutoStoreConfig {
     pub category_filter: CategoryFilterConfig,
 }
 
-fn default_auto_store_format() -> String { "claude-code".to_string() }
-fn default_auto_store_filter_mode() -> String { "none".to_string() }
-fn default_auto_store_filter_provider() -> String { "ollama".to_string() }
-fn default_auto_store_filter_model() -> String { "llama3.2".to_string() }
-fn default_auto_store_poll_interval() -> u64 { 5 }
-fn default_auto_store_dedup_window() -> u64 { 300 }
+fn default_auto_store_format() -> String {
+    "claude-code".to_string()
+}
+fn default_auto_store_filter_mode() -> String {
+    "none".to_string()
+}
+fn default_auto_store_filter_provider() -> String {
+    "ollama".to_string()
+}
+fn default_auto_store_filter_model() -> String {
+    "llama3.2".to_string()
+}
+fn default_auto_store_poll_interval() -> u64 {
+    5
+}
+fn default_auto_store_dedup_window() -> u64 {
+    300
+}
 
 impl Default for AutoStoreConfig {
     fn default() -> Self {
@@ -712,8 +753,12 @@ pub struct DedupConfig {
     pub similarity_threshold: f64,
 }
 
-fn default_dedup_enabled() -> bool { true }
-fn default_dedup_similarity_threshold() -> f64 { 0.95 }
+fn default_dedup_enabled() -> bool {
+    true
+}
+fn default_dedup_similarity_threshold() -> f64 {
+    0.95
+}
 
 impl Default for DedupConfig {
     fn default() -> Self {
@@ -754,10 +799,18 @@ pub struct ChunkingConfig {
     pub min_content_chars: usize,
 }
 
-fn default_chunking_enabled() -> bool { true }
-fn default_max_chunk_chars() -> usize { 1024 }
-fn default_overlap_sentences() -> usize { 2 }
-fn default_min_content_chars() -> usize { 2048 }
+fn default_chunking_enabled() -> bool {
+    true
+}
+fn default_max_chunk_chars() -> usize {
+    1024
+}
+fn default_overlap_sentences() -> usize {
+    2
+}
+fn default_min_content_chars() -> usize {
+    2048
+}
 
 impl Default for ChunkingConfig {
     fn default() -> Self {
@@ -837,18 +890,42 @@ pub struct RecallConfig {
     pub session_topic_tracking: bool,
 }
 
-fn default_recall_max_memories() -> usize { 3 }
-fn default_recall_min_relevance() -> f64 { 0.7 }
-fn default_recall_session_idle_secs() -> u64 { 86400 }
-fn default_recall_bump_multiplier() -> f64 { 0.15 }
-fn default_recall_stability_ceiling() -> f64 { 100.0 }
-fn default_recall_truncation_chars() -> usize { 200 }
-fn default_recall_related_context_enabled() -> bool { true }
-fn default_tag_boost_weight() -> f64 { 0.1 }
-fn default_session_boost_weight() -> f64 { 0.05 }
-fn default_tag_boost_cap() -> f64 { 0.3 }
-fn default_session_boost_cap() -> f64 { 0.15 }
-fn default_session_topic_tracking() -> bool { true }
+fn default_recall_max_memories() -> usize {
+    3
+}
+fn default_recall_min_relevance() -> f64 {
+    0.7
+}
+fn default_recall_session_idle_secs() -> u64 {
+    86400
+}
+fn default_recall_bump_multiplier() -> f64 {
+    0.15
+}
+fn default_recall_stability_ceiling() -> f64 {
+    100.0
+}
+fn default_recall_truncation_chars() -> usize {
+    200
+}
+fn default_recall_related_context_enabled() -> bool {
+    true
+}
+fn default_tag_boost_weight() -> f64 {
+    0.1
+}
+fn default_session_boost_weight() -> f64 {
+    0.05
+}
+fn default_tag_boost_cap() -> f64 {
+    0.3
+}
+fn default_session_boost_cap() -> f64 {
+    0.15
+}
+fn default_session_topic_tracking() -> bool {
+    true
+}
 
 impl Default for RecallConfig {
     fn default() -> Self {
@@ -895,9 +972,15 @@ pub struct IdempotencyConfig {
     pub max_key_length: usize,
 }
 
-fn default_dedup_window_secs() -> u64 { 60 }
-fn default_key_ttl_secs() -> u64 { 86400 }
-fn default_max_key_length() -> usize { 256 }
+fn default_dedup_window_secs() -> u64 {
+    60
+}
+fn default_key_ttl_secs() -> u64 {
+    86400
+}
+fn default_max_key_length() -> usize {
+    256
+}
 
 impl Default for IdempotencyConfig {
     fn default() -> Self {
@@ -914,7 +997,7 @@ impl Default for IdempotencyConfig {
 /// Provides personal context for temporal extraction and other personalization features.
 /// Nested env var overrides use double underscores:
 ///   MEMCP_USER__BIRTH_YEAR=1990
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UserConfig {
     /// User's birth year, used to resolve relative-age references in memories.
     /// Example: "when I was 6" + birth_year=1990 resolves to event_time=1996.
@@ -923,34 +1006,18 @@ pub struct UserConfig {
     pub birth_year: Option<u32>,
 }
 
-impl Default for UserConfig {
-    fn default() -> Self {
-        UserConfig {
-            birth_year: None,
-        }
-    }
-}
-
 /// Configuration for project scoping.
 ///
 /// Projects isolate memories by codebase or context. NULL project = global (always visible).
 /// Activation precedence: CLI flag (--project) > env var (MEMCP_PROJECT) > this config default.
 /// Nested env var overrides use double underscores:
 ///   MEMCP_PROJECT__DEFAULT_PROJECT=myproject
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProjectConfig {
     /// Default project applied when no CLI flag or env var is set.
     /// NULL (None) means global — all memories are stored without project scoping.
     #[serde(default)]
     pub default_project: Option<String>,
-}
-
-impl Default for ProjectConfig {
-    fn default() -> Self {
-        ProjectConfig {
-            default_project: None,
-        }
-    }
 }
 
 /// Configuration for temporal event time extraction.
@@ -990,10 +1057,18 @@ pub struct TemporalConfig {
     pub openai_base_url: Option<String>,
 }
 
-fn default_temporal_provider() -> String { "ollama".to_string() }
-fn default_temporal_ollama_model() -> String { "llama3.2:3b".to_string() }
-fn default_temporal_openai_model() -> String { "gpt-4o-mini".to_string() }
-fn default_temporal_openai_base_url() -> Option<String> { None }
+fn default_temporal_provider() -> String {
+    "ollama".to_string()
+}
+fn default_temporal_ollama_model() -> String {
+    "llama3.2:3b".to_string()
+}
+fn default_temporal_openai_model() -> String {
+    "gpt-4o-mini".to_string()
+}
+fn default_temporal_openai_base_url() -> Option<String> {
+    None
+}
 
 impl Default for TemporalConfig {
     fn default() -> Self {
@@ -1049,12 +1124,24 @@ pub struct GcConfig {
     pub hard_purge_grace_days: u32,
 }
 
-fn default_gc_enabled() -> bool { true }
-fn default_gc_salience_threshold() -> f64 { 0.3 }
-fn default_gc_min_age_days() -> u32 { 30 }
-fn default_gc_min_memory_floor() -> u64 { 100 }
-fn default_gc_interval_secs() -> u64 { 3600 }
-fn default_gc_hard_purge_grace_days() -> u32 { 30 }
+fn default_gc_enabled() -> bool {
+    true
+}
+fn default_gc_salience_threshold() -> f64 {
+    0.3
+}
+fn default_gc_min_age_days() -> u32 {
+    30
+}
+fn default_gc_min_memory_floor() -> u64 {
+    100
+}
+fn default_gc_interval_secs() -> u64 {
+    3600
+}
+fn default_gc_hard_purge_grace_days() -> u32 {
+    30
+}
 
 impl Default for GcConfig {
     fn default() -> Self {
@@ -1192,11 +1279,21 @@ pub struct SummarizationConfig {
     pub prompt_template: String,
 }
 
-fn default_summarization_provider() -> String { "ollama".to_string() }
-fn default_summarization_ollama_model() -> String { "llama3.2:3b".to_string() }
-fn default_summarization_openai_base_url() -> String { "https://api.openai.com/v1".to_string() }
-fn default_summarization_openai_model() -> String { "gpt-4o-mini".to_string() }
-fn default_summarization_max_input_chars() -> usize { 4000 }
+fn default_summarization_provider() -> String {
+    "ollama".to_string()
+}
+fn default_summarization_ollama_model() -> String {
+    "llama3.2:3b".to_string()
+}
+fn default_summarization_openai_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
+}
+fn default_summarization_openai_model() -> String {
+    "gpt-4o-mini".to_string()
+}
+fn default_summarization_max_input_chars() -> usize {
+    4000
+}
 fn default_summarization_prompt() -> String {
     "Summarize the following AI assistant response into a concise memory entry. \
      Extract and preserve:\n\
@@ -1211,7 +1308,8 @@ fn default_summarization_prompt() -> String {
      - Repeated context the user already knows\n\
      - Pleasantries and filler\n\n\
      Output a concise paragraph (2-5 sentences). If the response contains multiple \
-     distinct topics, separate them with semicolons.".to_string()
+     distinct topics, separate them with semicolons."
+        .to_string()
 }
 
 impl Default for SummarizationConfig {
@@ -1252,9 +1350,15 @@ pub struct HealthConfig {
     pub bind: String,
 }
 
-fn default_health_enabled() -> bool { true }
-fn default_health_port() -> u16 { 9090 }
-fn default_health_bind() -> String { "0.0.0.0".to_string() }
+fn default_health_enabled() -> bool {
+    true
+}
+fn default_health_port() -> u16 {
+    9090
+}
+fn default_health_bind() -> String {
+    "0.0.0.0".to_string()
+}
 
 impl Default for HealthConfig {
     fn default() -> Self {
@@ -1292,9 +1396,15 @@ pub struct ResourceCapsConfig {
     pub max_db_connections: u32,
 }
 
-fn default_max_embedding_batch_size() -> usize { 64 }
-fn default_max_search_results() -> i64 { 100 }
-fn default_max_db_connections() -> u32 { 10 }
+fn default_max_embedding_batch_size() -> usize {
+    64
+}
+fn default_max_search_results() -> i64 {
+    100
+}
+fn default_max_db_connections() -> u32 {
+    10
+}
 
 impl Default for ResourceCapsConfig {
     fn default() -> Self {
@@ -1321,7 +1431,9 @@ pub struct StoreConfig {
     pub sync_timeout_secs: u64,
 }
 
-fn default_sync_timeout_secs() -> u64 { 5 }
+fn default_sync_timeout_secs() -> u64 {
+    5
+}
 
 impl Default for StoreConfig {
     fn default() -> Self {
@@ -1415,19 +1527,45 @@ pub struct CurationConfig {
     pub openai_model: String,
 }
 
-fn default_curation_interval_secs() -> u64 { 86400 }
-fn default_curation_cluster_threshold() -> f64 { 0.85 }
-fn default_curation_stale_salience() -> f64 { 0.3 }
-fn default_curation_stale_age_days() -> u32 { 30 }
-fn default_curation_stale_stability() -> f64 { 0.1 }
-fn default_curation_max_merges() -> usize { 20 }
-fn default_curation_max_flags() -> usize { 50 }
-fn default_curation_max_strengthens() -> usize { 50 }
-fn default_curation_max_candidates() -> usize { 500 }
-fn default_curation_max_merge_group() -> usize { 5 }
-fn default_curation_ollama_model() -> String { "llama3.2:3b".to_string() }
-fn default_curation_openai_base_url() -> String { "https://api.openai.com/v1".to_string() }
-fn default_curation_openai_model() -> String { "gpt-4o-mini".to_string() }
+fn default_curation_interval_secs() -> u64 {
+    86400
+}
+fn default_curation_cluster_threshold() -> f64 {
+    0.85
+}
+fn default_curation_stale_salience() -> f64 {
+    0.3
+}
+fn default_curation_stale_age_days() -> u32 {
+    30
+}
+fn default_curation_stale_stability() -> f64 {
+    0.1
+}
+fn default_curation_max_merges() -> usize {
+    20
+}
+fn default_curation_max_flags() -> usize {
+    50
+}
+fn default_curation_max_strengthens() -> usize {
+    50
+}
+fn default_curation_max_candidates() -> usize {
+    500
+}
+fn default_curation_max_merge_group() -> usize {
+    5
+}
+fn default_curation_ollama_model() -> String {
+    "llama3.2:3b".to_string()
+}
+fn default_curation_openai_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
+}
+fn default_curation_openai_model() -> String {
+    "gpt-4o-mini".to_string()
+}
 
 impl Default for CurationConfig {
     fn default() -> Self {
@@ -1475,9 +1613,15 @@ pub struct ResourceLimitsConfig {
     pub auto_gc_cooldown_mins: u64,
 }
 
-fn default_warn_percent() -> u64 { 80 }
-fn default_hard_cap_percent() -> u64 { 110 }
-fn default_auto_gc_cooldown_mins() -> u64 { 15 }
+fn default_warn_percent() -> u64 {
+    80
+}
+fn default_hard_cap_percent() -> u64 {
+    110
+}
+fn default_auto_gc_cooldown_mins() -> u64 {
+    15
+}
 
 impl Default for ResourceLimitsConfig {
     fn default() -> Self {
@@ -1532,7 +1676,9 @@ fn default_type_stability() -> HashMap<String, f64> {
     m
 }
 
-fn default_retention_stability() -> f64 { 2.5 }
+fn default_retention_stability() -> f64 {
+    2.5
+}
 
 impl Default for RetentionConfig {
     fn default() -> Self {
@@ -1552,7 +1698,10 @@ impl RetentionConfig {
         if type_hint.is_empty() {
             return self.default_stability;
         }
-        self.type_stability.get(type_hint).copied().unwrap_or(self.default_stability)
+        self.type_stability
+            .get(type_hint)
+            .copied()
+            .unwrap_or(self.default_stability)
     }
 }
 
@@ -1625,10 +1774,18 @@ pub struct EnrichmentConfig {
     pub neighbor_similarity_threshold: f64,
 }
 
-fn default_enrichment_batch_limit() -> usize { 50 }
-fn default_enrichment_sweep_interval() -> u64 { 3600 }
-fn default_enrichment_neighbor_depth() -> usize { 5 }
-fn default_enrichment_similarity_threshold() -> f64 { 0.7 }
+fn default_enrichment_batch_limit() -> usize {
+    50
+}
+fn default_enrichment_sweep_interval() -> u64 {
+    3600
+}
+fn default_enrichment_neighbor_depth() -> usize {
+    5
+}
+fn default_enrichment_similarity_threshold() -> f64 {
+    0.7
+}
 
 impl Default for EnrichmentConfig {
     fn default() -> Self {
@@ -1686,17 +1843,39 @@ pub struct RateLimitConfig {
     pub export_rps: u32,
 }
 
-fn default_rate_limit_enabled() -> bool { true }
-fn default_global_rps() -> u32 { 200 }
-fn default_recall_rps() -> u32 { 100 }
-fn default_store_rps() -> u32 { 50 }
-fn default_search_rps() -> u32 { 100 }
-fn default_annotate_rps() -> u32 { 50 }
-fn default_update_rps() -> u32 { 50 }
-fn default_burst_multiplier() -> u32 { 2 }
-fn default_discover_rps() -> u32 { 50 }
-fn default_delete_rps() -> u32 { 50 }
-fn default_export_rps() -> u32 { 10 }
+fn default_rate_limit_enabled() -> bool {
+    true
+}
+fn default_global_rps() -> u32 {
+    200
+}
+fn default_recall_rps() -> u32 {
+    100
+}
+fn default_store_rps() -> u32 {
+    50
+}
+fn default_search_rps() -> u32 {
+    100
+}
+fn default_annotate_rps() -> u32 {
+    50
+}
+fn default_update_rps() -> u32 {
+    50
+}
+fn default_burst_multiplier() -> u32 {
+    2
+}
+fn default_discover_rps() -> u32 {
+    50
+}
+fn default_delete_rps() -> u32 {
+    50
+}
+fn default_export_rps() -> u32 {
+    10
+}
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
@@ -1732,14 +1911,95 @@ pub struct ObservabilityConfig {
     pub pool_poll_interval_secs: u64,
 }
 
-fn default_metrics_enabled() -> bool { true }
-fn default_pool_poll_interval_secs() -> u64 { 10 }
+fn default_metrics_enabled() -> bool {
+    true
+}
+fn default_pool_poll_interval_secs() -> u64 {
+    10
+}
 
 impl Default for ObservabilityConfig {
     fn default() -> Self {
         ObservabilityConfig {
             metrics_enabled: default_metrics_enabled(),
             pool_poll_interval_secs: default_pool_poll_interval_secs(),
+        }
+    }
+}
+
+/// Configuration for secret and PII redaction on ingestion.
+///
+/// Secrets are enabled by default (detects API keys, tokens, etc.).
+/// PII detection is opt-in (SSN, credit card). Email is never redacted.
+/// Nested env var overrides use double underscores:
+///   MEMCP_REDACTION__SECRETS_ENABLED=false
+///   MEMCP_REDACTION__PII_ENABLED=true
+///   MEMCP_REDACTION__ENTROPY_THRESHOLD=4.0
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedactionConfig {
+    /// Whether secret detection is enabled (default: true)
+    #[serde(default = "default_secrets_enabled")]
+    pub secrets_enabled: bool,
+    /// Whether PII detection is enabled (default: false, opt-in)
+    #[serde(default)]
+    pub pii_enabled: bool,
+    /// Minimum Shannon entropy for generic secret detection (default: 3.5)
+    #[serde(default = "default_entropy_threshold")]
+    pub entropy_threshold: f64,
+    /// Allowlist configuration — values and patterns that bypass redaction
+    #[serde(default)]
+    pub allowlist: AllowlistConfig,
+    /// Custom redaction rules (user-provided patterns)
+    #[serde(default)]
+    pub custom_rules: Vec<CustomRuleConfig>,
+}
+
+/// Allowlist configuration for redaction bypass.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AllowlistConfig {
+    /// Exact string values that bypass redaction
+    #[serde(default)]
+    pub values: Vec<String>,
+    /// Regex patterns — any match containing these bypasses redaction
+    #[serde(default)]
+    pub patterns: Vec<String>,
+}
+
+/// A user-provided custom redaction rule.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomRuleConfig {
+    /// Regex pattern (must have a capture group for the secret value)
+    pub pattern: String,
+    /// Category name for the [REDACTED:category] marker
+    pub category: String,
+    /// Masking style: "partial" or "full" (default: "full")
+    #[serde(default = "default_mask_style")]
+    pub mask_style: String,
+    /// Prefix length for partial masking
+    #[serde(default)]
+    pub prefix_len: Option<usize>,
+}
+
+fn default_secrets_enabled() -> bool {
+    true
+}
+
+fn default_entropy_threshold() -> f64 {
+    3.5
+}
+
+fn default_mask_style() -> String {
+    "full".to_string()
+}
+
+impl Default for RedactionConfig {
+    fn default() -> Self {
+        RedactionConfig {
+            secrets_enabled: default_secrets_enabled(),
+            pii_enabled: false,
+            entropy_threshold: default_entropy_threshold(),
+            allowlist: AllowlistConfig::default(),
+            custom_rules: Vec::new(),
         }
     }
 }
@@ -1902,6 +2162,11 @@ pub struct Config {
     /// Existing configs without [observability] section still work (serde default applied).
     #[serde(default)]
     pub observability: ObservabilityConfig,
+
+    /// Redaction configuration (secret and PII masking on ingestion).
+    /// Secrets enabled by default, PII opt-in. Existing configs without [redaction] section still work.
+    #[serde(default)]
+    pub redaction: RedactionConfig,
 }
 
 fn default_log_level() -> String {
@@ -1946,6 +2211,7 @@ impl Default for Config {
             enrichment: EnrichmentConfig::default(),
             rate_limit: RateLimitConfig::default(),
             observability: ObservabilityConfig::default(),
+            redaction: RedactionConfig::default(),
         }
     }
 }
@@ -1961,7 +2227,11 @@ impl Config {
             .merge(Serialized::defaults(Config::default()))
             .merge(Toml::file("memcp.toml"))
             // Standard DATABASE_URL env var (highest priority for database config)
-            .merge(Env::raw().only(&["DATABASE_URL"]).map(|_| "database_url".into()))
+            .merge(
+                Env::raw()
+                    .only(&["DATABASE_URL"])
+                    .map(|_| "database_url".into()),
+            )
             // MEMCP_-prefixed env vars (includes MEMCP_DATABASE_URL, MEMCP_LOG_LEVEL, etc.)
             // Double underscore handles nested: MEMCP_EMBEDDING__PROVIDER=openai
             .merge(Env::prefixed("MEMCP_"))
@@ -1978,28 +2248,61 @@ mod tests {
     fn test_retention_defaults() {
         let config = RetentionConfig::default();
 
-        assert_eq!(config.stability_for_type("decision"), 5.0, "decision should be 5.0");
-        assert_eq!(config.stability_for_type("preference"), 5.0, "preference should be 5.0");
-        assert_eq!(config.stability_for_type("instruction"), 3.5, "instruction should be 3.5");
+        assert_eq!(
+            config.stability_for_type("decision"),
+            5.0,
+            "decision should be 5.0"
+        );
+        assert_eq!(
+            config.stability_for_type("preference"),
+            5.0,
+            "preference should be 5.0"
+        );
+        assert_eq!(
+            config.stability_for_type("instruction"),
+            3.5,
+            "instruction should be 3.5"
+        );
         assert_eq!(config.stability_for_type("fact"), 2.5, "fact should be 2.5");
-        assert_eq!(config.stability_for_type("observation"), 1.0, "observation should be 1.0");
-        assert_eq!(config.stability_for_type("summary"), 2.0, "summary should be 2.0");
+        assert_eq!(
+            config.stability_for_type("observation"),
+            1.0,
+            "observation should be 1.0"
+        );
+        assert_eq!(
+            config.stability_for_type("summary"),
+            2.0,
+            "summary should be 2.0"
+        );
     }
 
     #[test]
     fn test_retention_untyped() {
         let config = RetentionConfig::default();
 
-        assert_eq!(config.stability_for_type(""), 2.5, "empty string should return default 2.5");
-        assert_eq!(config.stability_for_type("unknown_type"), 2.5, "unknown type should return default 2.5");
-        assert_eq!(config.stability_for_type("foobar"), 2.5, "arbitrary type should return default 2.5");
+        assert_eq!(
+            config.stability_for_type(""),
+            2.5,
+            "empty string should return default 2.5"
+        );
+        assert_eq!(
+            config.stability_for_type("unknown_type"),
+            2.5,
+            "unknown type should return default 2.5"
+        );
+        assert_eq!(
+            config.stability_for_type("foobar"),
+            2.5,
+            "arbitrary type should return default 2.5"
+        );
     }
 
     #[test]
     fn test_retention_serde() {
         let config = RetentionConfig::default();
         let json = serde_json::to_string(&config).expect("should serialize");
-        let deserialized: RetentionConfig = serde_json::from_str(&json).expect("should deserialize");
+        let deserialized: RetentionConfig =
+            serde_json::from_str(&json).expect("should deserialize");
 
         assert_eq!(deserialized.default_stability, config.default_stability);
         assert_eq!(deserialized.stability_for_type("decision"), 5.0);
@@ -2018,19 +2321,29 @@ mod tests {
         let config = EnrichmentConfig::default();
         assert!(!config.enabled, "enrichment should be disabled by default");
         assert_eq!(config.batch_limit, 50, "batch_limit should default to 50");
-        assert_eq!(config.sweep_interval_secs, 3600, "sweep_interval_secs should default to 3600");
-        assert_eq!(config.neighbor_depth, 5, "neighbor_depth should default to 5");
-        assert!((config.neighbor_similarity_threshold - 0.7).abs() < f64::EPSILON,
-            "neighbor_similarity_threshold should default to 0.7");
+        assert_eq!(
+            config.sweep_interval_secs, 3600,
+            "sweep_interval_secs should default to 3600"
+        );
+        assert_eq!(
+            config.neighbor_depth, 5,
+            "neighbor_depth should default to 5"
+        );
+        assert!(
+            (config.neighbor_similarity_threshold - 0.7).abs() < f64::EPSILON,
+            "neighbor_similarity_threshold should default to 0.7"
+        );
     }
 
     #[test]
     fn test_config_has_enrichment_field() {
         let config = Config::default();
-        assert!(!config.enrichment.enabled, "enrichment should be disabled by default");
+        assert!(
+            !config.enrichment.enabled,
+            "enrichment should be disabled by default"
+        );
         assert_eq!(config.enrichment.batch_limit, 50);
         assert_eq!(config.enrichment.sweep_interval_secs, 3600);
         assert_eq!(config.enrichment.neighbor_depth, 5);
     }
 }
-
