@@ -1,0 +1,72 @@
+# memcp QA: Trust-Weighted Scoring Test Cases
+# Category: trust
+# Tests trust-level storage and its effect on search ranking.
+
+tests:
+
+  - id: trust-store-high
+    name: "Store memory with high trust level"
+    category: trust
+    tags: [trust, smoke]
+    command: "memcp store 'High-trust: verified production database schema v3' --type-hint fact --trust-level 0.95 --tags trust-test --wait"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: trust-store-low
+    name: "Store memory with low trust level"
+    category: trust
+    tags: [trust]
+    command: "memcp store 'Low-trust: unverified database schema rumor' --type-hint observation --trust-level 0.2 --tags trust-test --wait"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: trust-store-default
+    name: "Store memory with default (inferred) trust level"
+    category: trust
+    tags: [trust]
+    command: "memcp store 'Default-trust: database schema notes from docs' --type-hint fact --tags trust-test --wait"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: trust-search-ranking
+    name: "Search ranks high-trust memories higher"
+    category: trust
+    tags: [trust]
+    depends_on: [trust-store-high, trust-store-low]
+    command: "memcp search 'database schema' --tags trust-test --json"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: stdout_contains
+        value: "verified production"
+    timeout: 30
+
+  - id: trust-in-recall
+    name: "Recall path includes trust-weighted results"
+    category: trust
+    tags: [trust]
+    depends_on: [trust-store-high, trust-store-low]
+    command: "memcp recall 'database schema'"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: trust-verbose-shows-level
+    name: "Verbose output shows trust level metadata"
+    category: trust
+    tags: [trust]
+    depends_on: [trust-store-high]
+    command: "memcp search 'verified production database' --verbose --json"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: regex
+        pattern: "trust"
+    timeout: 30

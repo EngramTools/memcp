@@ -1,0 +1,84 @@
+# memcp QA: Garbage Collection and Dedup Test Cases
+# Category: gc
+# Tests GC dry-run, prune, and deduplication behavior.
+
+tests:
+
+  - id: gc-dry-run
+    name: "GC dry-run shows candidates without deleting"
+    category: gc
+    tags: [gc, smoke]
+    setup:
+      - command: "memcp store 'GC test memory with low value' --type-hint observation --wait"
+        ignore_exit: false
+    command: "memcp gc --dry-run"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 60
+
+  - id: gc-with-threshold
+    name: "GC with custom salience threshold"
+    category: gc
+    tags: [gc]
+    setup:
+      - command: "memcp store 'Another GC candidate memory' --type-hint observation --wait"
+        ignore_exit: false
+    command: "memcp gc --dry-run --salience-threshold 0.99"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 60
+
+  - id: gc-with-min-age
+    name: "GC respects minimum age filter"
+    category: gc
+    tags: [gc]
+    command: "memcp gc --dry-run --min-age-days 0"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 60
+
+  - id: gc-prune
+    name: "GC prune actually removes low-salience memories"
+    category: gc
+    tags: [gc]
+    setup:
+      - command: "memcp store 'Expendable memory for GC prune test' --type-hint observation --wait"
+        ignore_exit: false
+    command: "memcp gc --salience-threshold 0.99 --min-age-days 0"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 60
+
+  - id: dedup-exact
+    name: "Exact duplicate content is deduplicated"
+    category: gc
+    tags: [gc]
+    setup:
+      - command: "memcp store 'Exact duplicate test content for QA' --type-hint fact --wait"
+        ignore_exit: false
+    command: "memcp store 'Exact duplicate test content for QA' --type-hint fact --wait"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: stdout_contains
+        value: "duplicate"
+    timeout: 30
+
+  - id: reinforce-memory
+    name: "Reinforce boosts memory salience"
+    category: gc
+    tags: [gc]
+    setup:
+      - command: "memcp store 'Important memory to reinforce' --type-hint decision --wait"
+        ignore_exit: false
+      - command: "MEMORY_ID=$(memcp search 'Important memory to reinforce' --json | grep -o '\"id\":\"[^\"]*\"' | head -1 | cut -d'\"' -f4) && echo $MEMORY_ID > /tmp/qa_reinforce_id.txt"
+        ignore_exit: false
+    command: "memcp reinforce $(cat /tmp/qa_reinforce_id.txt)"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30

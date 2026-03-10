@@ -1,0 +1,84 @@
+# memcp QA: Curation Test Cases
+# Category: curation
+# Tests AI brain curation: propose, run, log, undo.
+# Note: Quarantine is internal to the curation pipeline, not a direct CLI command.
+# These tests exercise the curation CLI subcommands.
+
+tests:
+
+  - id: curation-propose
+    name: "Curation propose (dry-run) previews actions"
+    category: curation
+    tags: [curation, smoke]
+    setup:
+      - command: "memcp store 'Curation test: Rust ownership model explained' --type-hint fact --tags rust --wait"
+        ignore_exit: false
+      - command: "memcp store 'Curation test: Rust borrow checker details' --type-hint fact --tags rust --wait"
+        ignore_exit: false
+      - command: "memcp store 'Curation test: Rust lifetime annotations guide' --type-hint fact --tags rust --wait"
+        ignore_exit: false
+    command: "memcp curation run --propose"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 120
+
+  - id: curation-run
+    name: "Curation run executes merge/strengthen actions"
+    category: curation
+    tags: [curation]
+    depends_on: [curation-propose]
+    command: "memcp curation run"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 120
+
+  - id: curation-log
+    name: "Curation log shows run history"
+    category: curation
+    tags: [curation]
+    depends_on: [curation-run]
+    command: "memcp curation log --limit 5"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: curation-log-detail
+    name: "Curation log shows details for a specific run"
+    category: curation
+    tags: [curation]
+    depends_on: [curation-run]
+    setup:
+      - command: "RUN_ID=$(memcp curation log --limit 1 | grep -o '[0-9]*' | head -1) && echo $RUN_ID > /tmp/qa_curation_run_id.txt"
+        ignore_exit: true
+    command: "memcp curation log --run-id $(cat /tmp/qa_curation_run_id.txt 2>/dev/null || echo 1)"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: curation-undo
+    name: "Curation undo reverses a run"
+    category: curation
+    tags: [curation]
+    depends_on: [curation-run]
+    setup:
+      - command: "RUN_ID=$(memcp curation log --limit 1 | grep -o '[0-9]*' | head -1) && echo $RUN_ID > /tmp/qa_curation_undo_id.txt"
+        ignore_exit: true
+    command: "memcp curation undo $(cat /tmp/qa_curation_undo_id.txt 2>/dev/null || echo 1)"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: curation-status
+    name: "Status check shows curation queue info"
+    category: curation
+    tags: [curation]
+    command: "memcp status --check"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30

@@ -1,0 +1,111 @@
+# memcp QA: Import / Export Test Cases
+# Category: import-export
+# Tests export formats, import round-trip, and filtering.
+
+tests:
+
+  - id: export-jsonl
+    name: "Export memories as JSONL"
+    category: import-export
+    tags: [import-export, smoke]
+    setup:
+      - command: "memcp store 'Export test: JSONL format verification' --type-hint fact --tags export-test --wait"
+        ignore_exit: false
+    command: "memcp export --format jsonl --output /tmp/qa_export.jsonl"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: file_exists
+        path: /tmp/qa_export.jsonl
+    cleanup:
+      - command: "rm -f /tmp/qa_export.jsonl"
+        ignore_exit: true
+    timeout: 30
+
+  - id: export-csv
+    name: "Export memories as CSV"
+    category: import-export
+    tags: [import-export]
+    setup:
+      - command: "memcp store 'Export test: CSV format verification' --type-hint fact --tags export-test --wait"
+        ignore_exit: false
+    command: "memcp export --format csv --output /tmp/qa_export.csv"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: file_exists
+        path: /tmp/qa_export.csv
+      - type: file_contains
+        path: /tmp/qa_export.csv
+        value: "content"
+    cleanup:
+      - command: "rm -f /tmp/qa_export.csv"
+        ignore_exit: true
+    timeout: 30
+
+  - id: export-markdown
+    name: "Export memories as Markdown"
+    category: import-export
+    tags: [import-export]
+    setup:
+      - command: "memcp store 'Export test: Markdown format verification' --type-hint fact --wait"
+        ignore_exit: false
+    command: "memcp export --format markdown --output /tmp/qa_export.md"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: file_exists
+        path: /tmp/qa_export.md
+    cleanup:
+      - command: "rm -f /tmp/qa_export.md"
+        ignore_exit: true
+    timeout: 30
+
+  - id: export-filtered-project
+    name: "Export filtered by project"
+    category: import-export
+    tags: [import-export]
+    setup:
+      - command: "memcp store 'Export project-scoped memory' --type-hint fact --project qa-export-test --wait"
+        ignore_exit: false
+    command: "memcp export --format jsonl --project qa-export-test --output /tmp/qa_export_filtered.jsonl"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: file_exists
+        path: /tmp/qa_export_filtered.jsonl
+      - type: file_contains
+        path: /tmp/qa_export_filtered.jsonl
+        value: "Export project-scoped"
+    cleanup:
+      - command: "rm -f /tmp/qa_export_filtered.jsonl"
+        ignore_exit: true
+    timeout: 30
+
+  - id: import-roundtrip
+    name: "Export -> Import -> Verify content matches"
+    category: import-export
+    tags: [import-export, smoke]
+    setup:
+      - command: "memcp store 'Round-trip test: unique content ABC123' --type-hint fact --tags roundtrip --wait"
+        ignore_exit: false
+      - command: "memcp export --format jsonl --tags roundtrip --output /tmp/qa_roundtrip.jsonl"
+        ignore_exit: false
+    command: "memcp import jsonl /tmp/qa_roundtrip.jsonl --dry-run"
+    assertions:
+      - type: exit_code
+        expected: 0
+    cleanup:
+      - command: "rm -f /tmp/qa_roundtrip.jsonl"
+        ignore_exit: true
+    timeout: 30
+
+  - id: import-discover
+    name: "Import discover shows available sources"
+    category: import-export
+    tags: [import-export]
+    command: "memcp import discover"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30

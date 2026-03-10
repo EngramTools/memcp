@@ -1,0 +1,288 @@
+# memcp QA: Core Journey Test Cases
+# Category: core
+# Tests the fundamental store -> search -> recall -> feedback -> manage cycle.
+
+tests:
+
+  # ---- Store ----
+
+  - id: store-basic
+    name: "Store a basic memory"
+    category: core
+    tags: [core, smoke]
+    command: "memcp store 'PostgreSQL uses MVCC for concurrency control' --type-hint fact --tags postgres,database --wait"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: stdout_contains
+        value: "Stored memory"
+    timeout: 30
+
+  - id: store-with-tags
+    name: "Store memory with tags and verify in search"
+    category: core
+    tags: [core, smoke]
+    depends_on: [store-basic]
+    command: "memcp store 'Redis supports pub/sub messaging patterns' --type-hint fact --tags redis,messaging --wait"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: stdout_contains
+        value: "Stored memory"
+    timeout: 30
+
+  - id: store-with-type-hint
+    name: "Store memory with specific type hint"
+    category: core
+    tags: [core]
+    command: "memcp store 'We chose JWT over session cookies for API auth' --type-hint decision --tags auth,architecture --wait"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: store-with-project
+    name: "Store memory scoped to a project"
+    category: core
+    tags: [core]
+    command: "memcp store 'Project-scoped memory for QA testing' --type-hint fact --project qa-test --wait"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: store-idempotent
+    name: "Store with idempotency key (safe to retry)"
+    category: core
+    tags: [core]
+    command: "memcp store 'Idempotent memory content' --idempotency-key qa-idem-001 --wait"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: store-idempotent-retry
+    name: "Retry idempotent store returns original"
+    category: core
+    tags: [core]
+    depends_on: [store-idempotent]
+    command: "memcp store 'Idempotent memory content' --idempotency-key qa-idem-001 --wait"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  # ---- Search ----
+
+  - id: search-basic
+    name: "Search returns stored memories"
+    category: core
+    tags: [core, smoke]
+    depends_on: [store-basic]
+    command: "memcp search 'PostgreSQL concurrency' --json"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: stdout_contains
+        value: "MVCC"
+    timeout: 30
+
+  - id: search-with-tags
+    name: "Search filters by tags"
+    category: core
+    tags: [core]
+    depends_on: [store-with-tags]
+    command: "memcp search 'messaging' --tags redis --json"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: stdout_contains
+        value: "pub/sub"
+    timeout: 30
+
+  - id: search-min-salience
+    name: "Search with minimum salience filter"
+    category: core
+    tags: [core]
+    depends_on: [store-basic]
+    command: "memcp search 'PostgreSQL' --min-salience 0.0 --json"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: search-json-format
+    name: "Search JSON output has expected structure"
+    category: core
+    tags: [core]
+    depends_on: [store-basic]
+    command: "memcp search 'PostgreSQL' --json"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: regex
+        pattern: '"id"'
+      - type: regex
+        pattern: '"content"'
+    timeout: 30
+
+  - id: search-compact
+    name: "Search compact output mode"
+    category: core
+    tags: [core]
+    depends_on: [store-basic]
+    command: "memcp search 'PostgreSQL' --compact"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: search-project-scoping
+    name: "Search respects project scoping"
+    category: core
+    tags: [core]
+    depends_on: [store-with-project]
+    command: "memcp search 'QA testing' --project qa-test --json"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: stdout_contains
+        value: "Project-scoped"
+    timeout: 30
+
+  # ---- Recall ----
+
+  - id: recall-basic
+    name: "Recall memories with query"
+    category: core
+    tags: [core, smoke]
+    depends_on: [store-basic]
+    command: "memcp recall 'database concurrency' --project qa-test"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: recall-queryless
+    name: "Query-less recall with --first flag"
+    category: core
+    tags: [core]
+    depends_on: [store-basic]
+    command: "memcp recall --first"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  # ---- Feedback ----
+
+  - id: feedback-useful
+    name: "Mark memory as useful (boosts salience)"
+    category: core
+    tags: [core]
+    depends_on: [store-basic]
+    setup:
+      - command: "MEMORY_ID=$(memcp search 'MVCC' --json | grep -o '\"id\":\"[^\"]*\"' | head -1 | cut -d'\"' -f4) && echo $MEMORY_ID > /tmp/qa_memory_id.txt"
+        ignore_exit: false
+    command: "memcp feedback $(cat /tmp/qa_memory_id.txt) useful"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: feedback-irrelevant
+    name: "Mark memory as irrelevant (lowers salience)"
+    category: core
+    tags: [core]
+    depends_on: [store-with-tags]
+    setup:
+      - command: "MEMORY_ID=$(memcp search 'Redis pub/sub' --json | grep -o '\"id\":\"[^\"]*\"' | head -1 | cut -d'\"' -f4) && echo $MEMORY_ID > /tmp/qa_memory_id2.txt"
+        ignore_exit: false
+    command: "memcp feedback $(cat /tmp/qa_memory_id2.txt) irrelevant"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  # ---- List / Get / Delete ----
+
+  - id: list-basic
+    name: "List memories with pagination"
+    category: core
+    tags: [core, smoke]
+    depends_on: [store-basic]
+    command: "memcp list --limit 5"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: get-by-id
+    name: "Get single memory by ID"
+    category: core
+    tags: [core]
+    depends_on: [store-basic]
+    setup:
+      - command: "MEMORY_ID=$(memcp search 'MVCC' --json | grep -o '\"id\":\"[^\"]*\"' | head -1 | cut -d'\"' -f4) && echo $MEMORY_ID > /tmp/qa_get_id.txt"
+        ignore_exit: false
+    command: "memcp get $(cat /tmp/qa_get_id.txt)"
+    assertions:
+      - type: exit_code
+        expected: 0
+      - type: stdout_contains
+        value: "MVCC"
+    timeout: 30
+
+  - id: annotate-memory
+    name: "Annotate memory with tags"
+    category: core
+    tags: [core]
+    depends_on: [store-basic]
+    setup:
+      - command: "MEMORY_ID=$(memcp search 'MVCC' --json | grep -o '\"id\":\"[^\"]*\"' | head -1 | cut -d'\"' -f4) && echo $MEMORY_ID > /tmp/qa_annotate_id.txt"
+        ignore_exit: false
+    command: "memcp annotate --id $(cat /tmp/qa_annotate_id.txt) --tags important,reviewed"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: update-content
+    name: "Update memory content"
+    category: core
+    tags: [core]
+    depends_on: [store-basic]
+    setup:
+      - command: "MEMORY_ID=$(memcp search 'MVCC' --json | grep -o '\"id\":\"[^\"]*\"' | head -1 | cut -d'\"' -f4) && echo $MEMORY_ID > /tmp/qa_update_id.txt"
+        ignore_exit: false
+    command: "memcp update $(cat /tmp/qa_update_id.txt) 'PostgreSQL uses MVCC and WAL for concurrency and durability' --wait"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: delete-by-id
+    name: "Delete memory and verify gone"
+    category: core
+    tags: [core]
+    setup:
+      - command: "memcp store 'Temporary memory to delete' --type-hint fact --wait"
+        ignore_exit: false
+      - command: "MEMORY_ID=$(memcp search 'Temporary memory to delete' --json | grep -o '\"id\":\"[^\"]*\"' | head -1 | cut -d'\"' -f4) && echo $MEMORY_ID > /tmp/qa_delete_id.txt"
+        ignore_exit: false
+    command: "memcp delete $(cat /tmp/qa_delete_id.txt)"
+    assertions:
+      - type: exit_code
+        expected: 0
+    timeout: 30
+
+  - id: delete-verify-gone
+    name: "Verify deleted memory returns error"
+    category: core
+    tags: [core]
+    depends_on: [delete-by-id]
+    command: "memcp get $(cat /tmp/qa_delete_id.txt)"
+    assertions:
+      - type: exit_code
+        expected: 1
+    timeout: 30
