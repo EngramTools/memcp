@@ -60,20 +60,11 @@ pub enum CurationAction {
         synthesized_content: String,
     },
     /// Flag a memory as stale (contradicted or low-value).
-    FlagStale {
-        memory_id: String,
-        reason: String,
-    },
+    FlagStale { memory_id: String, reason: String },
     /// Strengthen an important memory (boost salience).
-    Strengthen {
-        memory_id: String,
-        reason: String,
-    },
+    Strengthen { memory_id: String, reason: String },
     /// Skip — no action needed for this memory.
-    Skip {
-        memory_id: String,
-        reason: String,
-    },
+    Skip { memory_id: String, reason: String },
     /// Suspicious — quarantine a potentially poisoned memory.
     Suspicious {
         memory_id: String,
@@ -134,10 +125,7 @@ pub trait CurationProvider: Send + Sync {
     /// Synthesize a merged memory from multiple source memories.
     /// For algorithmic mode: concatenates content with separator.
     /// For LLM mode: produces a distilled summary.
-    async fn synthesize_merge(
-        &self,
-        sources: &[ClusterMember],
-    ) -> Result<String, CurationError>;
+    async fn synthesize_merge(&self, sources: &[ClusterMember]) -> Result<String, CurationError>;
 
     /// Return the model/provider name (for provenance tracking).
     fn model_name(&self) -> &str;

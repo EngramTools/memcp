@@ -14,8 +14,8 @@ use super::{ClusterMember, CurationAction, CurationError, CurationProvider, Cura
 use crate::config::CurationConfig;
 use crate::consolidation::similarity::find_similar_memories;
 use crate::store::postgres::PostgresMemoryStore;
-use crate::store::{CreateMemory, Memory, MemoryStore};
 use crate::store::postgres::SalienceRow;
+use crate::store::{CreateMemory, Memory, MemoryStore};
 
 /// Run a single curation pass.
 ///
@@ -106,19 +106,16 @@ async fn execute_curation(
             &algorithmic
         };
 
-        let actions = provider
-            .review_cluster(cluster)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "Cluster review failed — skipping cluster");
-                cluster
-                    .iter()
-                    .map(|m| CurationAction::Skip {
-                        memory_id: m.id.clone(),
-                        reason: format!("Review failed: {}", e),
-                    })
-                    .collect()
-            });
+        let actions = provider.review_cluster(cluster).await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "Cluster review failed — skipping cluster");
+            cluster
+                .iter()
+                .map(|m| CurationAction::Skip {
+                    memory_id: m.id.clone(),
+                    reason: format!("Review failed: {}", e),
+                })
+                .collect()
+        });
 
         for action in actions {
             match action {
@@ -196,6 +193,7 @@ async fn execute_curation(
                         trust_level: None,
                         session_id: None,
                         agent_role: None,
+                        write_path: Some("curation_merge".to_string()),
                     };
 
                     match store.store(new_memory).await {
@@ -316,9 +314,17 @@ async fn execute_curation(
                     strengthened_count += 1;
                 }
 
-                CurationAction::Suspicious { memory_id, reason, signals } => {
+                CurationAction::Suspicious {
+                    memory_id,
+                    reason,
+                    signals,
+                } => {
                     if dry_run {
-                        proposed_actions.push(CurationAction::Suspicious { memory_id, reason, signals });
+                        proposed_actions.push(CurationAction::Suspicious {
+                            memory_id,
+                            reason,
+                            signals,
+                        });
                         suspicious_count += 1;
                         continue;
                     }
@@ -332,7 +338,14 @@ async fn execute_curation(
                         .await;
                     let details = serde_json::json!({ "reason": reason, "signals": signals });
                     let _ = store
-                        .record_curation_action(run_id, "suspicious", &[memory_id], None, None, Some(details))
+                        .record_curation_action(
+                            run_id,
+                            "suspicious",
+                            &[memory_id],
+                            None,
+                            None,
+                            Some(details),
+                        )
                         .await;
                     suspicious_count += 1;
                 }
@@ -422,7 +435,8 @@ async fn build_clusters(
                 continue;
             }
             // Find the matching candidate
-            if let Some((sim_mem, sim_sal)) = candidates.iter().find(|(m, _)| m.id == sim.memory_id) {
+            if let Some((sim_mem, sim_sal)) = candidates.iter().find(|(m, _)| m.id == sim.memory_id)
+            {
                 cluster.push(to_cluster_member(sim_mem, sim_sal));
                 visited.insert(sim.memory_id.clone());
             }
@@ -536,6 +550,7 @@ mod tests {
             trust_level: trust,
             session_id: None,
             agent_role: None,
+            write_path: None,
             metadata: serde_json::json!({}),
         }
     }
@@ -570,7 +585,11 @@ mod tests {
     #[test]
     fn test_priority_score_normal_old() {
         let mem = make_test_memory("n2", 0.2, 120); // low trust but old (2hr)
-        assert_eq!(priority_score(&mem), 2, "Old memory should be Normal regardless of trust");
+        assert_eq!(
+            priority_score(&mem),
+            2,
+            "Old memory should be Normal regardless of trust"
+        );
     }
 
     #[test]

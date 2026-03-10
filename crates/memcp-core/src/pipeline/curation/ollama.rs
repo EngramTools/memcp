@@ -83,25 +83,19 @@ impl OllamaCurationProvider {
                                     reason,
                                 })
                             }
-                            "strengthen" => {
-                                a.memory_id.map(|id| CurationAction::Strengthen {
-                                    memory_id: id,
-                                    reason,
-                                })
-                            }
-                            "skip" => {
-                                a.memory_id.map(|id| CurationAction::Skip {
-                                    memory_id: id,
-                                    reason,
-                                })
-                            }
-                            "suspicious" => {
-                                a.memory_id.map(|id| CurationAction::Suspicious {
-                                    memory_id: id,
-                                    reason,
-                                    signals: a.signals,
-                                })
-                            }
+                            "strengthen" => a.memory_id.map(|id| CurationAction::Strengthen {
+                                memory_id: id,
+                                reason,
+                            }),
+                            "skip" => a.memory_id.map(|id| CurationAction::Skip {
+                                memory_id: id,
+                                reason,
+                            }),
+                            "suspicious" => a.memory_id.map(|id| CurationAction::Suspicious {
+                                memory_id: id,
+                                reason,
+                                signals: a.signals,
+                            }),
                             _ => None,
                         }
                     })
@@ -198,10 +192,7 @@ impl CurationProvider for OllamaCurationProvider {
         Ok(Self::parse_review_response(&response, cluster))
     }
 
-    async fn synthesize_merge(
-        &self,
-        sources: &[ClusterMember],
-    ) -> Result<String, CurationError> {
+    async fn synthesize_merge(&self, sources: &[ClusterMember]) -> Result<String, CurationError> {
         let formatted = Self::format_cluster(sources);
         self.chat(MERGE_SYSTEM_PROMPT, &formatted).await
     }
@@ -238,7 +229,11 @@ mod tests {
         let actions = OllamaCurationProvider::parse_review_response(response, &cluster);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            CurationAction::Suspicious { memory_id, reason, signals } => {
+            CurationAction::Suspicious {
+                memory_id,
+                reason,
+                signals,
+            } => {
                 assert_eq!(memory_id, "id1");
                 assert_eq!(reason, "override directive");
                 assert_eq!(signals, &vec!["override_instruction".to_string()]);

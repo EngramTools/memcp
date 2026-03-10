@@ -6,8 +6,8 @@
 
 use async_trait::async_trait;
 
-use super::{ClusterMember, CurationAction, CurationError, CurationProvider};
-use super::ollama::OllamaCurationProvider; // Reuse format_cluster and parse helpers
+use super::ollama::OllamaCurationProvider;
+use super::{ClusterMember, CurationAction, CurationError, CurationProvider}; // Reuse format_cluster and parse helpers
 
 /// OpenAI-backed curation provider for LLM-powered memory review.
 pub struct OpenAICurationProvider {
@@ -76,16 +76,18 @@ impl CurationProvider for OpenAICurationProvider {
         cluster: &[ClusterMember],
     ) -> Result<Vec<CurationAction>, CurationError> {
         let formatted = OllamaCurationProvider::format_cluster(cluster);
-        let response = self.chat(super::ollama::REVIEW_SYSTEM_PROMPT, &formatted).await?;
-        Ok(OllamaCurationProvider::parse_review_response(&response, cluster))
+        let response = self
+            .chat(super::ollama::REVIEW_SYSTEM_PROMPT, &formatted)
+            .await?;
+        Ok(OllamaCurationProvider::parse_review_response(
+            &response, cluster,
+        ))
     }
 
-    async fn synthesize_merge(
-        &self,
-        sources: &[ClusterMember],
-    ) -> Result<String, CurationError> {
+    async fn synthesize_merge(&self, sources: &[ClusterMember]) -> Result<String, CurationError> {
         let formatted = OllamaCurationProvider::format_cluster(sources);
-        self.chat(super::ollama::MERGE_SYSTEM_PROMPT, &formatted).await
+        self.chat(super::ollama::MERGE_SYSTEM_PROMPT, &formatted)
+            .await
     }
 
     fn model_name(&self) -> &str {
