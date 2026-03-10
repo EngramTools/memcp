@@ -304,9 +304,9 @@ Referenced in Phase 19 ROADMAP Requirements array but no formal definition lines
 
 | REQ-ID | Description | Phase | Plan(s) | Status | Evidence |
 |-|-|-|-|-|-|
-| RT-01 | Master requirements traceability table | 19 | 19-01 | PLANNED | (this document) |
-| RT-02 | Anomalies section documenting data quality issues | 19 | 19-01 | PLANNED | (this document) |
-| RT-03 | Pre-REQ-ID phases acknowledged | 19 | 19-01 | PLANNED | (this document) |
+| RT-01 | Master requirements traceability table | 19 | 19-01 | DONE | 19-01-SUMMARY |
+| RT-02 | Anomalies section documenting data quality issues | 19 | 19-01 | DONE | 19-01-SUMMARY |
+| RT-03 | Pre-REQ-ID phases acknowledged | 19 | 19-01 | DONE | 19-01-SUMMARY |
 
 ---
 

@@ -604,12 +604,12 @@ Plans:
 ## Phase 19: Requirements Traceability
 - **Goal**: Backfill REQUIREMENTS.md with a formal traceability table. Collate all REQ-IDs claimed across 50 phase SUMMARY files into a master table with phase assignments and completion status. Establishes the traceability record needed for milestone closure.
 - **Status**: Planned
-- **Plans:** 1 plan
-- **Requirements:** [BENCH-SAFE-01, BENCH-SAFE-02, BENCH-SAFE-03, BENCH-SAFE-04]
+- **Plans:** 1/1 plans complete
+- **Requirements:** [RT-01, RT-02, RT-03]
 
 Plans:
-- [ ] 17-01-PLAN.md — Wire trust_level into both recall paths + integration tests
-- **Depends on**: Phase 16
+- [ ] 19-01-PLAN.md — Extract all REQ-IDs and assemble traceability table
+- **Depends on**: Phase 18
 - **Gap Closure**: Closes empty REQUIREMENTS.md gap from v1.0 audit
 
 ## Phase 20: Test Quality Fixes
@@ -619,8 +619,8 @@ Plans:
 - **Requirements:** [BENCH-SAFE-01, BENCH-SAFE-02, BENCH-SAFE-03, BENCH-SAFE-04]
 
 Plans:
-- [ ] 17-01-PLAN.md — Wire trust_level into both recall paths + integration tests
-- **Depends on**: Phase 16
+- [ ] 20-01-PLAN.md — Fix test quality issues (offset deprecation warning + false_positive_count)
+- **Depends on**: Phase 18
 - **Gap Closure**: Closes code debt items from v1.0 audit (affects phases 07.5, 10.2)
 
 ## Phase 21: PII & Secret Redaction
