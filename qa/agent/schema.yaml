@@ -1,0 +1,89 @@
+# memcp QA Test Case Schema
+# Each YAML test file contains an array of test cases following this structure.
+# AI agents parse this schema to execute tests autonomously with pass/fail semantics.
+
+schema:
+  test_case:
+    id: string          # Unique test ID (e.g., "store-basic")
+    name: string        # Human-readable test name
+    category: string    # core | gc | curation | import-export | trust | config | remote | redaction
+    tags: string[]      # For filtering: ["core", "smoke", "edge-case"]
+    depends_on: string[] # IDs of tests that must pass first (optional)
+
+    setup:              # Commands to run before the test (optional)
+      - command: string
+        ignore_exit: bool  # Allow setup to fail (e.g., cleanup)
+
+    command: string     # The CLI command under test (run from project root)
+
+    assertions:
+      - type: string    # One of the types below
+
+        # exit_code -- verify process exit code
+        #   expected: int (default 0)
+        exit_code:
+          expected: int
+
+        # json_path -- parse stdout as JSON and check a path
+        #   path: string      JSONPath expression (e.g., $.results[0].content)
+        #   equals: any       Exact match (optional)
+        #   contains: string  Substring within the value (optional)
+        #   not_empty: bool   Field exists and is not empty (optional)
+        #   greater_than: number  Numeric comparison (optional)
+        json_path:
+          path: string
+          equals: any
+          contains: string
+          not_empty: bool
+          greater_than: number
+
+        # stdout_contains -- stdout includes substring
+        #   value: string
+        stdout_contains:
+          value: string
+
+        # stdout_not_contains -- stdout does NOT include substring
+        #   value: string
+        stdout_not_contains:
+          value: string
+
+        # stderr_contains -- stderr includes substring
+        #   value: string
+        stderr_contains:
+          value: string
+
+        # regex -- stdout matches a regex pattern
+        #   pattern: string
+        regex:
+          pattern: string
+
+        # file_exists -- verify a file was created
+        #   path: string
+        file_exists:
+          path: string
+
+        # file_contains -- verify file content
+        #   path: string
+        #   value: string
+        file_contains:
+          path: string
+          value: string
+
+    cleanup:            # Commands to run after the test (optional)
+      - command: string
+        ignore_exit: bool
+
+    timeout: int        # Timeout in seconds (default: 30)
+
+# ---- Assertion type quick reference ----
+#
+# | Type                 | Required fields        | Description                        |
+# |----------------------|------------------------|------------------------------------|
+# | exit_code            | expected               | Check process exit code             |
+# | json_path            | path + (equals|contains|not_empty|greater_than) | Check JSON output field |
+# | stdout_contains      | value                  | Substring match on stdout           |
+# | stdout_not_contains  | value                  | Negative substring match on stdout  |
+# | stderr_contains      | value                  | Substring match on stderr           |
+# | regex                | pattern                | Regex match on stdout               |
+# | file_exists          | path                   | File was created                    |
+# | file_contains        | path, value            | File contains substring             |

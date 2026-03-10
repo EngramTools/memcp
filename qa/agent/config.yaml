@@ -1,0 +1,63 @@
+# memcp QA Runner Configuration
+# QA uses an isolated environment -- NEVER the dev database.
+
+runner:
+  # Database: isolated Postgres via Docker
+  database:
+    docker_image: "pgvector/pgvector:pg17"
+    container_name: "memcp_qa_postgres"
+    port: 5434  # Different from dev (5433) and system (5432)
+    name: "memcp_qa"
+    user: "memcp_qa"
+    password: "memcp_qa"
+    url: "postgres://memcp_qa:memcp_qa@localhost:5434/memcp_qa"
+
+  # Binary: path to the memcp binary under test
+  binary: "./target/release/memcp"
+  # Environment variables set for every test command
+  env:
+    DATABASE_URL: "postgres://memcp_qa:memcp_qa@localhost:5434/memcp_qa"
+    MEMCP_LOG: "warn"
+
+  # Run modes: which test categories to include
+  modes:
+    smoke: ["core"]
+    standard: ["core", "gc", "curation", "import-export", "trust"]
+    exhaustive: ["core", "gc", "curation", "import-export", "trust", "config", "remote", "redaction"]
+  default_mode: "standard"
+
+  # Daemon: QA starts its own daemon instance
+  daemon:
+    config_override: "qa/memcp-qa.toml"
+    startup_wait_seconds: 3
+
+  # Lifecycle hooks
+  before_run:
+    - description: "Start QA Postgres container"
+      command: >
+        docker run -d --name memcp_qa_postgres
+        -e POSTGRES_USER=memcp_qa
+        -e POSTGRES_PASSWORD=memcp_qa
+        -e POSTGRES_DB=memcp_qa
+        -p 5434:5432
+        pgvector/pgvector:pg17
+    - description: "Wait for Postgres to accept connections"
+      command: >
+        for i in $(seq 1 30); do
+          pg_isready -h localhost -p 5434 -U memcp_qa && break;
+          sleep 1;
+        done
+    - description: "Run migrations"
+      command: "DATABASE_URL=postgres://memcp_qa:memcp_qa@localhost:5434/memcp_qa ./target/release/memcp migrate"
+
+  # Between test files: truncate all memories for isolation
+  between_files: "truncate"
+  truncate_command: "psql postgres://memcp_qa:memcp_qa@localhost:5434/memcp_qa -c 'TRUNCATE memories CASCADE;'"
+
+  after_run:
+    - description: "Stop and remove QA Postgres container"
+      command: "docker rm -f memcp_qa_postgres"
+
+  # Timeouts
+  default_timeout: 30
+  setup_timeout: 60
