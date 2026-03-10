@@ -603,7 +603,15 @@ async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
         poisoned_seeded: poisoned.len(),
         quarantined_count: quarantined.len(),
         detection_rate,
-        false_positive_count: 0, // Would need tracking clean IDs that got flagged
+        false_positive_count: {
+            // A false positive is a clean ID that was incorrectly quarantined.
+            let clean_set: std::collections::HashSet<&str> =
+                corpus_result.clean_ids.iter().map(|s| s.as_str()).collect();
+            quarantined
+                .iter()
+                .filter(|id| clean_set.contains(id.as_str()))
+                .count()
+        },
         violations: violations
             .iter()
             .map(|v| {

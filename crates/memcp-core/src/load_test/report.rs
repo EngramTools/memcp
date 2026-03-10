@@ -28,9 +28,15 @@ pub fn generate_markdown_report(report: &LoadTestReport) -> String {
 
     // Config summary
     out.push_str("## Configuration\n\n");
-    out.push_str(&format!("| Parameter | Value |\n|-|-|\n"));
-    out.push_str(&format!("| Corpus size | {} memories |\n", report.corpus_size));
-    out.push_str(&format!("| Concurrency | {} clients |\n", report.concurrency));
+    out.push_str("| Parameter | Value |\n|-|-|\n");
+    out.push_str(&format!(
+        "| Corpus size | {} memories |\n",
+        report.corpus_size
+    ));
+    out.push_str(&format!(
+        "| Concurrency | {} clients |\n",
+        report.concurrency
+    ));
     out.push_str(&format!("| R/W ratio | {} |\n", report.rw_ratio));
     out.push_str(&format!("| Mode | {} |\n", report.mode));
     out.push_str(&format!("| Duration | {:.1}s |\n", report.duration_secs));
@@ -38,20 +44,27 @@ pub fn generate_markdown_report(report: &LoadTestReport) -> String {
 
     // Overall summary
     out.push_str("## Overall Results\n\n");
-    out.push_str(&format!("| Metric | Value |\n|-|-|\n"));
+    out.push_str("| Metric | Value |\n|-|-|\n");
     out.push_str(&format!("| Total ops | {} |\n", report.total_ops));
-    out.push_str(&format!("| Throughput | {:.1} ops/sec |\n", report.ops_per_sec));
-    out.push_str(&format!("| Error rate | {:.2}% |\n", report.error_rate * 100.0));
+    out.push_str(&format!(
+        "| Throughput | {:.1} ops/sec |\n",
+        report.ops_per_sec
+    ));
+    out.push_str(&format!(
+        "| Error rate | {:.2}% |\n",
+        report.error_rate * 100.0
+    ));
     out.push('\n');
 
     // Per-endpoint table
     out.push_str("## Per-Endpoint Statistics\n\n");
-    out.push_str("| Endpoint | Ops | Errors | p50 (ms) | p95 (ms) | p99 (ms) | Mean (ms) | Max (ms) |\n");
+    out.push_str(
+        "| Endpoint | Ops | Errors | p50 (ms) | p95 (ms) | p99 (ms) | Mean (ms) | Max (ms) |\n",
+    );
     out.push_str("|-|-|-|-|-|-|-|-|\n");
 
     // Sort endpoints for deterministic output
-    let mut endpoints: Vec<(&String, &super::EndpointStats)> =
-        report.per_endpoint.iter().collect();
+    let mut endpoints: Vec<(&String, &super::EndpointStats)> = report.per_endpoint.iter().collect();
     endpoints.sort_by_key(|(k, _)| k.as_str());
 
     for (endpoint, stats) in &endpoints {
@@ -95,7 +108,9 @@ pub fn generate_markdown_report(report: &LoadTestReport) -> String {
         }
 
         if !regression.regressions.is_empty() {
-            out.push_str("| Endpoint | Baseline p95 (ms) | Current p95 (ms) | Change | Flagged |\n");
+            out.push_str(
+                "| Endpoint | Baseline p95 (ms) | Current p95 (ms) | Change | Flagged |\n",
+            );
             out.push_str("|-|-|-|-|-|\n");
 
             let mut items = regression.regressions.clone();
@@ -175,8 +190,8 @@ pub fn generate_security_section(report: &SecurityReport) -> String {
     // Poison dwell time
     if !report.dwell_times_ms.is_empty() {
         out.push_str("\n### Poison Dwell Time (store -> quarantine)\n\n");
-        let mean = report.dwell_times_ms.iter().sum::<u64>() as f64
-            / report.dwell_times_ms.len() as f64;
+        let mean =
+            report.dwell_times_ms.iter().sum::<u64>() as f64 / report.dwell_times_ms.len() as f64;
         let mut sorted = report.dwell_times_ms.clone();
         sorted.sort();
         let p95_idx = (sorted.len() as f64 * 0.95) as usize;
@@ -426,22 +441,30 @@ mod tests {
 
     #[test]
     fn test_compare_baseline_flags_regression() {
-        let baseline = make_report(50, 100, 0.01);  // p95 = 100ms
-        let current = make_report(50, 130, 0.01);   // p95 = 130ms → 30% increase → flagged
+        let baseline = make_report(50, 100, 0.01); // p95 = 100ms
+        let current = make_report(50, 130, 0.01); // p95 = 130ms → 30% increase → flagged
 
         let regression = compare_baseline(&current, &baseline);
-        let item = regression.regressions.iter().find(|r| r.endpoint == "/v1/search").unwrap();
+        let item = regression
+            .regressions
+            .iter()
+            .find(|r| r.endpoint == "/v1/search")
+            .unwrap();
         assert!(item.flagged, "30% regression should be flagged");
         assert!((item.change_pct - 30.0).abs() < 1.0);
     }
 
     #[test]
     fn test_compare_baseline_no_regression() {
-        let baseline = make_report(50, 100, 0.01);  // p95 = 100ms
-        let current = make_report(50, 115, 0.01);   // p95 = 115ms → 15% increase → not flagged
+        let baseline = make_report(50, 100, 0.01); // p95 = 100ms
+        let current = make_report(50, 115, 0.01); // p95 = 115ms → 15% increase → not flagged
 
         let regression = compare_baseline(&current, &baseline);
-        let item = regression.regressions.iter().find(|r| r.endpoint == "/v1/search").unwrap();
+        let item = regression
+            .regressions
+            .iter()
+            .find(|r| r.endpoint == "/v1/search")
+            .unwrap();
         assert!(!item.flagged, "15% change should not be flagged");
     }
 
@@ -477,6 +500,7 @@ mod tests {
     fn make_security_report(
         poisoned: usize,
         quarantined: usize,
+        false_positive_count: usize,
         violations: Vec<String>,
     ) -> SecurityReport {
         let detection_rate = if poisoned > 0 {
@@ -488,7 +512,7 @@ mod tests {
             poisoned_seeded: poisoned,
             quarantined_count: quarantined,
             detection_rate,
-            false_positive_count: 0,
+            false_positive_count,
             violations,
             curation_cycles: 3,
             p1_drain_ms: vec![10, 15, 12],
@@ -500,7 +524,7 @@ mod tests {
 
     #[test]
     fn test_security_section_no_violations() {
-        let report = make_security_report(50, 45, vec![]);
+        let report = make_security_report(50, 45, 0, vec![]);
         let section = generate_security_section(&report);
 
         assert!(section.contains("## Security Correctness"));
@@ -516,7 +540,7 @@ mod tests {
             "WrongTrustLevel: memory=m1 expected=0.05 actual=0.50".to_string(),
             "MissingTag: memory=m2 expected=suspicious actual=[]".to_string(),
         ];
-        let report = make_security_report(50, 45, violations);
+        let report = make_security_report(50, 45, 0, violations);
         let section = generate_security_section(&report);
 
         assert!(section.contains("### Violations"));
@@ -527,7 +551,7 @@ mod tests {
 
     #[test]
     fn test_security_section_detection_rate() {
-        let report = make_security_report(100, 75, vec![]);
+        let report = make_security_report(100, 75, 0, vec![]);
         let section = generate_security_section(&report);
 
         assert!(section.contains("75.0%")); // 75/100
@@ -535,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_security_section_curation_throughput() {
-        let report = make_security_report(50, 45, vec![]);
+        let report = make_security_report(50, 45, 0, vec![]);
         let section = generate_security_section(&report);
 
         assert!(section.contains("### Curation Throughput"));
@@ -547,7 +571,7 @@ mod tests {
 
     #[test]
     fn test_security_section_dwell_time() {
-        let report = make_security_report(50, 45, vec![]);
+        let report = make_security_report(50, 45, 0, vec![]);
         let section = generate_security_section(&report);
 
         assert!(section.contains("### Poison Dwell Time"));
@@ -557,7 +581,7 @@ mod tests {
 
     #[test]
     fn test_security_section_empty_drain_stats() {
-        let mut report = make_security_report(50, 45, vec![]);
+        let mut report = make_security_report(50, 45, 0, vec![]);
         report.p1_drain_ms = vec![];
         report.p2_drain_ms = vec![];
         report.dwell_times_ms = vec![];
@@ -567,5 +591,12 @@ mod tests {
         assert!(section.contains("**P2 (new+medium trust):** no data"));
         // No dwell time section when empty
         assert!(!section.contains("### Poison Dwell Time"));
+    }
+
+    #[test]
+    fn test_security_section_false_positives() {
+        let report = make_security_report(50, 45, 3, vec![]);
+        let section = generate_security_section(&report);
+        assert!(section.contains("| False positives | 3 |"));
     }
 }
