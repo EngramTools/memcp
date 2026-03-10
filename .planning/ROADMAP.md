@@ -615,7 +615,7 @@ Plans:
 ## Phase 20: Test Quality Fixes
 - **Goal**: Fix minor test quality issues identified in v1.0 audit. (1) `test_offset_deprecation_warning` (Phase 07.5) doesn't exercise the actual `tracing::warn` code path — fix to verify warning emission. (2) `false_positive_count` in load test trust metrics (Phase 10.2) is hardcoded to 0 — wire actual tracking or remove the placeholder.
 - **Status**: Complete
-- **Plans:** 1/1 complete
+- **Plans:** 1/1 plans complete
 - **Requirements:** [BENCH-SAFE-01, BENCH-SAFE-02, BENCH-SAFE-03, BENCH-SAFE-04]
 
 Plans:
@@ -628,6 +628,12 @@ Plans:
 - **Status**: Planned
 - **Depends on**: Phase 20
 - **Origin**: Security hardening for open-source release — agents storing conversation transcripts inevitably capture secrets and PII
+- **Requirements:** [RED-01, RED-02, RED-03, RED-04, RED-05, RED-06, RED-07, RED-08, RED-09, RED-10, RED-11, RED-12, RED-13]
+- **Plans:** 2 plans
+
+Plans:
+- [ ] 21-01-PLAN.md — RedactionEngine core (patterns, entropy, allowlist, config, unit tests)
+- [ ] 21-02-PLAN.md — Wire redaction into all ingestion paths (CLI, HTTP, MCP, auto-store) + integration tests
 
 ---
 *Open-source fork cutoff: After Phase 21, fork memcp into a public MIT repo containing phases 01–21 (core memory server + test suite + gap closures + PII redaction). Phase 12+ (auth, boosting, hosted features) stays in the private memcp repo (or engram repo) — never published to the public fork. See engram Phase 4.5 and /Users/ayoamadi/projects/engram/.planning/ROADMAP.md for strategy.*
