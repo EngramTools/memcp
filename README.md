@@ -74,6 +74,11 @@ After restarting, the agent has access to `store_memory`, `search_memory`, `reca
 | Guide | Description |
 |-|-|
 | [Architecture](docs/architecture.md) | Module structure, data flow, design decisions |
+| [Config Reference](docs/config-reference.md) | Every config key, env var, and default value |
+| [CLI Reference](docs/cli-reference.md) | All commands, flags, and usage examples |
+| [API Reference](docs/api-reference.md) | HTTP endpoints, request/response schemas |
+| [MCP Tools](docs/mcp-tools.md) | MCP tool schemas, parameters, examples |
+| [QA Playbook](docs/qa-playbook.md) | Manual test journeys and smoke checks |
 | [Deployment](docs/deployment.md) | Production deployment and container setup |
 | [Configuration](memcp.toml.example) | Annotated example config with all options |
 
