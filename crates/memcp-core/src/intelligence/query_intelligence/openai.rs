@@ -9,9 +9,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DecomposedQuery, ExpandedQuery, QueryIntelligenceError, QueryIntelligenceProvider,
-    RankedCandidate, RankedResult, TimeRange, build_decomposition_prompt, build_expansion_prompt,
-    build_reranking_prompt,
+    build_decomposition_prompt, build_expansion_prompt, build_reranking_prompt, DecomposedQuery,
+    ExpandedQuery, QueryIntelligenceError, QueryIntelligenceProvider, RankedCandidate,
+    RankedResult, TimeRange,
 };
 
 // --- HTTP request/response structs (local — mirrors extraction/openai.rs pattern) ---
@@ -159,7 +159,10 @@ impl OpenAIQueryIntelligenceProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "unknown error".to_string());
-            return Err(QueryIntelligenceError::Api { status, message: body });
+            return Err(QueryIntelligenceError::Api {
+                status,
+                message: body,
+            });
         }
 
         let chat_response: ChatResponse = response.json().await.map_err(|e| {
@@ -172,9 +175,7 @@ impl OpenAIQueryIntelligenceProvider {
             .next()
             .map(|c| c.message.content)
             .ok_or_else(|| {
-                QueryIntelligenceError::Generation(
-                    "OpenAI returned empty choices list".to_string(),
-                )
+                QueryIntelligenceError::Generation("OpenAI returned empty choices list".to_string())
             })?;
 
         Ok(content)
@@ -198,9 +199,10 @@ impl OpenAIQueryIntelligenceProvider {
         })?;
 
         if output.variants.is_empty() {
-            return Err(QueryIntelligenceError::Generation(
-                format!("LLM returned no query variants (raw content: {})", &content),
-            ));
+            return Err(QueryIntelligenceError::Generation(format!(
+                "LLM returned no query variants (raw content: {})",
+                &content
+            )));
         }
 
         let time_range = output.time_range.map(|tr| TimeRange {
@@ -323,10 +325,7 @@ impl QueryIntelligenceProvider for OpenAIQueryIntelligenceProvider {
                 })
                 .collect();
             serde_json::to_string(&arr).map_err(|e| {
-                QueryIntelligenceError::Generation(format!(
-                    "Failed to serialize candidates: {}",
-                    e
-                ))
+                QueryIntelligenceError::Generation(format!("Failed to serialize candidates: {}", e))
             })?
         };
 
@@ -359,7 +358,9 @@ impl QueryIntelligenceProvider for OpenAIQueryIntelligenceProvider {
                     .as_u64()
                     .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))?;
                 let zero_idx = (idx as usize).checked_sub(1)?;
-                idx_to_real_id.get(zero_idx).map(|&real_id| real_id.to_string())
+                idx_to_real_id
+                    .get(zero_idx)
+                    .map(|&real_id| real_id.to_string())
             })
             .enumerate()
             .map(|(rank, id)| RankedResult {

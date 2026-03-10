@@ -58,7 +58,10 @@ async fn get_provider() -> &'static Mutex<LocalEmbeddingProvider> {
 fn emb_str(v: &[f32]) -> String {
     format!(
         "[{}]",
-        v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")
+        v.iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
     )
 }
 
@@ -155,7 +158,10 @@ async fn test_golden_search_quality(pool: PgPool) {
 
     // Run each query and verify results
     println!("\n--- Golden Dataset Search Quality Report ---");
-    println!("{:<50} {:>8} {:>8} {:>6}", "Query (truncated)", "TopScore", "MinScore", "Pass?");
+    println!(
+        "{:<50} {:>8} {:>8} {:>6}",
+        "Query (truncated)", "TopScore", "MinScore", "Pass?"
+    );
     println!("{}", "-".repeat(78));
 
     let mut pass_count = 0;
@@ -195,7 +201,10 @@ async fn test_golden_search_quality(pool: PgPool) {
         if hits.is_empty() {
             println!(
                 "{:<50} {:>8} {:>8} {:>6}",
-                truncated_query, "NO HITS", format!("{:.3}", entry.min_score), "FAIL"
+                truncated_query,
+                "NO HITS",
+                format!("{:.3}", entry.min_score),
+                "FAIL"
             );
             eprintln!(
                 "FAIL [{}]: no results returned for query '{}'",
@@ -207,10 +216,7 @@ async fn test_golden_search_quality(pool: PgPool) {
 
         let top_hit = &hits[0];
         let top_score = top_hit.rrf_score as f32;
-        let content_matches = top_hit
-            .memory
-            .content
-            .contains(&entry.expected_top_content);
+        let content_matches = top_hit.memory.content.contains(&entry.expected_top_content);
         let score_ok = top_score >= entry.min_score;
 
         let pass_str = if content_matches && score_ok {
@@ -246,8 +252,7 @@ async fn test_golden_search_quality(pool: PgPool) {
     println!("-------------------------------------------\n");
 
     assert_eq!(
-        fail_count,
-        0,
+        fail_count, 0,
         "{} golden queries failed — see output above for details",
         fail_count
     );

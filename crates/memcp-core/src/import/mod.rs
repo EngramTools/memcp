@@ -8,24 +8,24 @@
 //! `ImportEngine::run()` drives the pipeline end-to-end, with progress bar,
 //! checkpoint resume, and import report generation.
 
-pub mod noise;
-pub mod dedup;
 pub mod batch;
-pub mod checkpoint;
-pub mod jsonl;
-pub mod export;
-pub mod history;
-pub mod openclaw;
 pub mod chatgpt;
+pub mod checkpoint;
 pub mod claude_ai;
 pub mod claude_code;
-pub mod markdown;
 pub mod curate;
+pub mod dedup;
+pub mod export;
+pub mod history;
+pub mod jsonl;
+pub mod markdown;
+pub mod noise;
+pub mod openclaw;
 pub mod security;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::collections::HashSet;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -35,8 +35,8 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::config::EmbeddingConfig;
-use crate::storage::store::postgres::PostgresMemoryStore;
 use crate::import::curate::{CurationAction, ImportCurator};
+use crate::storage::store::postgres::PostgresMemoryStore;
 
 /// A single chunk of content to be imported.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,7 +174,12 @@ pub struct ImportEngine {
 impl ImportEngine {
     pub fn new(store: Arc<PostgresMemoryStore>, opts: ImportOpts) -> Self {
         let _noise_filter = noise::NoiseFilter::new(&opts.skip_patterns);
-        Self { store, _noise_filter, opts, curator: None }
+        Self {
+            store,
+            _noise_filter,
+            opts,
+            curator: None,
+        }
     }
 
     /// Attach a Tier 2 LLM curator for use when `opts.curate` is true.
@@ -190,7 +195,10 @@ impl ImportEngine {
 
         // Check for existing checkpoint to resume from.
         let existing_checkpoint = checkpoint::Checkpoint::load(&import_dir);
-        let resume_from_batch = existing_checkpoint.as_ref().map(|c| c.last_batch + 1).unwrap_or(0);
+        let resume_from_batch = existing_checkpoint
+            .as_ref()
+            .map(|c| c.last_batch + 1)
+            .unwrap_or(0);
         let mut result = existing_checkpoint
             .as_ref()
             .map(|c| c.result_so_far.clone())
@@ -204,7 +212,11 @@ impl ImportEngine {
         }
 
         // Step 1: Read all chunks from source.
-        info!("Reading chunks from {:?} via {}", path, source.source_name());
+        info!(
+            "Reading chunks from {:?} via {}",
+            path,
+            source.source_name()
+        );
         let all_chunks = source.read_chunks(path, &self.opts).await?;
         result.total = all_chunks.len();
 
@@ -219,8 +231,15 @@ impl ImportEngine {
         };
 
         // Add source-specific noise patterns from the source reader.
-        let source_patterns: Vec<String> = source.noise_patterns().iter().map(|s| s.to_string()).collect();
-        let noise_filter = noise::NoiseFilter::new_with_source_patterns(&self.opts.skip_patterns, &source_patterns);
+        let source_patterns: Vec<String> = source
+            .noise_patterns()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let noise_filter = noise::NoiseFilter::new_with_source_patterns(
+            &self.opts.skip_patterns,
+            &source_patterns,
+        );
 
         // Step 3: Noise filter (skip entirely when --no-filter is set).
         let survivors = if self.opts.no_filter {
@@ -236,7 +255,9 @@ impl ImportEngine {
                     } else {
                         // Find which pattern matched.
                         let lower = chunk.content.to_lowercase();
-                        let matched = noise_filter.patterns().iter()
+                        let matched = noise_filter
+                            .patterns()
+                            .iter()
                             .find(|p| lower.contains(p.to_lowercase().as_str()))
                             .map(|p| p.as_str())
                             .unwrap_or("pattern");
@@ -278,7 +299,10 @@ impl ImportEngine {
                         let mut curated = Vec::new();
                         for mut chunk in survivors {
                             // Extract title from content header line (# Title).
-                            let title = chunk.content.lines().next()
+                            let title = chunk
+                                .content
+                                .lines()
+                                .next()
                                 .map(|l| l.trim_start_matches('#').trim().to_string())
                                 .unwrap_or_else(|| "Untitled".to_string());
                             match curator.summarize_conversation(&chunk.content, &title).await {
@@ -304,7 +328,9 @@ impl ImportEngine {
                             }
                         };
 
-                        survivors.into_iter().zip(decisions.into_iter())
+                        survivors
+                            .into_iter()
+                            .zip(decisions.into_iter())
                             .filter_map(|(mut chunk, decision)| {
                                 match decision.action {
                                     CurationAction::Skip => {
@@ -319,7 +345,10 @@ impl ImportEngine {
                                             created_at: chunk.created_at,
                                             rescued: false,
                                         };
-                                        if let Err(e) = checkpoint::FilteredItem::append(&import_dir, &filtered_item) {
+                                        if let Err(e) = checkpoint::FilteredItem::append(
+                                            &import_dir,
+                                            &filtered_item,
+                                        ) {
                                             warn!("Failed to persist LLM-filtered item: {}", e);
                                         }
                                         result.filtered += 1;
@@ -356,7 +385,11 @@ impl ImportEngine {
 
         // Dry-run: show what would be imported and return.
         if self.opts.dry_run {
-            println!("Dry run — would import {} items ({} filtered by noise)", survivors.len(), result.filtered);
+            println!(
+                "Dry run — would import {} items ({} filtered by noise)",
+                survivors.len(),
+                result.filtered
+            );
             for chunk in &survivors {
                 let preview = chunk.content.chars().take(80).collect::<String>();
                 println!("  [{}] {}", chunk.source, preview);
@@ -368,7 +401,8 @@ impl ImportEngine {
         // Step 4: Batch-level dedup (within this import) + store-level dedup.
         // In remote mode, we skip store-level dedup (can't query remote DB directly).
         let pool = self.store.pool();
-        let all_hashes: Vec<String> = survivors.iter()
+        let all_hashes: Vec<String> = survivors
+            .iter()
             .map(|c| dedup::normalized_hash(&c.content))
             .collect();
         let existing_hashes = if self.opts.remote_url.is_some() {
@@ -425,7 +459,8 @@ impl ImportEngine {
                     if !tags.iter().any(|t| t == "imported") {
                         tags.push("imported".to_string());
                     }
-                    let source_tag = format!("imported:{}", chunk.source.trim_start_matches("imported:"));
+                    let source_tag =
+                        format!("imported:{}", chunk.source.trim_start_matches("imported:"));
                     if !tags.contains(&source_tag) {
                         tags.push(source_tag);
                     }
@@ -504,7 +539,10 @@ impl ImportEngine {
             failed: result.failed,
             skipped_dedup: result.skipped_dedup,
             errors: result.errors.clone(),
-            started_at: existing_checkpoint.as_ref().map(|c| c.timestamp).unwrap_or_else(Utc::now),
+            started_at: existing_checkpoint
+                .as_ref()
+                .map(|c| c.timestamp)
+                .unwrap_or_else(Utc::now),
             completed_at: Utc::now(),
             duration_secs: 0, // approximate — actual timing would need start recording
         };
@@ -550,7 +588,9 @@ pub async fn discover_all_sources(embedding_config: &EmbeddingConfig) -> Vec<Dis
             path: PathBuf::from("chatgpt-export.zip"),
             source_type: "chatgpt".to_string(),
             item_count: 0,
-            description: "ChatGPT: export at Settings > Data Controls > Export Data (ZIP via email)".to_string(),
+            description:
+                "ChatGPT: export at Settings > Data Controls > Export Data (ZIP via email)"
+                    .to_string(),
         },
         DiscoveredSource {
             path: PathBuf::from("claude-ai-export.zip"),

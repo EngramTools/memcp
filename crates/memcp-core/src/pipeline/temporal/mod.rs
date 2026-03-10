@@ -52,9 +52,7 @@ fn re_month_year() -> &'static Regex {
 /// Pattern 1: absolute year — "in 2019", "in 1985"
 static RE_YEAR: OnceLock<Regex> = OnceLock::new();
 fn re_year() -> &'static Regex {
-    RE_YEAR.get_or_init(|| {
-        Regex::new(r"\bin\s+(\d{4})\b").expect("RE_YEAR compile error")
-    })
+    RE_YEAR.get_or_init(|| Regex::new(r"\bin\s+(\d{4})\b").expect("RE_YEAR compile error"))
 }
 
 /// Pattern 2: decade — "in the 90s", "in the 80s"
@@ -87,9 +85,8 @@ fn re_relative_month() -> &'static Regex {
 static RE_RELATIVE_DAY: OnceLock<Regex> = OnceLock::new();
 fn re_relative_day() -> &'static Regex {
     RE_RELATIVE_DAY.get_or_init(|| {
-        Regex::new(
-            r"(?i)\blast\s+(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b"
-        ).expect("RE_RELATIVE_DAY compile error")
+        Regex::new(r"(?i)\blast\s+(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b")
+            .expect("RE_RELATIVE_DAY compile error")
     })
 }
 
@@ -163,7 +160,8 @@ fn last_month_occurrence(target_month: u32, now: DateTime<Utc>) -> Option<DateTi
         // Target month is later — it hasn't happened yet this year, go to last year
         now.year() - 1
     };
-    Utc.with_ymd_and_hms(year, target_month, 1, 0, 0, 0).single()
+    Utc.with_ymd_and_hms(year, target_month, 1, 0, 0, 0)
+        .single()
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +399,12 @@ async fn call_ollama_temporal(base_url: &str, model: &str, prompt: &str) -> Resu
 }
 
 /// Call OpenAI /chat/completions endpoint for temporal extraction.
-async fn call_openai_temporal(base_url: &str, api_key: &str, model: &str, prompt: &str) -> Result<String, String> {
+async fn call_openai_temporal(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    prompt: &str,
+) -> Result<String, String> {
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "model": model,

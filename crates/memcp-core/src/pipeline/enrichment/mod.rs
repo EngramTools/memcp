@@ -272,9 +272,10 @@ mod tests {
 
     #[test]
     fn test_build_enrichment_prompt_contains_memory() {
-        let prompt = build_enrichment_prompt("tokio runtime internals", &[
-            "Rust async patterns".to_string(),
-        ]);
+        let prompt = build_enrichment_prompt(
+            "tokio runtime internals",
+            &["Rust async patterns".to_string()],
+        );
         assert!(prompt.contains("tokio runtime internals"));
         assert!(prompt.contains("Rust async patterns"));
         assert!(prompt.contains("tags_to_add"));

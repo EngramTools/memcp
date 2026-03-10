@@ -11,8 +11,8 @@ use metrics;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::transport::health::AppState;
 use super::types::error_json;
+use crate::transport::health::AppState;
 
 #[derive(Deserialize)]
 pub struct DiscoverParams {
@@ -37,16 +37,27 @@ pub async fn discover_handler(
     Json(params): Json<DiscoverParams>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     if !state.ready.load(Ordering::Acquire) {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(error_json("daemon not ready")));
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(error_json("daemon not ready")),
+        );
     }
 
     let store = match &state.store {
         Some(s) => s.clone(),
-        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(error_json("store not available"))),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_json("store not available")),
+            )
+        }
     };
 
     if params.query.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(error_json("query is required and must not be empty")));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_json("query is required and must not be empty")),
+        );
     }
 
     let min_sim = params.min_similarity.unwrap_or(0.3).clamp(0.0, 1.0);
@@ -56,17 +67,23 @@ pub async fn discover_handler(
     if min_sim >= max_sim {
         return (
             StatusCode::BAD_REQUEST,
-            Json(error_json("min_similarity must be less than max_similarity")),
+            Json(error_json(
+                "min_similarity must be less than max_similarity",
+            )),
         );
     }
 
     // Embed query
     let provider = match &state.embed_provider {
         Some(p) => p.clone(),
-        None => return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(error_json("embedding provider not available — daemon not fully initialized")),
-        ),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_json(
+                    "embedding provider not available — daemon not fully initialized",
+                )),
+            )
+        }
     };
 
     let embedding = match provider.embed(&params.query).await {
@@ -81,13 +98,16 @@ pub async fn discover_handler(
     };
 
     // Run discovery
-    let results = match store.discover_associations(
-        &embedding,
-        min_sim,
-        max_sim,
-        limit,
-        params.project.as_deref(),
-    ).await {
+    let results = match store
+        .discover_associations(
+            &embedding,
+            min_sim,
+            max_sim,
+            limit,
+            params.project.as_deref(),
+        )
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "discover_associations failed");
@@ -99,17 +119,20 @@ pub async fn discover_handler(
     };
 
     // Build response array
-    let discoveries: Vec<serde_json::Value> = results.iter().map(|(memory, sim)| {
-        json!({
-            "id": memory.id,
-            "content": memory.content,
-            "type_hint": memory.type_hint,
-            "tags": memory.tags,
-            "similarity": format!("{:.3}", sim),
-            "created_at": memory.created_at.to_rfc3339(),
-            "project": memory.project,
+    let discoveries: Vec<serde_json::Value> = results
+        .iter()
+        .map(|(memory, sim)| {
+            json!({
+                "id": memory.id,
+                "content": memory.content,
+                "type_hint": memory.type_hint,
+                "tags": memory.tags,
+                "similarity": format!("{:.3}", sim),
+                "created_at": memory.created_at.to_rfc3339(),
+                "project": memory.project,
+            })
         })
-    }).collect();
+        .collect();
 
     let count = discoveries.len();
     metrics::histogram!("memcp_discover_results_returned").record(count as f64);

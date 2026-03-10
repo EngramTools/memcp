@@ -88,8 +88,7 @@ pub fn parse_temporal_hint(query: &str, now: DateTime<Utc>) -> Option<TimeRange>
 
     // --- "N days/weeks/months/years ago" patterns ---
     // Matches digit ("2 months ago") and word ("two months ago") forms
-    let n_ago_re =
-        Regex::new(r"(\w+)\s+(days?|weeks?|months?|years?)\s+ago").ok()?;
+    let n_ago_re = Regex::new(r"(\w+)\s+(days?|weeks?|months?|years?)\s+ago").ok()?;
     if let Some(cap) = n_ago_re.captures(&q) {
         if let Some(n) = parse_number_word(&cap[1]) {
             let unit = &cap[2];
@@ -153,8 +152,7 @@ pub fn parse_temporal_hint(query: &str, now: DateTime<Utc>) -> Option<TimeRange>
 
     // --- "between MONTH and MONTH" ---
     // e.g., "between January and March", "between march and june"
-    let between_re =
-        Regex::new(r"between\s+(\w+)\s+and\s+(\w+)").ok()?;
+    let between_re = Regex::new(r"between\s+(\w+)\s+and\s+(\w+)").ok()?;
     if let Some(cap) = between_re.captures(&q) {
         let m1 = parse_month_name(&cap[1])?;
         let m2 = parse_month_name(&cap[2])?;
@@ -218,4 +216,3 @@ fn parse_month_name(name: &str) -> Option<u32> {
         _ => None,
     }
 }
-

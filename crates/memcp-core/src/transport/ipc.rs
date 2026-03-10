@@ -34,8 +34,8 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::embedding::EmbeddingProvider;
 use crate::embedding::router::EmbeddingRouter;
+use crate::embedding::EmbeddingProvider;
 use crate::query_intelligence::{QueryIntelligenceProvider, RankedCandidate};
 use crate::store::postgres::PostgresMemoryStore;
 
@@ -48,13 +48,12 @@ use crate::store::postgres::PostgresMemoryStore;
 /// Path: `$XDG_DATA_HOME/memcp/embed.sock` (usually `~/.local/share/memcp/embed.sock`).
 /// The parent directory is created if it does not already exist.
 pub fn embed_socket_path() -> PathBuf {
-    let base = dirs::data_local_dir()
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("/tmp"))
-                .join(".local")
-                .join("share")
-        });
+    let base = dirs::data_local_dir().unwrap_or_else(|| {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".local")
+            .join("share")
+    });
     let dir = base.join("memcp");
     // Best-effort: create parent if missing. Ignore errors; the bind will surface them.
     let _ = std::fs::create_dir_all(&dir);
@@ -159,16 +158,10 @@ async fn handle_ipc_connection(
     let request: serde_json::Value = serde_json::from_str(line)?;
 
     let response = match request.get("type").and_then(|t| t.as_str()) {
-        Some("rerank") => {
-            handle_rerank_request(&request, qi_provider.as_deref()).await
-        }
-        Some("embed_multi") => {
-            handle_embed_multi_request(&request, multi_tier.as_ref()).await
-        }
+        Some("rerank") => handle_rerank_request(&request, qi_provider.as_deref()).await,
+        Some("embed_multi") => handle_embed_multi_request(&request, multi_tier.as_ref()).await,
         // No "type" field (legacy embed request) or "type":"embed"
-        _ => {
-            handle_embed_request(&request, provider).await
-        }
+        _ => handle_embed_request(&request, provider).await,
     };
 
     let mut response_line = serde_json::to_string(&response)?;
@@ -266,7 +259,9 @@ async fn handle_rerank_request(
 
     let candidates_json = match request["candidates"].as_array() {
         Some(c) => c,
-        None => return serde_json::json!({ "error": "Missing 'candidates' field in rerank request" }),
+        None => {
+            return serde_json::json!({ "error": "Missing 'candidates' field in rerank request" })
+        }
     };
 
     let mut candidates = Vec::with_capacity(candidates_json.len());
@@ -280,7 +275,11 @@ async fn handle_rerank_request(
             None => return serde_json::json!({ "error": "Candidate missing 'content' field" }),
         };
         let current_rank = c["current_rank"].as_u64().unwrap_or(1) as usize;
-        candidates.push(RankedCandidate { id, content, current_rank });
+        candidates.push(RankedCandidate {
+            id,
+            content,
+            current_rank,
+        });
     }
 
     match provider.rerank(query, &candidates).await {
@@ -317,7 +316,7 @@ pub async fn embed_via_daemon(text: &str) -> Option<Vec<f32>> {
         UnixStream::connect(&socket_path),
     )
     .await
-    .ok()?  // timeout expired
+    .ok()? // timeout expired
     .ok()?; // connection refused or socket absent
 
     send_embed_request(stream, text).await
@@ -394,7 +393,10 @@ pub async fn embed_multi_via_daemon(text: &str) -> Option<HashMap<String, Vec<f3
 }
 
 /// Send an embed_multi request and parse the response.
-async fn send_embed_multi_request(mut stream: UnixStream, text: &str) -> Option<HashMap<String, Vec<f32>>> {
+async fn send_embed_multi_request(
+    mut stream: UnixStream,
+    text: &str,
+) -> Option<HashMap<String, Vec<f32>>> {
     let request = serde_json::json!({ "type": "embed_multi", "text": text });
     let mut request_line = serde_json::to_string(&request).ok()?;
     request_line.push('\n');

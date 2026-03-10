@@ -1,7 +1,7 @@
-/// Benchmark reporting module for LongMemEval evaluation results.
-///
-/// Generates per-category accuracy metrics, comparison tables across configurations,
-/// JSON output for cross-run comparison, and JSONL history append for score tracking.
+//! Benchmark reporting module for LongMemEval evaluation results.
+//!
+//! Generates per-category accuracy metrics, comparison tables across configurations,
+//! JSON output for cross-run comparison, and JSONL history append for score tracking.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -153,9 +153,9 @@ fn map_category(question_type: &str, is_abstention: bool) -> &'static str {
         return "abstention";
     }
     match question_type {
-        "single-session-user"
-        | "single-session-assistant"
-        | "single-session-preference" => "information_extraction",
+        "single-session-user" | "single-session-assistant" | "single-session-preference" => {
+            "information_extraction"
+        }
         "multi-session" => "multi_session",
         "temporal-reasoning" => "temporal_reasoning",
         "knowledge-update" => "knowledge_update",
@@ -204,7 +204,14 @@ pub fn generate_report(config_name: &str, results: &[QuestionResult]) -> Benchma
             } else {
                 0.0
             };
-            (cat, CategoryMetrics { accuracy, total, correct })
+            (
+                cat,
+                CategoryMetrics {
+                    accuracy,
+                    total,
+                    correct,
+                },
+            )
         })
         .collect();
 
@@ -248,7 +255,11 @@ pub fn generate_report(config_name: &str, results: &[QuestionResult]) -> Benchma
     let category_retrieval_recall: HashMap<String, f64> = category_evidence
         .into_iter()
         .map(|(cat, (found, total))| {
-            let recall = if total > 0 { found as f64 / total as f64 } else { 0.0 };
+            let recall = if total > 0 {
+                found as f64 / total as f64
+            } else {
+                0.0
+            };
             (cat, recall)
         })
         .collect();
@@ -274,7 +285,10 @@ pub fn print_report(report: &BenchmarkReport) {
     println!("Date: {}", report.timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
     println!("Questions: {}", report.total_questions);
     println!("Overall Accuracy: {:.1}%", report.overall_accuracy * 100.0);
-    println!("Task-Averaged Accuracy: {:.1}%", report.task_averaged_accuracy * 100.0);
+    println!(
+        "Task-Averaged Accuracy: {:.1}%",
+        report.task_averaged_accuracy * 100.0
+    );
     println!();
     println!("Per-Category Breakdown:");
 
@@ -313,7 +327,10 @@ pub fn print_report(report: &BenchmarkReport) {
     }
 
     println!();
-    println!("Retrieval Recall (memcp search quality): {:.1}%", report.retrieval_recall * 100.0);
+    println!(
+        "Retrieval Recall (memcp search quality): {:.1}%",
+        report.retrieval_recall * 100.0
+    );
     println!("Per-Category Retrieval Recall:");
     for cat in &ordered_categories {
         if let Some(recall) = report.category_retrieval_recall.get(*cat) {
@@ -353,15 +370,12 @@ pub fn print_comparison(reports: &[BenchmarkReport]) {
     let sep = format!(
         "{:-<label_width$}|-{}",
         "",
-        vec![format!("{:-<col_width$}", "", col_width = col_width)]
-            .iter()
-            .chain(
-                (1..reports.len())
-                    .map(|_| format!("{:-<col_width$}", "", col_width = col_width))
-                    .collect::<Vec<_>>()
-                    .iter()
-            )
-            .cloned()
+        std::iter::once(format!("{:-<col_width$}", "", col_width = col_width))
+            .chain((1..reports.len()).map(|_| format!(
+                "{:-<col_width$}",
+                "",
+                col_width = col_width
+            )))
             .collect::<Vec<_>>()
             .join("-|-")
     );
@@ -382,7 +396,13 @@ pub fn print_comparison(reports: &[BenchmarkReport]) {
             .map(|r| {
                 r.categories
                     .get(*cat)
-                    .map(|m| format!("{:>col_width$.1}%", m.accuracy * 100.0, col_width = col_width - 1))
+                    .map(|m| {
+                        format!(
+                            "{:>col_width$.1}%",
+                            m.accuracy * 100.0,
+                            col_width = col_width - 1
+                        )
+                    })
                     .unwrap_or_else(|| format!("{:>col_width$}", "N/A", col_width = col_width))
             })
             .collect();
@@ -401,16 +421,36 @@ pub fn print_comparison(reports: &[BenchmarkReport]) {
     // Overall accuracy row
     let overall_values: Vec<String> = reports
         .iter()
-        .map(|r| format!("{:>col_width$.1}%", r.overall_accuracy * 100.0, col_width = col_width - 1))
+        .map(|r| {
+            format!(
+                "{:>col_width$.1}%",
+                r.overall_accuracy * 100.0,
+                col_width = col_width - 1
+            )
+        })
         .collect();
-    println!("{:<label_width$}| {}", "Overall", overall_values.join(" | "));
+    println!(
+        "{:<label_width$}| {}",
+        "Overall",
+        overall_values.join(" | ")
+    );
 
     // Task-averaged accuracy row
     let task_avg_values: Vec<String> = reports
         .iter()
-        .map(|r| format!("{:>col_width$.1}%", r.task_averaged_accuracy * 100.0, col_width = col_width - 1))
+        .map(|r| {
+            format!(
+                "{:>col_width$.1}%",
+                r.task_averaged_accuracy * 100.0,
+                col_width = col_width - 1
+            )
+        })
         .collect();
-    println!("{:<label_width$}| {}", "Task-Averaged", task_avg_values.join(" | "));
+    println!(
+        "{:<label_width$}| {}",
+        "Task-Averaged",
+        task_avg_values.join(" | ")
+    );
 }
 
 /// Save report as JSON to a file path.

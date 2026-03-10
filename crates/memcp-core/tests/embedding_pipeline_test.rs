@@ -7,15 +7,21 @@
 mod common;
 use common::builders::MemoryBuilder;
 
+use memcp::config::IdempotencyConfig;
 use memcp::store::postgres::PostgresMemoryStore;
 use memcp::store::{MemoryStore, SearchFilter};
-use memcp::config::IdempotencyConfig;
-use sqlx::PgPool;
 use pgvector::Vector;
+use sqlx::PgPool;
 
 /// Format embedding as postgres vector literal
 fn emb_str(emb: &[f32]) -> String {
-    format!("[{}]", emb.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","))
+    format!(
+        "[{}]",
+        emb.iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
 
 /// Insert a mock current embedding for a memory.
@@ -51,7 +57,11 @@ async fn test_store_creates_pending_embedding(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let m = store
-        .store(MemoryBuilder::new().content("Pending embedding test").build())
+        .store(
+            MemoryBuilder::new()
+                .content("Pending embedding test")
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -70,18 +80,28 @@ async fn test_embedding_status_transitions(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool.clone()).await.unwrap();
 
     let m = store
-        .store(MemoryBuilder::new().content("Status transition test").build())
+        .store(
+            MemoryBuilder::new()
+                .content("Status transition test")
+                .build(),
+        )
         .await
         .unwrap();
     assert_eq!(m.embedding_status, "pending");
 
     // Transition to 'processing'
-    store.update_embedding_status(&m.id, "processing").await.unwrap();
+    store
+        .update_embedding_status(&m.id, "processing")
+        .await
+        .unwrap();
     let updated = store.get(&m.id).await.unwrap();
     assert_eq!(updated.embedding_status, "processing");
 
     // Transition to 'complete'
-    store.update_embedding_status(&m.id, "complete").await.unwrap();
+    store
+        .update_embedding_status(&m.id, "complete")
+        .await
+        .unwrap();
     let done = store.get(&m.id).await.unwrap();
     assert_eq!(done.embedding_status, "complete");
 }

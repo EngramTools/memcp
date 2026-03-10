@@ -7,7 +7,7 @@
 pub mod salience;
 
 // Re-export key types for convenience
-pub use salience::{SalienceScorer, ScoredHit, ScoreBreakdown};
+pub use salience::{SalienceScorer, ScoreBreakdown, ScoredHit};
 
 use crate::store::Memory;
 
@@ -89,7 +89,7 @@ pub fn rrf_fuse(
                 7 => "all_three".to_string(),
                 6 => "vector_symbolic".to_string(),
                 5 => "bm25_symbolic".to_string(),
-                3 => "hybrid".to_string(),       // bm25 + vector (legacy name preserved)
+                3 => "hybrid".to_string(), // bm25 + vector (legacy name preserved)
                 4 => "symbolic_only".to_string(),
                 2 => "vector_only".to_string(),
                 1 => "bm25_only".to_string(),
@@ -116,10 +116,7 @@ pub fn rrf_fuse(
 ///
 /// # Returns
 /// Vec of (id, rrf_score) sorted by rrf_score descending.
-pub fn rrf_fuse_multi(
-    sub_query_ranks: &[Vec<(String, i64)>],
-    k: f64,
-) -> Vec<(String, f64)> {
+pub fn rrf_fuse_multi(sub_query_ranks: &[Vec<(String, i64)>], k: f64) -> Vec<(String, f64)> {
     use std::collections::HashMap;
     let mut scores: HashMap<String, f64> = HashMap::new();
     for ranks in sub_query_ranks {
@@ -159,21 +156,47 @@ mod tests {
 
         // mem-a appears in all 3 sub-queries — should rank first
         assert!(!results.is_empty());
-        assert_eq!(results[0].0, "mem-a", "mem-a should rank first (appears in 3 sub-queries)");
+        assert_eq!(
+            results[0].0, "mem-a",
+            "mem-a should rank first (appears in 3 sub-queries)"
+        );
 
         // mem-b appears in all 3 sub-queries — should rank second
-        assert_eq!(results[1].0, "mem-b", "mem-b should rank second (appears in 3 sub-queries)");
+        assert_eq!(
+            results[1].0, "mem-b",
+            "mem-b should rank second (appears in 3 sub-queries)"
+        );
 
         // mem-c, mem-d, mem-e appear in only 1 sub-query each — should rank lower
         let single_leg_ids: Vec<&str> = results[2..].iter().map(|(id, _)| id.as_str()).collect();
-        assert!(single_leg_ids.contains(&"mem-c"), "mem-c should be in lower ranks");
-        assert!(single_leg_ids.contains(&"mem-d"), "mem-d should be in lower ranks");
-        assert!(single_leg_ids.contains(&"mem-e"), "mem-e should be in lower ranks");
+        assert!(
+            single_leg_ids.contains(&"mem-c"),
+            "mem-c should be in lower ranks"
+        );
+        assert!(
+            single_leg_ids.contains(&"mem-d"),
+            "mem-d should be in lower ranks"
+        );
+        assert!(
+            single_leg_ids.contains(&"mem-e"),
+            "mem-e should be in lower ranks"
+        );
 
         // Score for mem-a must be higher than score for mem-c (single-leg)
-        let mem_a_score = results.iter().find(|(id, _)| id == "mem-a").map(|(_, s)| *s).unwrap();
-        let mem_c_score = results.iter().find(|(id, _)| id == "mem-c").map(|(_, s)| *s).unwrap();
-        assert!(mem_a_score > mem_c_score, "multi-leg IDs must score higher than single-leg IDs");
+        let mem_a_score = results
+            .iter()
+            .find(|(id, _)| id == "mem-a")
+            .map(|(_, s)| *s)
+            .unwrap();
+        let mem_c_score = results
+            .iter()
+            .find(|(id, _)| id == "mem-c")
+            .map(|(_, s)| *s)
+            .unwrap();
+        assert!(
+            mem_a_score > mem_c_score,
+            "multi-leg IDs must score higher than single-leg IDs"
+        );
     }
 
     #[test]

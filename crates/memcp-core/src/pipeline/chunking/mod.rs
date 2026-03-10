@@ -40,11 +40,8 @@ pub fn chunk_content(content: &str, config: &ChunkingConfig) -> Vec<ChunkOutput>
         return vec![];
     }
 
-    let sentence_groups = splitter::split_sentences(
-        content,
-        config.max_chunk_chars,
-        config.overlap_sentences,
-    );
+    let sentence_groups =
+        splitter::split_sentences(content, config.max_chunk_chars, config.overlap_sentences);
 
     if sentence_groups.is_empty() {
         return vec![];
@@ -86,7 +83,10 @@ mod tests {
     fn test_short_content_no_chunks() {
         let config = test_config();
         let result = chunk_content("Short text.", &config);
-        assert!(result.is_empty(), "Content below threshold should not be chunked");
+        assert!(
+            result.is_empty(),
+            "Content below threshold should not be chunked"
+        );
     }
 
     #[test]
@@ -114,7 +114,11 @@ mod tests {
                        This is the fifth sentence about retrieval. ";
         let result = chunk_content(content, &config);
         assert!(!result.is_empty(), "Should produce chunks");
-        assert!(result.len() >= 2, "Should produce at least 2 chunks, got {}", result.len());
+        assert!(
+            result.len() >= 2,
+            "Should produce at least 2 chunks, got {}",
+            result.len()
+        );
 
         // Check context headers
         for chunk in &result {
@@ -144,7 +148,11 @@ mod tests {
         let content = "First sentence here. Second sentence here. Third sentence here. Fourth sentence here. Fifth sentence here. ";
 
         let chunks = chunk_content(content, &config);
-        assert!(chunks.len() >= 2, "Need at least 2 chunks to verify overlap, got {}", chunks.len());
+        assert!(
+            chunks.len() >= 2,
+            "Need at least 2 chunks to verify overlap, got {}",
+            chunks.len()
+        );
     }
 
     #[test]
@@ -157,7 +165,10 @@ mod tests {
         };
         let content = "This is a moderate length content that fits in one chunk easily.";
         let result = chunk_content(content, &config);
-        assert!(result.is_empty(), "Single-chunk content should return empty (no splitting needed)");
+        assert!(
+            result.is_empty(),
+            "Single-chunk content should return empty (no splitting needed)"
+        );
     }
 
     #[test]

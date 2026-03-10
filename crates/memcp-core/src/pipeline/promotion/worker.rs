@@ -11,9 +11,9 @@ use metrics;
 
 use super::PromotionResult;
 use crate::config::PromotionConfig;
-use crate::embedding::{EmbeddingProvider, build_embedding_text};
-use crate::store::MemoryStore;
+use crate::embedding::{build_embedding_text, EmbeddingProvider};
 use crate::store::postgres::PostgresMemoryStore;
+use crate::store::MemoryStore;
 
 /// Run a single promotion sweep cycle.
 ///
@@ -30,12 +30,14 @@ pub async fn run_promotion_sweep(
     target_tier: &str,
 ) -> Result<PromotionResult, anyhow::Error> {
     // Fetch candidates that meet promotion thresholds
-    let candidates = store.get_promotion_candidates(
-        promotion_config.min_stability,
-        promotion_config.min_reinforcements as i32,
-        source_tier,
-        promotion_config.batch_cap as i64,
-    ).await?;
+    let candidates = store
+        .get_promotion_candidates(
+            promotion_config.min_stability,
+            promotion_config.min_reinforcements as i32,
+            source_tier,
+            promotion_config.batch_cap as i64,
+        )
+        .await?;
 
     if candidates.is_empty() {
         return Ok(PromotionResult {
@@ -77,7 +79,10 @@ pub async fn run_promotion_sweep(
                 let dim = quality_provider.dimension() as i32;
 
                 // Deactivate the old source-tier embedding
-                if let Err(e) = store.deactivate_tier_embedding(memory_id, source_tier).await {
+                if let Err(e) = store
+                    .deactivate_tier_embedding(memory_id, source_tier)
+                    .await
+                {
                     tracing::warn!(
                         memory_id = %memory_id,
                         error = %e,
@@ -88,9 +93,19 @@ pub async fn run_promotion_sweep(
                 }
 
                 // Insert the new quality-tier embedding
-                if let Err(e) = store.insert_embedding(
-                    &emb_id, memory_id, &model, "v1", dim, &embedding, true, target_tier,
-                ).await {
+                if let Err(e) = store
+                    .insert_embedding(
+                        &emb_id,
+                        memory_id,
+                        &model,
+                        "v1",
+                        dim,
+                        &embedding,
+                        true,
+                        target_tier,
+                    )
+                    .await
+                {
                     tracing::warn!(
                         memory_id = %memory_id,
                         error = %e,

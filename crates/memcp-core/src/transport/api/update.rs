@@ -8,9 +8,9 @@ use std::sync::atomic::Ordering;
 use axum::{extract::State, http::StatusCode, Json};
 use serde_json::json;
 
-use crate::store::{UpdateMemory, Memory, MemoryStore};
+use super::types::{error_json, UpdateRequest};
+use crate::store::{Memory, MemoryStore, UpdateMemory};
 use crate::transport::health::AppState;
-use super::types::{UpdateRequest, error_json};
 
 /// POST /v1/update
 ///
@@ -21,21 +21,42 @@ pub async fn update_handler(
     Json(req): Json<UpdateRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     if !state.ready.load(Ordering::Acquire) {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(error_json("daemon not ready")));
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(error_json("daemon not ready")),
+        );
     }
 
     let store = match &state.store {
         Some(s) => s.clone(),
-        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(error_json("store not available"))),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_json("store not available")),
+            )
+        }
     };
 
     if req.id.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(error_json("id is required and must not be empty")));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_json("id is required and must not be empty")),
+        );
     }
 
     // Validate at least one field to update
-    if req.content.is_none() && req.type_hint.is_none() && req.source.is_none() && req.tags.is_none() && req.trust_level.is_none() {
-        return (StatusCode::BAD_REQUEST, Json(error_json("at least one field is required: content, type_hint, source, tags, or trust_level")));
+    if req.content.is_none()
+        && req.type_hint.is_none()
+        && req.source.is_none()
+        && req.tags.is_none()
+        && req.trust_level.is_none()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_json(
+                "at least one field is required: content, type_hint, source, tags, or trust_level",
+            )),
+        );
     }
 
     let has_content_change = req.content.is_some();
@@ -53,10 +74,16 @@ pub async fn update_handler(
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("not found") || msg.contains("no rows") || msg.contains("RowNotFound") {
-                return (StatusCode::NOT_FOUND, Json(error_json(&format!("Memory not found: {}", req.id))));
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(error_json(&format!("Memory not found: {}", req.id))),
+                );
             }
             tracing::warn!(error = %e, memory_id = %req.id, "update failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(error_json(&format!("Update failed: {}", e))));
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(error_json(&format!("Update failed: {}", e))),
+            );
         }
     };
 

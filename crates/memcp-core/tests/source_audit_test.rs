@@ -38,7 +38,10 @@ async fn test_direct_store_preserves_source(pool: PgPool) {
         .await
         .unwrap();
 
-    assert_eq!(mem.source, "my-agent", "Direct store should preserve source");
+    assert_eq!(
+        mem.source, "my-agent",
+        "Direct store should preserve source"
+    );
 
     // Verify trust_level is 0.5 (default for agent + non-special source)
     assert!(

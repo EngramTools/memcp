@@ -86,7 +86,9 @@ pub fn write_csv(
         if opts.include_state {
             fields.push(csv_escape(&mem.stability.unwrap_or(0.0).to_string()));
             fields.push(csv_escape(&mem.difficulty.unwrap_or(0.0).to_string()));
-            fields.push(csv_escape(&mem.reinforcement_count.unwrap_or(0).to_string()));
+            fields.push(csv_escape(
+                &mem.reinforcement_count.unwrap_or(0).to_string(),
+            ));
         }
 
         writeln!(writer, "{}", fields.join(","))?;
@@ -142,11 +144,20 @@ mod tests {
 
         // Header must contain expected columns.
         assert!(lines[0].contains("id"), "header must contain 'id'");
-        assert!(lines[0].contains("content"), "header must contain 'content'");
-        assert!(lines[0].contains("type_hint"), "header must contain 'type_hint'");
+        assert!(
+            lines[0].contains("content"),
+            "header must contain 'content'"
+        );
+        assert!(
+            lines[0].contains("type_hint"),
+            "header must contain 'type_hint'"
+        );
         assert!(lines[0].contains("source"), "header must contain 'source'");
         assert!(lines[0].contains("tags"), "header must contain 'tags'");
-        assert!(lines[0].contains("created_at"), "header must contain 'created_at'");
+        assert!(
+            lines[0].contains("created_at"),
+            "header must contain 'created_at'"
+        );
     }
 
     #[test]
@@ -196,9 +207,18 @@ mod tests {
         let output = String::from_utf8(buf).unwrap();
         let lines: Vec<&str> = output.trim_end().split('\n').collect();
 
-        assert!(lines[0].contains("stability"), "header must contain 'stability'");
-        assert!(lines[0].contains("difficulty"), "header must contain 'difficulty'");
-        assert!(lines[0].contains("reinforcement_count"), "header must contain 'reinforcement_count'");
+        assert!(
+            lines[0].contains("stability"),
+            "header must contain 'stability'"
+        );
+        assert!(
+            lines[0].contains("difficulty"),
+            "header must contain 'difficulty'"
+        );
+        assert!(
+            lines[0].contains("reinforcement_count"),
+            "header must contain 'reinforcement_count'"
+        );
     }
 
     #[test]
@@ -210,6 +230,10 @@ mod tests {
         // Even with no memories, header row is written.
         let output = String::from_utf8(buf).unwrap();
         let lines: Vec<&str> = output.trim_end().split('\n').collect();
-        assert_eq!(lines.len(), 1, "should have header row even with no memories");
+        assert_eq!(
+            lines.len(),
+            1,
+            "should have header row even with no memories"
+        );
     }
 }

@@ -161,9 +161,9 @@ impl ImportSource for ChatGptReader {
 
         for conv in conversations {
             let title = conv.title.unwrap_or_else(|| "Untitled".to_string());
-            let created_at = conv.create_time.and_then(|ts| {
-                Utc.timestamp_opt(ts as i64, 0).single()
-            });
+            let created_at = conv
+                .create_time
+                .and_then(|ts| Utc.timestamp_opt(ts as i64, 0).single());
 
             // Apply --since filter per conversation.
             if let (Some(since), Some(ts)) = (opts.since, created_at) {
@@ -239,7 +239,11 @@ fn flatten_conversation(
 
     // Find root node: a node whose parent is None or whose parent is not in the map.
     let root_id = mapping.iter().find_map(|(id, node)| {
-        let parent_missing = node.parent.as_ref().map(|p| !mapping.contains_key(p.as_str())).unwrap_or(true);
+        let parent_missing = node
+            .parent
+            .as_ref()
+            .map(|p| !mapping.contains_key(p.as_str()))
+            .unwrap_or(true);
         if parent_missing {
             Some(id.clone())
         } else {
@@ -257,7 +261,9 @@ fn flatten_conversation(
                 if let Some(msg) = &node.message {
                     if let Some(text) = extract_message_text(msg) {
                         if !text.trim().is_empty() {
-                            let role = msg.author.as_ref()
+                            let role = msg
+                                .author
+                                .as_ref()
                                 .and_then(|a| a.role.as_deref())
                                 .unwrap_or("unknown");
                             // Skip system and tool roles.
@@ -282,7 +288,9 @@ fn flatten_conversation(
             if let Some(msg) = &node.message {
                 if let Some(text) = extract_message_text(msg) {
                     if !text.trim().is_empty() {
-                        let role = msg.author.as_ref()
+                        let role = msg
+                            .author
+                            .as_ref()
                             .and_then(|a| a.role.as_deref())
                             .unwrap_or("unknown");
                         if !matches!(role, "system" | "tool") {
@@ -341,7 +349,13 @@ fn extract_message_text(msg: &Message) -> Option<String> {
 fn sanitize_tag(title: &str) -> String {
     title
         .chars()
-        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
         .to_string()

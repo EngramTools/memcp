@@ -31,19 +31,9 @@ impl<T> std::fmt::Debug for Redacted<T> {
     }
 }
 
-/// Structured logging setup using tracing
-///
-/// CRITICAL: Writes to stderr ONLY (never stdout) to avoid corrupting JSON-RPC stream.
-/// Auto-detects format: human-readable with ANSI colors when stderr is a terminal,
-/// structured JSON when piped/redirected.
-
-use std::io::IsTerminal;
-use tracing_subscriber::{
-    layer::SubscriberExt,
-    util::SubscriberInitExt,
-    EnvFilter,
-};
 use crate::config::Config;
+use std::io::IsTerminal;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Initialize tracing subscriber with stderr-only output
 ///
@@ -55,8 +45,8 @@ use crate::config::Config;
 /// RUST_LOG env var can override at runtime
 pub fn init_logging(config: &Config) {
     // Build env filter from config, with RUST_LOG override
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level));
 
     // Auto-detect format based on stderr terminal status
     let stderr_is_terminal = std::io::stderr().is_terminal();
@@ -68,7 +58,7 @@ pub fn init_logging(config: &Config) {
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_writer(std::io::stderr)
-                    .with_ansi(true)
+                    .with_ansi(true),
             )
             .init();
     } else {
@@ -78,7 +68,7 @@ pub fn init_logging(config: &Config) {
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_writer(std::io::stderr)
-                    .json()
+                    .json(),
             )
             .init();
     }
@@ -86,8 +76,6 @@ pub fn init_logging(config: &Config) {
     // File-based logging is not yet implemented. When log_file is configured,
     // we warn and fall back to stderr. Implementation deferred to a future phase.
     if config.log_file.is_some() {
-        tracing::warn!(
-            "log_file configuration is not yet implemented, logging to stderr only"
-        );
+        tracing::warn!("log_file configuration is not yet implemented, logging to stderr only");
     }
 }

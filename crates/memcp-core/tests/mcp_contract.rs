@@ -11,12 +11,12 @@
 //! integration test crate. Since Rust does not share code between integration
 //! test crates, we redefine the minimal infrastructure here.
 
+use serde_json::{json, Value};
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
-use std::io::{Write, BufRead, BufReader};
-use std::sync::mpsc::{channel, Sender, Receiver};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
-use serde_json::{json, Value};
 
 /// Locate the memcp binary in the workspace target directory.
 fn memcp_bin_path() -> std::path::PathBuf {
@@ -61,8 +61,12 @@ impl McpClient {
         thread::spawn(move || {
             while let Ok(request) = req_rx.recv() {
                 let s = serde_json::to_string(&request).expect("serialize");
-                if writeln!(stdin, "{}", s).is_err() { break; }
-                if stdin.flush().is_err() { break; }
+                if writeln!(stdin, "{}", s).is_err() {
+                    break;
+                }
+                if stdin.flush().is_err() {
+                    break;
+                }
             }
         });
 
@@ -74,7 +78,9 @@ impl McpClient {
                     Ok(0) => break,
                     Ok(_) => {
                         if let Ok(v) = serde_json::from_str::<Value>(&line) {
-                            if resp_tx.send(v).is_err() { break; }
+                            if resp_tx.send(v).is_err() {
+                                break;
+                            }
                         }
                     }
                     Err(_) => break,
@@ -82,7 +88,11 @@ impl McpClient {
             }
         });
 
-        McpClient { child, tx: req_tx, rx: resp_rx }
+        McpClient {
+            child,
+            tx: req_tx,
+            rx: resp_rx,
+        }
     }
 
     fn send_request(&self, req: Value) -> Option<Value> {
@@ -117,18 +127,23 @@ impl McpTestClient {
         let base_url = "postgres://memcp:memcp@localhost:5433/postgres";
         let db_name = format!("memcp_contract_{}", uuid::Uuid::new_v4().simple());
 
-        let base_pool = sqlx::PgPool::connect(base_url).await
+        let base_pool = sqlx::PgPool::connect(base_url)
+            .await
             .expect("connect to base postgres for temp DB creation");
 
         sqlx::query(&format!("CREATE DATABASE {}", db_name))
-            .execute(&base_pool).await
+            .execute(&base_pool)
+            .await
             .expect("CREATE DATABASE");
 
         let test_db_url = format!("postgres://memcp:memcp@localhost:5433/{}", db_name);
-        let test_pool = sqlx::PgPool::connect(&test_db_url).await
+        let test_pool = sqlx::PgPool::connect(&test_db_url)
+            .await
             .expect("connect to temp DB");
 
-        sqlx::migrate!("./migrations").run(&test_pool).await
+        sqlx::migrate!("./migrations")
+            .run(&test_pool)
+            .await
             .expect("run migrations on temp DB");
 
         test_pool.close().await;
@@ -145,11 +160,13 @@ impl McpTestClient {
         drop(self.inner);
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let base_pool = sqlx::PgPool::connect(base_url).await
+        let base_pool = sqlx::PgPool::connect(base_url)
+            .await
             .expect("connect to base postgres for cleanup");
 
         sqlx::query(&format!("DROP DATABASE {} WITH (FORCE)", self.db_name))
-            .execute(&base_pool).await
+            .execute(&base_pool)
+            .await
             .expect("DROP DATABASE");
 
         base_pool.close().await;
@@ -169,16 +186,18 @@ impl McpTestClient {
 // ---------------------------------------------------------------------------
 
 fn handshake(client: &McpTestClient) {
-    client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "initialize",
-        "id": 1,
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "mcp-contract-test", "version": "1.0"}
-        }
-    })).expect("init failed");
+    client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "id": 1,
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "mcp-contract-test", "version": "1.0"}
+            }
+        }))
+        .expect("init failed");
 
     client.send_notification(json!({
         "jsonrpc": "2.0",
@@ -188,19 +207,21 @@ fn handshake(client: &McpTestClient) {
 
 /// Store a memory and return its ID.
 fn store_memory(client: &McpTestClient, content: &str, id_counter: i64) -> String {
-    let resp = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": id_counter,
-        "params": {
-            "name": "store_memory",
-            "arguments": {
-                "content": content,
-                "type_hint": "fact",
-                "source": "mcp-contract-test"
+    let resp = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": id_counter,
+            "params": {
+                "name": "store_memory",
+                "arguments": {
+                    "content": content,
+                    "type_hint": "fact",
+                    "source": "mcp-contract-test"
+                }
             }
-        }
-    })).expect("store_memory failed");
+        }))
+        .expect("store_memory failed");
 
     assert!(
         resp["result"]["isError"].is_null() || resp["result"]["isError"] == false,
@@ -223,20 +244,22 @@ async fn test_mcp_store_memory() {
     let client = McpTestClient::spawn().await;
     handshake(&client);
 
-    let resp = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 2,
-        "params": {
-            "name": "store_memory",
-            "arguments": {
-                "content": "PostgreSQL is the primary database for this project",
-                "type_hint": "fact",
-                "source": "mcp-contract-test",
-                "tags": ["database", "infrastructure"]
+    let resp = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 2,
+            "params": {
+                "name": "store_memory",
+                "arguments": {
+                    "content": "PostgreSQL is the primary database for this project",
+                    "type_hint": "fact",
+                    "source": "mcp-contract-test",
+                    "tags": ["database", "infrastructure"]
+                }
             }
-        }
-    })).expect("store_memory request failed");
+        }))
+        .expect("store_memory request failed");
 
     assert_eq!(resp["jsonrpc"], "2.0");
     assert_eq!(resp["id"], 2);
@@ -248,10 +271,16 @@ async fn test_mcp_store_memory() {
 
     let sc = &resp["result"]["structuredContent"];
     assert!(sc["id"].is_string(), "should have string id: {}", sc);
-    assert_eq!(sc["content"], "PostgreSQL is the primary database for this project");
+    assert_eq!(
+        sc["content"],
+        "PostgreSQL is the primary database for this project"
+    );
     assert_eq!(sc["type_hint"], "fact");
     assert_eq!(sc["source"], "mcp-contract-test");
-    assert!(sc["created_at"].is_string(), "should have created_at timestamp");
+    assert!(
+        sc["created_at"].is_string(),
+        "should have created_at timestamp"
+    );
 
     client.cleanup().await;
 }
@@ -268,17 +297,19 @@ async fn test_mcp_search_memory() {
     let memory_id = store_memory(&client, "Rust async programming with Tokio runtime", 2);
 
     // Search with matching terms
-    let resp = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 3,
-        "params": {
-            "name": "search_memory",
-            "arguments": {
-                "query": "Rust async Tokio"
+    let resp = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 3,
+            "params": {
+                "name": "search_memory",
+                "arguments": {
+                    "query": "Rust async Tokio"
+                }
             }
-        }
-    })).expect("search_memory request failed");
+        }))
+        .expect("search_memory request failed");
 
     assert_eq!(resp["jsonrpc"], "2.0");
     assert!(
@@ -288,10 +319,13 @@ async fn test_mcp_search_memory() {
     );
 
     let sc = &resp["result"]["structuredContent"];
-    let memories = sc["memories"].as_array()
+    let memories = sc["memories"]
+        .as_array()
         .expect("search result should have memories array");
 
-    let found = memories.iter().any(|m| m["id"].as_str() == Some(&memory_id));
+    let found = memories
+        .iter()
+        .any(|m| m["id"].as_str() == Some(&memory_id));
     assert!(
         found,
         "stored memory {} should appear in search results: {}",
@@ -312,21 +346,27 @@ async fn test_mcp_list_memories() {
 
     // Store 3 memories
     for i in 0..3 {
-        store_memory(&client, &format!("List contract test memory number {}", i), (2 + i) as i64);
+        store_memory(
+            &client,
+            &format!("List contract test memory number {}", i),
+            (2 + i) as i64,
+        );
     }
 
     // List memories
-    let resp = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 10,
-        "params": {
-            "name": "list_memories",
-            "arguments": {
-                "limit": 20
+    let resp = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 10,
+            "params": {
+                "name": "list_memories",
+                "arguments": {
+                    "limit": 20
+                }
             }
-        }
-    })).expect("list_memories request failed");
+        }))
+        .expect("list_memories request failed");
 
     assert_eq!(resp["jsonrpc"], "2.0");
     assert!(
@@ -336,13 +376,15 @@ async fn test_mcp_list_memories() {
     );
 
     let sc = &resp["result"]["structuredContent"];
-    let memories = sc["memories"].as_array()
+    let memories = sc["memories"]
+        .as_array()
         .expect("list result should have memories array");
 
     assert!(
         memories.len() >= 3,
         "list should return at least 3 memories, got {}: {}",
-        memories.len(), sc
+        memories.len(),
+        sc
     );
 
     client.cleanup().await;
@@ -357,20 +399,26 @@ async fn test_mcp_get_memory() {
     let client = McpTestClient::spawn().await;
     handshake(&client);
 
-    let memory_id = store_memory(&client, "Dark mode preference for all IDEs and terminals", 2);
+    let memory_id = store_memory(
+        &client,
+        "Dark mode preference for all IDEs and terminals",
+        2,
+    );
 
     // Get the memory back
-    let resp = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 3,
-        "params": {
-            "name": "get_memory",
-            "arguments": {
-                "id": memory_id.clone()
+    let resp = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 3,
+            "params": {
+                "name": "get_memory",
+                "arguments": {
+                    "id": memory_id.clone()
+                }
             }
-        }
-    })).expect("get_memory request failed");
+        }))
+        .expect("get_memory request failed");
 
     assert_eq!(resp["jsonrpc"], "2.0");
     assert!(
@@ -404,17 +452,19 @@ async fn test_mcp_delete_memory() {
     let memory_id = store_memory(&client, "Memory to be deleted via MCP contract test", 2);
 
     // Delete the memory
-    let delete_resp = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 3,
-        "params": {
-            "name": "delete_memory",
-            "arguments": {
-                "id": memory_id.clone()
+    let delete_resp = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 3,
+            "params": {
+                "name": "delete_memory",
+                "arguments": {
+                    "id": memory_id.clone()
+                }
             }
-        }
-    })).expect("delete_memory request failed");
+        }))
+        .expect("delete_memory request failed");
 
     assert!(
         delete_resp["result"]["isError"].is_null() || delete_resp["result"]["isError"] == false,
@@ -423,17 +473,19 @@ async fn test_mcp_delete_memory() {
     );
 
     // Attempt get — should return isError: true
-    let get_resp = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 4,
-        "params": {
-            "name": "get_memory",
-            "arguments": {
-                "id": memory_id
+    let get_resp = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 4,
+            "params": {
+                "name": "get_memory",
+                "arguments": {
+                    "id": memory_id
+                }
             }
-        }
-    })).expect("get_memory request failed");
+        }))
+        .expect("get_memory request failed");
 
     assert_eq!(
         get_resp["result"]["isError"], true,
@@ -456,18 +508,20 @@ async fn test_mcp_reinforce_memory() {
     let memory_id = store_memory(&client, "Memory for reinforce contract test", 2);
 
     // Call reinforce_memory
-    let resp = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 3,
-        "params": {
-            "name": "reinforce_memory",
-            "arguments": {
-                "id": memory_id,
-                "quality": "good"
+    let resp = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 3,
+            "params": {
+                "name": "reinforce_memory",
+                "arguments": {
+                    "id": memory_id,
+                    "quality": "good"
+                }
             }
-        }
-    })).expect("reinforce_memory request failed");
+        }))
+        .expect("reinforce_memory request failed");
 
     assert_eq!(resp["jsonrpc"], "2.0");
     assert!(
@@ -491,18 +545,20 @@ async fn test_mcp_feedback_memory() {
     let memory_id = store_memory(&client, "Memory for feedback contract test", 2);
 
     // Call feedback_memory with signal="useful"
-    let resp = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 3,
-        "params": {
-            "name": "feedback_memory",
-            "arguments": {
-                "id": memory_id,
-                "signal": "useful"
+    let resp = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 3,
+            "params": {
+                "name": "feedback_memory",
+                "arguments": {
+                    "id": memory_id,
+                    "signal": "useful"
+                }
             }
-        }
-    })).expect("feedback_memory request failed");
+        }))
+        .expect("feedback_memory request failed");
 
     assert_eq!(resp["jsonrpc"], "2.0");
     assert!(
@@ -514,18 +570,20 @@ async fn test_mcp_feedback_memory() {
     // Also test "irrelevant" signal
     let memory_id2 = store_memory(&client, "Memory for irrelevant feedback test", 4);
 
-    let resp2 = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 5,
-        "params": {
-            "name": "feedback_memory",
-            "arguments": {
-                "id": memory_id2,
-                "signal": "irrelevant"
+    let resp2 = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 5,
+            "params": {
+                "name": "feedback_memory",
+                "arguments": {
+                    "id": memory_id2,
+                    "signal": "irrelevant"
+                }
             }
-        }
-    })).expect("feedback_memory irrelevant request failed");
+        }))
+        .expect("feedback_memory irrelevant request failed");
 
     assert!(
         resp2["result"]["isError"].is_null() || resp2["result"]["isError"] == false,
@@ -546,21 +604,27 @@ async fn test_mcp_recall_memory() {
     handshake(&client);
 
     // Store a memory with known distinctive content
-    store_memory(&client, "Rust ownership and borrowing are core language features", 2);
+    store_memory(
+        &client,
+        "Rust ownership and borrowing are core language features",
+        2,
+    );
 
     // Call recall_memory — relies on BM25 (no daemon for vector embeddings)
-    let resp = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 3,
-        "params": {
-            "name": "recall_memory",
-            "arguments": {
-                "query": "Rust ownership borrowing",
-                "session_id": "contract-test-session-recall"
+    let resp = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 3,
+            "params": {
+                "name": "recall_memory",
+                "arguments": {
+                    "query": "Rust ownership borrowing",
+                    "session_id": "contract-test-session-recall"
+                }
             }
-        }
-    })).expect("recall_memory request failed");
+        }))
+        .expect("recall_memory request failed");
 
     assert_eq!(resp["jsonrpc"], "2.0");
     assert_eq!(resp["id"], 3);

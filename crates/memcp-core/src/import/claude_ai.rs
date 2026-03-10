@@ -171,10 +171,7 @@ impl ImportSource for ClaudeAiReader {
                 continue;
             }
 
-            let tags = vec![
-                "imported".to_string(),
-                "imported:claude".to_string(),
-            ];
+            let tags = vec!["imported".to_string(), "imported:claude".to_string()];
 
             if opts.curate {
                 // Curate mode: pass full conversation to LLM later.

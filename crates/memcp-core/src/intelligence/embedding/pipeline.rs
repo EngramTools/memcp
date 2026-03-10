@@ -13,12 +13,12 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use super::{EmbeddingCompletion, EmbeddingJob, EmbeddingProvider, build_embedding_text};
 use super::router::EmbeddingRouter;
+use super::{build_embedding_text, EmbeddingCompletion, EmbeddingJob, EmbeddingProvider};
 use crate::consolidation::ConsolidationJob;
 use crate::gc::DedupJob;
-use crate::store::MemoryStore;
 use crate::store::postgres::PostgresMemoryStore;
+use crate::store::MemoryStore;
 
 /// Async embedding pipeline: enqueues jobs onto a bounded mpsc channel and
 /// processes them in a background tokio task.
@@ -56,7 +56,8 @@ impl EmbeddingPipeline {
                 let tier = job.tier.clone();
 
                 // Select the provider for this job's tier, falling back to default
-                let provider = router.provider(&tier)
+                let provider = router
+                    .provider(&tier)
                     .unwrap_or_else(|| router.default_provider());
 
                 let embed_start = std::time::Instant::now();
@@ -68,7 +69,16 @@ impl EmbeddingPipeline {
                         let model = provider.model_name().to_string();
                         let dim = provider.dimension() as i32;
                         if let Err(e) = store
-                            .insert_embedding(&emb_id, &job.memory_id, &model, "v1", dim, &embedding, true, &tier)
+                            .insert_embedding(
+                                &emb_id,
+                                &job.memory_id,
+                                &model,
+                                "v1",
+                                dim,
+                                &embedding,
+                                true,
+                                &tier,
+                            )
                             .await
                         {
                             tracing::error!(
@@ -77,8 +87,11 @@ impl EmbeddingPipeline {
                                 error = %e,
                                 "Failed to store embedding"
                             );
-                            let _ = store.update_embedding_status(&job.memory_id, "failed").await;
-                            metrics::counter!("memcp_embedding_jobs_total", "status" => "error").increment(1);
+                            let _ = store
+                                .update_embedding_status(&job.memory_id, "failed")
+                                .await;
+                            metrics::counter!("memcp_embedding_jobs_total", "status" => "error")
+                                .increment(1);
                             if let Some(tx) = job.completion_tx {
                                 let _ = tx.send(EmbeddingCompletion {
                                     status: "failed".to_string(),
@@ -88,8 +101,11 @@ impl EmbeddingPipeline {
                             }
                             worker_pending.fetch_sub(1, Ordering::Relaxed);
                         } else {
-                            let _ = store.update_embedding_status(&job.memory_id, "complete").await;
-                            metrics::counter!("memcp_embedding_jobs_total", "status" => "success").increment(1);
+                            let _ = store
+                                .update_embedding_status(&job.memory_id, "complete")
+                                .await;
+                            metrics::counter!("memcp_embedding_jobs_total", "status" => "success")
+                                .increment(1);
                             metrics::histogram!("memcp_embedding_duration_seconds", "tier" => tier.clone()).record(duration);
                             tracing::debug!(memory_id = %job.memory_id, tier = %tier, "Embedding complete");
                             if let Some(tx) = job.completion_tx {
@@ -105,7 +121,8 @@ impl EmbeddingPipeline {
                                 metrics::gauge!("memcp_memories_total").set(total as f64);
                             }
                             if let Ok(pending) = store.count_pending_embeddings().await {
-                                metrics::gauge!("memcp_memories_pending_embedding").set(pending as f64);
+                                metrics::gauge!("memcp_memories_pending_embedding")
+                                    .set(pending as f64);
                             }
 
                             // Trigger consolidation check
@@ -165,8 +182,11 @@ impl EmbeddingPipeline {
                             error = %e,
                             "Embedding failed after 3 retries, marking as failed"
                         );
-                        let _ = store.update_embedding_status(&job.memory_id, "failed").await;
-                        metrics::counter!("memcp_embedding_jobs_total", "status" => "error").increment(1);
+                        let _ = store
+                            .update_embedding_status(&job.memory_id, "failed")
+                            .await;
+                        metrics::counter!("memcp_embedding_jobs_total", "status" => "error")
+                            .increment(1);
                         if let Some(tx) = job.completion_tx {
                             let _ = tx.send(EmbeddingCompletion {
                                 status: "failed".to_string(),
@@ -180,7 +200,10 @@ impl EmbeddingPipeline {
             }
         });
 
-        EmbeddingPipeline { sender: tx, pending_count }
+        EmbeddingPipeline {
+            sender: tx,
+            pending_count,
+        }
     }
 
     /// Create a pipeline with a single embedding provider (backward compatibility).
@@ -217,9 +240,7 @@ impl EmbeddingPipeline {
                     tier,
                 });
             }
-            tracing::warn!(
-                "Embedding queue full — memory stored, embedding deferred to backfill"
-            );
+            tracing::warn!("Embedding queue full — memory stored, embedding deferred to backfill");
         }
     }
 
@@ -247,10 +268,7 @@ impl EmbeddingPipeline {
 ///
 /// Queries the store in batches of 100 and enqueues each memory on the pipeline channel.
 /// Returns the total count of memories queued.
-pub async fn backfill(
-    store: &PostgresMemoryStore,
-    sender: &mpsc::Sender<EmbeddingJob>,
-) -> u64 {
+pub async fn backfill(store: &PostgresMemoryStore, sender: &mpsc::Sender<EmbeddingJob>) -> u64 {
     let mut total_queued: u64 = 0;
 
     loop {
@@ -290,7 +308,10 @@ pub async fn backfill(
     }
 
     if total_queued > 0 {
-        tracing::info!(count = total_queued, "Queued memories for embedding backfill");
+        tracing::info!(
+            count = total_queued,
+            "Queued memories for embedding backfill"
+        );
     }
 
     total_queued

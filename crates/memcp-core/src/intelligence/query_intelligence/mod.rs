@@ -137,7 +137,7 @@ pub trait QueryIntelligenceProvider: Send + Sync {
     async fn explain_connections(
         &self,
         _query: &str,
-        _results: &[(&str, f64)],  // (content_snippet, similarity)
+        _results: &[(&str, f64)], // (content_snippet, similarity)
     ) -> Result<Vec<String>, QueryIntelligenceError> {
         Ok(vec![])
     }
@@ -349,14 +349,28 @@ mod tests {
         // Must be an object type
         assert_eq!(schema["type"], "object");
         // Must have is_multi_faceted in required
-        let required = schema["required"].as_array().expect("required must be array");
-        assert!(required.iter().any(|v| v == "is_multi_faceted"), "is_multi_faceted must be required");
+        let required = schema["required"]
+            .as_array()
+            .expect("required must be array");
+        assert!(
+            required.iter().any(|v| v == "is_multi_faceted"),
+            "is_multi_faceted must be required"
+        );
         // Must have all expected properties
         let props = &schema["properties"];
-        assert!(props.get("is_multi_faceted").is_some(), "missing is_multi_faceted property");
-        assert!(props.get("sub_queries").is_some(), "missing sub_queries property");
+        assert!(
+            props.get("is_multi_faceted").is_some(),
+            "missing is_multi_faceted property"
+        );
+        assert!(
+            props.get("sub_queries").is_some(),
+            "missing sub_queries property"
+        );
         assert!(props.get("variants").is_some(), "missing variants property");
-        assert!(props.get("time_range").is_some(), "missing time_range property");
+        assert!(
+            props.get("time_range").is_some(),
+            "missing time_range property"
+        );
         // sub_queries maxItems must be 4
         assert_eq!(props["sub_queries"]["maxItems"], 4);
         // variants maxItems must be 3
@@ -366,7 +380,10 @@ mod tests {
     #[test]
     fn test_decomposed_query_from_expanded_wraps_correctly() {
         // Verify that DecomposedQuery built from ExpandedQuery data matches expected shape
-        let variants = vec!["auth config".to_string(), "authentication setup".to_string()];
+        let variants = vec![
+            "auth config".to_string(),
+            "authentication setup".to_string(),
+        ];
         let decomposed = DecomposedQuery {
             is_multi_faceted: false,
             sub_queries: vec![],

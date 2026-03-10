@@ -109,15 +109,15 @@ impl SummarizationProvider for OllamaSummarizationProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "unknown error".to_string());
-            return Err(SummarizationError::Api { status, message: body });
+            return Err(SummarizationError::Api {
+                status,
+                message: body,
+            });
         }
 
-        let chat_response: OllamaChatResponse = response
-            .json()
-            .await
-            .map_err(|e| {
-                SummarizationError::Generation(format!("Failed to parse Ollama response: {}", e))
-            })?;
+        let chat_response: OllamaChatResponse = response.json().await.map_err(|e| {
+            SummarizationError::Generation(format!("Failed to parse Ollama response: {}", e))
+        })?;
 
         let summary = chat_response.message.content.trim().to_string();
         if summary.is_empty() {

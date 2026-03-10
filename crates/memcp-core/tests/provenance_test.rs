@@ -341,8 +341,13 @@ async fn test_update_trust_level_audit_trail(pool: PgPool) {
     );
 
     // Verify trust_history in metadata
-    let history = updated.metadata.get("trust_history").expect("metadata should have trust_history");
-    let entries = history.as_array().expect("trust_history should be an array");
+    let history = updated
+        .metadata
+        .get("trust_history")
+        .expect("metadata should have trust_history");
+    let entries = history
+        .as_array()
+        .expect("trust_history should be an array");
     assert_eq!(entries.len(), 1);
 
     let entry = &entries[0];

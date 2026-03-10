@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Client;
 
-use crate::benchmark::{BenchmarkConfig, default_configs};
+use crate::benchmark::{default_configs, BenchmarkConfig};
 use crate::embedding::pipeline::EmbeddingPipeline;
 use crate::embedding::EmbeddingProvider;
 use crate::intelligence::query_intelligence::{QueryIntelligenceProvider, RankedCandidate};
@@ -27,7 +27,7 @@ use crate::store::postgres::PostgresMemoryStore;
 use super::evaluate::{f1_score, generate_locomo_answer};
 use super::ingest::ingest_sample;
 use super::{
-    LoCoMoIngestionMode, LoCoMoQuestionResult, LoCoMoSample, LoCoMoState, save_locomo_checkpoint,
+    save_locomo_checkpoint, LoCoMoIngestionMode, LoCoMoQuestionResult, LoCoMoSample, LoCoMoState,
 };
 
 /// Abstention phrases checked for adversarial (category 5) questions.
@@ -241,36 +241,40 @@ pub async fn run_locomo_benchmark(
                     let id = hit.memory.id.clone();
                     match merged.get(&id) {
                         Some(existing) if existing.rrf_score >= hit.rrf_score => {}
-                        _ => { merged.insert(id, hit); }
+                        _ => {
+                            merged.insert(id, hit);
+                        }
                     }
                 }
             }
 
             let mut hits: Vec<HybridRawHit> = merged.into_values().collect();
-            hits.sort_by(|a, b| b.rrf_score.partial_cmp(&a.rrf_score).unwrap_or(std::cmp::Ordering::Equal));
+            hits.sort_by(|a, b| {
+                b.rrf_score
+                    .partial_cmp(&a.rrf_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
             // Step 3c: QI reranking (fail-open)
             if config.qi_reranking {
                 if let Some(ref provider) = qi_provider {
-                    let candidates: Vec<RankedCandidate> =
-                        hits.iter().enumerate().map(|(i, h)| RankedCandidate {
+                    let candidates: Vec<RankedCandidate> = hits
+                        .iter()
+                        .enumerate()
+                        .map(|(i, h)| RankedCandidate {
                             id: h.memory.id.to_string(),
                             content: h.memory.content.chars().take(1000).collect(),
                             current_rank: i + 1,
-                        }).collect();
+                        })
+                        .collect();
 
                     let timeout = Duration::from_secs(30);
-                    match tokio::time::timeout(
-                        timeout,
-                        provider.rerank(&qa.question, &candidates),
-                    )
-                    .await
+                    match tokio::time::timeout(timeout, provider.rerank(&qa.question, &candidates))
+                        .await
                     {
                         Ok(Ok(ranked)) => {
-                            let rank_map: HashMap<String, usize> = ranked
-                                .iter()
-                                .map(|r| (r.id.clone(), r.llm_rank))
-                                .collect();
+                            let rank_map: HashMap<String, usize> =
+                                ranked.iter().map(|r| (r.id.clone(), r.llm_rank)).collect();
                             hits.sort_by_key(|h| {
                                 *rank_map
                                     .get(&h.memory.id.to_string())

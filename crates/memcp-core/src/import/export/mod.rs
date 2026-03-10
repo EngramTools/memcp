@@ -8,8 +8,8 @@
 //! `ExportEngine::run()` queries memories with optional filters and dispatches
 //! to the appropriate formatter.
 
-pub mod jsonl;
 pub mod csv;
+pub mod jsonl;
 pub mod markdown;
 
 use std::io::{self, BufWriter, Write};
@@ -172,7 +172,11 @@ impl ExportEngine {
     ///
     /// Used by the HTTP export endpoint to write directly to a response buffer.
     /// Returns the number of memories exported.
-    pub async fn run_to_writer<W: std::io::Write>(&self, writer: &mut W, opts: &ExportOpts) -> Result<usize> {
+    pub async fn run_to_writer<W: std::io::Write>(
+        &self,
+        writer: &mut W,
+        opts: &ExportOpts,
+    ) -> Result<usize> {
         let pool = self.store.pool();
         let memories = self.fetch_memories(pool, opts).await?;
         let count = memories.len();
@@ -216,10 +220,7 @@ impl ExportEngine {
         let mut tag_conditions: Vec<String> = Vec::new();
         if let Some(ref tags) = opts.tags {
             for tag in tags {
-                tag_conditions.push(format!(
-                    "m.tags @> '{}':jsonb",
-                    serde_json::json!([tag])
-                ));
+                tag_conditions.push(format!("m.tags @> '{}':jsonb", serde_json::json!([tag])));
             }
         }
         conditions.extend(tag_conditions);
@@ -263,9 +264,11 @@ impl ExportEngine {
 
         // Execute query with dynamic parameters.
         let memories = if opts.include_embeddings {
-            self.execute_query_with_embeddings(pool, &sql, params_project, params_since).await?
+            self.execute_query_with_embeddings(pool, &sql, params_project, params_since)
+                .await?
         } else {
-            self.execute_query_no_embeddings(pool, &sql, params_project, params_since).await?
+            self.execute_query_no_embeddings(pool, &sql, params_project, params_since)
+                .await?
         };
 
         Ok(memories)
@@ -286,30 +289,10 @@ impl ExportEngine {
         // For simplicity, construct a concrete query by building it with sqlx::query.
         // We pipe through project and since as positional params.
         let rows = match (project, since) {
-            (Some(p), Some(s)) => {
-                sqlx::query(sql)
-                    .bind(p)
-                    .bind(s)
-                    .fetch_all(pool)
-                    .await?
-            }
-            (Some(p), None) => {
-                sqlx::query(sql)
-                    .bind(p)
-                    .fetch_all(pool)
-                    .await?
-            }
-            (None, Some(s)) => {
-                sqlx::query(sql)
-                    .bind(s)
-                    .fetch_all(pool)
-                    .await?
-            }
-            (None, None) => {
-                sqlx::query(sql)
-                    .fetch_all(pool)
-                    .await?
-            }
+            (Some(p), Some(s)) => sqlx::query(sql).bind(p).bind(s).fetch_all(pool).await?,
+            (Some(p), None) => sqlx::query(sql).bind(p).fetch_all(pool).await?,
+            (None, Some(s)) => sqlx::query(sql).bind(s).fetch_all(pool).await?,
+            (None, None) => sqlx::query(sql).fetch_all(pool).await?,
         };
 
         let mut memories = Vec::with_capacity(rows.len());
@@ -367,30 +350,10 @@ impl ExportEngine {
         use sqlx::Row;
 
         let rows = match (project, since) {
-            (Some(p), Some(s)) => {
-                sqlx::query(sql)
-                    .bind(p)
-                    .bind(s)
-                    .fetch_all(pool)
-                    .await?
-            }
-            (Some(p), None) => {
-                sqlx::query(sql)
-                    .bind(p)
-                    .fetch_all(pool)
-                    .await?
-            }
-            (None, Some(s)) => {
-                sqlx::query(sql)
-                    .bind(s)
-                    .fetch_all(pool)
-                    .await?
-            }
-            (None, None) => {
-                sqlx::query(sql)
-                    .fetch_all(pool)
-                    .await?
-            }
+            (Some(p), Some(s)) => sqlx::query(sql).bind(p).bind(s).fetch_all(pool).await?,
+            (Some(p), None) => sqlx::query(sql).bind(p).fetch_all(pool).await?,
+            (None, Some(s)) => sqlx::query(sql).bind(s).fetch_all(pool).await?,
+            (None, None) => sqlx::query(sql).fetch_all(pool).await?,
         };
 
         let mut memories = Vec::with_capacity(rows.len());
@@ -471,11 +434,23 @@ mod tests {
 
     #[test]
     fn test_export_format_from_str() {
-        assert_eq!(ExportFormat::from_str("jsonl").unwrap(), ExportFormat::Jsonl);
-        assert_eq!(ExportFormat::from_str("JSONL").unwrap(), ExportFormat::Jsonl);
+        assert_eq!(
+            ExportFormat::from_str("jsonl").unwrap(),
+            ExportFormat::Jsonl
+        );
+        assert_eq!(
+            ExportFormat::from_str("JSONL").unwrap(),
+            ExportFormat::Jsonl
+        );
         assert_eq!(ExportFormat::from_str("csv").unwrap(), ExportFormat::Csv);
-        assert_eq!(ExportFormat::from_str("markdown").unwrap(), ExportFormat::Markdown);
-        assert_eq!(ExportFormat::from_str("md").unwrap(), ExportFormat::Markdown);
+        assert_eq!(
+            ExportFormat::from_str("markdown").unwrap(),
+            ExportFormat::Markdown
+        );
+        assert_eq!(
+            ExportFormat::from_str("md").unwrap(),
+            ExportFormat::Markdown
+        );
         assert!(ExportFormat::from_str("unknown").is_err());
     }
 

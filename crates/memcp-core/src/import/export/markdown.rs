@@ -67,9 +67,7 @@ pub fn write_markdown(
                 })
                 .unwrap_or_default();
 
-            let mut meta_parts = vec![
-                format!("source: {}", mem.source),
-            ];
+            let mut meta_parts = vec![format!("source: {}", mem.source)];
             if !tags_str.is_empty() {
                 meta_parts.push(format!("tags: {}", tags_str));
             }
@@ -144,8 +142,14 @@ mod tests {
         let output = String::from_utf8(buf).unwrap();
 
         // Both type_hint groups must appear as ## headings.
-        assert!(output.contains("## fact"), "output must contain ## fact header");
-        assert!(output.contains("## instruction"), "output must contain ## instruction header");
+        assert!(
+            output.contains("## fact"),
+            "output must contain ## fact header"
+        );
+        assert!(
+            output.contains("## instruction"),
+            "output must contain ## instruction header"
+        );
     }
 
     #[test]

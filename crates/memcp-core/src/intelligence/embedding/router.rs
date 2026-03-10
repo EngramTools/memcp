@@ -4,9 +4,9 @@
 //! (type_hint, stability, content length). Supports single-tier (backward compat)
 //! and multi-tier (e.g., fast local + quality API) configurations.
 
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-use async_trait::async_trait;
 
 use super::{EmbeddingError, EmbeddingProvider};
 use crate::config::RoutingConfig;
@@ -31,14 +31,18 @@ pub struct EmbeddingRouter {
 impl EmbeddingRouter {
     /// Create a new router from a map of tier names to (provider, routing rules) pairs.
     pub fn new(
-        tiers: HashMap<String, (Arc<dyn EmbeddingProvider + Send + Sync>, Option<RoutingConfig>)>,
+        tiers: HashMap<
+            String,
+            (
+                Arc<dyn EmbeddingProvider + Send + Sync>,
+                Option<RoutingConfig>,
+            ),
+        >,
         default_tier: String,
     ) -> Self {
         let entries = tiers
             .into_iter()
-            .map(|(name, (provider, routing))| {
-                (name, TierEntry { provider, routing })
-            })
+            .map(|(name, (provider, routing))| (name, TierEntry { provider, routing }))
             .collect();
         EmbeddingRouter {
             tiers: entries,
@@ -53,7 +57,12 @@ impl EmbeddingRouter {
     /// 2. Check each non-default tier's routing rules. A tier matches if ALL
     ///    specified conditions are met (min_stability AND type_hints AND min_content_length).
     /// 3. If no non-default tier matches, return default.
-    pub fn route(&self, type_hint: Option<&str>, stability: Option<f64>, content_length: usize) -> &str {
+    pub fn route(
+        &self,
+        type_hint: Option<&str>,
+        stability: Option<f64>,
+        content_length: usize,
+    ) -> &str {
         if self.tiers.len() <= 1 {
             return &self.default_tier;
         }

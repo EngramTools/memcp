@@ -95,28 +95,38 @@ mod tests {
     fn test_min_chars_filter() {
         let filter = NoiseFilter::new(&[]);
         assert!(filter.is_noise("short"));
-        assert!(!filter.is_noise("This is a long enough string that should pass the minimum character check"));
+        assert!(!filter
+            .is_noise("This is a long enough string that should pass the minimum character check"));
     }
 
     #[test]
     fn test_pattern_matching() {
         let filter = NoiseFilter::new(&["HEARTBEAT_OK".to_string()]);
-        assert!(filter.is_noise("HEARTBEAT_OK - system status ping at 14:32:05 from monitor agent running"));
-        assert!(!filter.is_noise("The user prefers dark mode for all their coding tools and applications"));
+        assert!(filter
+            .is_noise("HEARTBEAT_OK - system status ping at 14:32:05 from monitor agent running"));
+        assert!(!filter
+            .is_noise("The user prefers dark mode for all their coding tools and applications"));
     }
 
     #[test]
     fn test_openclaw_noise_patterns() {
         let filter = NoiseFilter::new_for_openclaw(&[]);
         assert!(filter.is_noise("HEARTBEAT_OK timestamp 2024-01-01 system check passed"));
-        assert!(filter.is_noise("Token Monitor Report: 45000 tokens used in current context window"));
-        assert!(filter.is_noise("Switchboard - Cross-Subagent routing to vita agent for task completion"));
-        assert!(!filter.is_noise("User prefers Rust over Go for backend services due to memory safety guarantees"));
+        assert!(
+            filter.is_noise("Token Monitor Report: 45000 tokens used in current context window")
+        );
+        assert!(filter
+            .is_noise("Switchboard - Cross-Subagent routing to vita agent for task completion"));
+        assert!(!filter.is_noise(
+            "User prefers Rust over Go for backend services due to memory safety guarantees"
+        ));
     }
 
     #[test]
     fn test_case_insensitive_matching() {
         let filter = NoiseFilter::new(&["heartbeat_ok".to_string()]);
-        assert!(filter.is_noise("HEARTBEAT_OK - uppercase should still match lowercase pattern filter"));
+        assert!(
+            filter.is_noise("HEARTBEAT_OK - uppercase should still match lowercase pattern filter")
+        );
     }
 }

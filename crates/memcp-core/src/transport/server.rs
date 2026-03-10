@@ -290,6 +290,8 @@ pub struct StoreMemoryParams {
     pub session_id: Option<String>,
     /// Agent's role when creating this memory (e.g., coder, reviewer, planner). Free-text, nullable.
     pub agent_role: Option<String>,
+    /// How this memory was created: 'session_summary', 'explicit_store', 'annotation', 'import'.
+    pub write_path: Option<String>,
     /// When true, bypasses secret/PII redaction. Default: false (redaction enabled).
     #[serde(default)]
     pub skip_redaction: Option<bool>,
@@ -712,6 +714,7 @@ Callable from code_execution_20260120 sandboxes."
             trust_level: params.trust_level,
             session_id: params.session_id,
             agent_role: params.agent_role,
+            write_path: params.write_path,
         };
 
         // Determine if sync store is requested

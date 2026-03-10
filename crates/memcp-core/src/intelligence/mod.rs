@@ -6,6 +6,6 @@
 //! feeds into transport/ (MCP server, CLI).
 
 pub mod embedding;
-pub mod search;
-pub mod recall;
 pub mod query_intelligence;
+pub mod recall;
+pub mod search;

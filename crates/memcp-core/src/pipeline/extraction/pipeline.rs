@@ -49,9 +49,13 @@ impl ExtractionPipeline {
                                 error = %e,
                                 "Failed to store extraction results"
                             );
-                            let _ = store.update_extraction_status(&job.memory_id, "failed").await;
+                            let _ = store
+                                .update_extraction_status(&job.memory_id, "failed")
+                                .await;
                         } else {
-                            let _ = store.update_extraction_status(&job.memory_id, "complete").await;
+                            let _ = store
+                                .update_extraction_status(&job.memory_id, "complete")
+                                .await;
                             tracing::debug!(
                                 memory_id = %job.memory_id,
                                 entities = result.entities.len(),
@@ -82,7 +86,9 @@ impl ExtractionPipeline {
                             error = %e,
                             "Extraction failed after 3 retries, marking as failed"
                         );
-                        let _ = store.update_extraction_status(&job.memory_id, "failed").await;
+                        let _ = store
+                            .update_extraction_status(&job.memory_id, "failed")
+                            .await;
                     }
                 }
             }

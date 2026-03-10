@@ -23,10 +23,7 @@ pub fn split_sentences(
     max_chars: usize,
     overlap_sentences: usize,
 ) -> Vec<Vec<String>> {
-    let sentences: Vec<String> = content
-        .unicode_sentences()
-        .map(|s| s.to_string())
-        .collect();
+    let sentences: Vec<String> = content.unicode_sentences().map(|s| s.to_string()).collect();
 
     if sentences.is_empty() {
         return vec![];
@@ -83,11 +80,7 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
 /// Truncates to `max_len` characters with "..." suffix if needed.
 /// Handles multi-byte characters safely via floor_char_boundary.
 pub fn extract_topic(content: &str, max_len: usize) -> String {
-    let first = content
-        .unicode_sentences()
-        .next()
-        .unwrap_or("")
-        .trim();
+    let first = content.unicode_sentences().next().unwrap_or("").trim();
 
     if first.len() > max_len {
         let boundary = floor_char_boundary(first, max_len.saturating_sub(3));
@@ -122,25 +115,33 @@ mod tests {
     fn test_split_single_chunk() {
         // All fits in one chunk
         let result = split_sentences("Hello world. This is a test.", 1000, 1);
-        assert!(result.is_empty(), "Should return empty when all fits in one chunk");
+        assert!(
+            result.is_empty(),
+            "Should return empty when all fits in one chunk"
+        );
     }
 
     #[test]
     fn test_split_multiple_chunks() {
-        let content = "First sentence. Second sentence. Third sentence. Fourth sentence. Fifth sentence. ";
+        let content =
+            "First sentence. Second sentence. Third sentence. Fourth sentence. Fifth sentence. ";
         let chunks = split_sentences(content, 40, 0);
         assert!(chunks.len() >= 2, "Should produce multiple chunks");
     }
 
     #[test]
     fn test_split_with_overlap() {
-        let content = "First sentence. Second sentence. Third sentence. Fourth sentence. Fifth sentence. ";
+        let content =
+            "First sentence. Second sentence. Third sentence. Fourth sentence. Fifth sentence. ";
         let chunks = split_sentences(content, 40, 1);
         if chunks.len() >= 2 {
             // Last sentence of chunk 0 should be first sentence of chunk 1
             let last_of_first = chunks[0].last().unwrap().clone();
             let first_of_second = chunks[1].first().unwrap().clone();
-            assert_eq!(last_of_first, first_of_second, "Overlap sentences should match");
+            assert_eq!(
+                last_of_first, first_of_second,
+                "Overlap sentences should match"
+            );
         }
     }
 

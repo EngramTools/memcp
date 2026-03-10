@@ -1,7 +1,7 @@
-/// GPT-4o API calling functions for the LongMemEval benchmark pipeline.
-///
-/// Provides answer generation from retrieved memories and binary judge scoring
-/// with exponential backoff retry on rate limits (429) and server errors (5xx).
+//! GPT-4o API calling functions for the LongMemEval benchmark pipeline.
+//!
+//! Provides answer generation from retrieved memories and binary judge scoring
+//! with exponential backoff retry on rate limits (429) and server errors (5xx).
 
 use reqwest::Client;
 use serde_json::json;

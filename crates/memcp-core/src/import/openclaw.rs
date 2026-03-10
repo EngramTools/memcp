@@ -60,9 +60,9 @@ impl OpenClawReader {
             Some(embedding_config.local_model.clone())
         };
 
-        let configured_dimension = embedding_config.dimension.or_else(|| {
-            configured_model.as_deref().and_then(model_dimension)
-        });
+        let configured_dimension = embedding_config
+            .dimension
+            .or_else(|| configured_model.as_deref().and_then(model_dimension));
 
         Self {
             agent_filter: agent,
@@ -92,7 +92,6 @@ impl OpenClawReader {
         // (e.g., "vita" from "~/.openclaw/memory/vita.sqlite")
         file_stem.to_string()
     }
-
 }
 
 #[async_trait]
@@ -139,7 +138,10 @@ impl ImportSource for OpenClawReader {
         let entries = match std::fs::read_dir(&openclaw_dir) {
             Ok(e) => e,
             Err(e) => {
-                warn!("Failed to read OpenClaw directory {:?}: {}", openclaw_dir, e);
+                warn!(
+                    "Failed to read OpenClaw directory {:?}: {}",
+                    openclaw_dir, e
+                );
                 return Ok(vec![]);
             }
         };
@@ -198,7 +200,7 @@ impl ImportSource for OpenClawReader {
                 .with_context(|| format!("Failed to open OpenClaw database {:?}", path))?;
 
             let mut sql = String::from(
-                "SELECT id, text, source, path, embedding, model, updated_at FROM chunks"
+                "SELECT id, text, source, path, embedding, model, updated_at FROM chunks",
             );
 
             // Apply agent filter via path LIKE clause.
@@ -209,30 +211,32 @@ impl ImportSource for OpenClawReader {
                 ));
             }
 
-            let mut stmt = conn.prepare(&sql)
+            let mut stmt = conn
+                .prepare(&sql)
                 .with_context(|| "Failed to prepare OpenClaw chunks query")?;
 
-            let rows: Vec<ChunkRow> = stmt.query_map([], |row| {
-                Ok(ChunkRow {
-                    _id: row.get(0)?,
-                    text: row.get(1)?,
-                    source: row.get(2)?,
-                    path: row.get(3)?,
-                    embedding: row.get(4)?,
-                    model: row.get(5)?,
-                    // updated_at is INTEGER (ms since epoch) in OpenClaw SQLite.
-                    updated_at_ms: row.get(6).ok(),
+            let rows: Vec<ChunkRow> = stmt
+                .query_map([], |row| {
+                    Ok(ChunkRow {
+                        _id: row.get(0)?,
+                        text: row.get(1)?,
+                        source: row.get(2)?,
+                        path: row.get(3)?,
+                        embedding: row.get(4)?,
+                        model: row.get(5)?,
+                        // updated_at is INTEGER (ms since epoch) in OpenClaw SQLite.
+                        updated_at_ms: row.get(6).ok(),
+                    })
                 })
-            })
-            .with_context(|| "Failed to query OpenClaw chunks")?
-            .filter_map(|r| match r {
-                Ok(row) => Some(row),
-                Err(e) => {
-                    tracing::warn!("Skipping malformed OpenClaw row: {}", e);
-                    None
-                }
-            })
-            .collect();
+                .with_context(|| "Failed to query OpenClaw chunks")?
+                .filter_map(|r| match r {
+                    Ok(row) => Some(row),
+                    Err(e) => {
+                        tracing::warn!("Skipping malformed OpenClaw row: {}", e);
+                        None
+                    }
+                })
+                .collect();
 
             let mut import_chunks = Vec::with_capacity(rows.len());
 
@@ -256,7 +260,10 @@ impl ImportSource for OpenClawReader {
                     "memory" => Some("fact".to_string()),
                     "sessions" => Some("observation".to_string()),
                     other => {
-                        debug!("Unknown OpenClaw source type '{}', defaulting to observation", other);
+                        debug!(
+                            "Unknown OpenClaw source type '{}', defaulting to observation",
+                            other
+                        );
                         Some("observation".to_string())
                     }
                 };
@@ -392,7 +399,8 @@ mod tests {
     fn test_embedding_reuse_match() {
         let v: Vec<f32> = vec![0.1; 384];
         let json = serde_json::to_string(&v).unwrap();
-        let result = try_reuse_embedding_inner(&json, "AllMiniLML6V2", Some("AllMiniLML6V2"), Some(384));
+        let result =
+            try_reuse_embedding_inner(&json, "AllMiniLML6V2", Some("AllMiniLML6V2"), Some(384));
         assert!(result.is_some());
         assert_eq!(result.unwrap().len(), 384);
     }
@@ -401,7 +409,8 @@ mod tests {
     fn test_embedding_reuse_model_mismatch() {
         let v: Vec<f32> = vec![0.1; 384];
         let json = serde_json::to_string(&v).unwrap();
-        let result = try_reuse_embedding_inner(&json, "OtherModel", Some("AllMiniLML6V2"), Some(384));
+        let result =
+            try_reuse_embedding_inner(&json, "OtherModel", Some("AllMiniLML6V2"), Some(384));
         assert!(result.is_none());
     }
 
@@ -409,7 +418,8 @@ mod tests {
     fn test_embedding_reuse_dimension_mismatch() {
         let v: Vec<f32> = vec![0.1; 512];
         let json = serde_json::to_string(&v).unwrap();
-        let result = try_reuse_embedding_inner(&json, "AllMiniLML6V2", Some("AllMiniLML6V2"), Some(384));
+        let result =
+            try_reuse_embedding_inner(&json, "AllMiniLML6V2", Some("AllMiniLML6V2"), Some(384));
         assert!(result.is_none());
     }
 

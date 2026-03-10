@@ -4,8 +4,8 @@
 //! create_summarization_provider factory. No DB or external LLM calls needed
 //! — uses #[test] or #[tokio::test].
 
-use memcp::summarization::create_summarization_provider;
 use memcp::config::SummarizationConfig;
+use memcp::summarization::create_summarization_provider;
 
 // ---------------------------------------------------------------------------
 // Test 1: SummarizationConfig defaults to disabled
@@ -69,7 +69,10 @@ fn test_create_summarization_provider_ollama_returns_some() {
         ..Default::default()
     };
     let result = create_summarization_provider(&config);
-    assert!(result.is_ok(), "ollama config should not error at construction time");
+    assert!(
+        result.is_ok(),
+        "ollama config should not error at construction time"
+    );
     assert!(
         result.unwrap().is_some(),
         "enabled ollama config should return Some provider"

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use metrics;
 
-use super::{EnrichmentProvider, EnrichmentError};
+use super::{EnrichmentError, EnrichmentProvider};
 use crate::config::EnrichmentConfig;
 use crate::consolidation::similarity::find_similar_memories;
 use crate::errors::MemcpError;
@@ -28,9 +28,8 @@ pub async fn run_enrichment(
     config: EnrichmentConfig,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), MemcpError> {
-    let mut interval = tokio::time::interval(
-        std::time::Duration::from_secs(config.sweep_interval_secs)
-    );
+    let mut interval =
+        tokio::time::interval(std::time::Duration::from_secs(config.sweep_interval_secs));
 
     loop {
         tokio::select! {
@@ -71,14 +70,16 @@ async fn run_enrichment_sweep(
     config: &EnrichmentConfig,
 ) -> Result<usize, MemcpError> {
     // 1. Fetch candidates — memories without the 'enriched' tag
-    let candidates = store.get_unenriched_memories(config.batch_limit as i64).await?;
+    let candidates = store
+        .get_unenriched_memories(config.batch_limit as i64)
+        .await?;
 
     if candidates.is_empty() {
         return Ok(0);
     }
 
-    let valid_tag_re = regex::Regex::new(r"^[a-zA-Z0-9_-]+$")
-        .expect("enrichment tag regex is valid");
+    let valid_tag_re =
+        regex::Regex::new(r"^[a-zA-Z0-9_-]+$").expect("enrichment tag regex is valid");
 
     let mut enriched_count = 0usize;
 
@@ -109,7 +110,9 @@ async fn run_enrichment_sweep(
 
         if neighbors.is_empty() {
             // No neighbors above threshold — mark as enriched to avoid re-scanning
-            store.add_memory_tag(&memory.id, "enriched").await
+            store
+                .add_memory_tag(&memory.id, "enriched")
+                .await
                 .unwrap_or_else(|e| {
                     tracing::warn!(memory_id = %memory.id, error = %e, "Failed to mark enriched");
                 });
@@ -118,12 +121,13 @@ async fn run_enrichment_sweep(
         }
 
         // 4. Collect neighbor content strings
-        let neighbor_contents: Vec<String> = neighbors.iter()
-            .map(|n| n.content.clone())
-            .collect();
+        let neighbor_contents: Vec<String> = neighbors.iter().map(|n| n.content.clone()).collect();
 
         // 5. Call LLM for tag suggestions (fail-open per memory)
-        let result = match provider.suggest_tags(&memory.content, &neighbor_contents).await {
+        let result = match provider
+            .suggest_tags(&memory.content, &neighbor_contents)
+            .await
+        {
             Ok(r) => r,
             Err(EnrichmentError::LlmUnavailable(e)) => {
                 tracing::warn!(

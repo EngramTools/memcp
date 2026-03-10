@@ -11,16 +11,22 @@
 mod common;
 use common::builders::MemoryBuilder;
 
-use std::sync::Arc;
 use memcp::store::postgres::PostgresMemoryStore;
 use memcp::store::MemoryStore;
-use sqlx::PgPool;
 use pgvector::Vector;
+use sqlx::PgPool;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Format embedding as postgres vector literal: '[0.1,0.2,...]'
 fn emb_str(emb: &[f32]) -> String {
-    format!("[{}]", emb.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","))
+    format!(
+        "[{}]",
+        emb.iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
 
 /// Normalize a vector in-place.
@@ -122,14 +128,20 @@ async fn test_discover_sweet_spot(pool: PgPool) {
         .unwrap();
 
     // Should contain the two sweet-spot memories
-    assert_eq!(results.len(), 2, "expected 2 sweet-spot results, got {}", results.len());
+    assert_eq!(
+        results.len(),
+        2,
+        "expected 2 sweet-spot results, got {}",
+        results.len()
+    );
 
     // All results must be within [0.3, 0.7]
     for (memory, sim) in &results {
         assert!(
             *sim >= 0.3 && *sim <= 0.7,
             "similarity {} for '{}' outside sweet spot [0.3, 0.7]",
-            sim, memory.content
+            sim,
+            memory.content
         );
     }
 }
@@ -186,7 +198,7 @@ async fn test_discover_respects_project_filter(pool: PgPool) {
                 .content("alpha project memory")
                 .source("test")
                 .project("alpha")
-                .build()
+                .build(),
         )
         .await
         .unwrap();
@@ -198,7 +210,7 @@ async fn test_discover_respects_project_filter(pool: PgPool) {
                 .content("beta project memory")
                 .source("test")
                 .project("beta")
-                .build()
+                .build(),
         )
         .await
         .unwrap();
@@ -212,6 +224,10 @@ async fn test_discover_respects_project_filter(pool: PgPool) {
         .await
         .unwrap();
 
-    assert_eq!(results.len(), 1, "project filter: expected 1 result for alpha");
+    assert_eq!(
+        results.len(),
+        1,
+        "project filter: expected 1 result for alpha"
+    );
     assert_eq!(results[0].0.content, "alpha project memory");
 }

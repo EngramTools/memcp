@@ -8,8 +8,8 @@ pub mod ollama;
 pub mod openai;
 
 use async_trait::async_trait;
-use thiserror::Error;
 use std::sync::Arc;
+use thiserror::Error;
 
 use crate::config::SummarizationConfig;
 
@@ -79,4 +79,3 @@ pub fn create_summarization_provider(
 
     Ok(Some(provider))
 }
-

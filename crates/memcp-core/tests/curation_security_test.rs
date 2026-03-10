@@ -23,7 +23,11 @@ async fn store_and_embed_for_test(
     let embedding: Vec<f32> = vec![0.1f32; 384];
     let embedding_str = format!(
         "[{}]",
-        embedding.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
+        embedding
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
     );
     let emb_id = Uuid::new_v4().to_string();
 
@@ -76,23 +80,29 @@ fn test_memory(content: &str) -> CreateMemory {
 async fn test_quarantine_adds_tag_and_sets_trust(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool.clone()).await.unwrap();
 
-    let mem = store.store(test_memory("some content to quarantine")).await.unwrap();
+    let mem = store
+        .store(test_memory("some content to quarantine"))
+        .await
+        .unwrap();
     assert!((mem.trust_level - 0.5).abs() < 0.01);
 
     // Quarantine the memory
     store.add_memory_tag(&mem.id, "suspicious").await.unwrap();
     store
-        .update_trust_level(&mem.id, 0.05, "quarantined: test reason [signals: override_instruction]")
+        .update_trust_level(
+            &mem.id,
+            0.05,
+            "quarantined: test reason [signals: override_instruction]",
+        )
         .await
         .unwrap();
 
     // Verify tag was added
-    let updated: serde_json::Value =
-        sqlx::query_scalar("SELECT tags FROM memories WHERE id = $1")
-            .bind(&mem.id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let updated: serde_json::Value = sqlx::query_scalar("SELECT tags FROM memories WHERE id = $1")
+        .bind(&mem.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     let tags_arr = updated.as_array().unwrap();
     assert!(
         tags_arr.iter().any(|t| t.as_str() == Some("suspicious")),
@@ -100,13 +110,16 @@ async fn test_quarantine_adds_tag_and_sets_trust(pool: PgPool) {
     );
 
     // Verify trust_level was set to 0.05
-    let trust: f32 =
-        sqlx::query_scalar("SELECT trust_level FROM memories WHERE id = $1")
-            .bind(&mem.id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert!((trust - 0.05).abs() < 0.01, "Trust should be 0.05 after quarantine, got {}", trust);
+    let trust: f32 = sqlx::query_scalar("SELECT trust_level FROM memories WHERE id = $1")
+        .bind(&mem.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        (trust - 0.05).abs() < 0.01,
+        "Trust should be 0.05 after quarantine, got {}",
+        trust
+    );
 
     // Verify trust_history audit entry
     let metadata: serde_json::Value =
@@ -116,7 +129,10 @@ async fn test_quarantine_adds_tag_and_sets_trust(pool: PgPool) {
             .await
             .unwrap();
     let history = metadata.get("trust_history").unwrap().as_array().unwrap();
-    assert!(!history.is_empty(), "trust_history should have at least one entry");
+    assert!(
+        !history.is_empty(),
+        "trust_history should have at least one entry"
+    );
     let entry = &history[0];
     assert!((entry["from"].as_f64().unwrap() - 0.5).abs() < 0.01);
     assert!((entry["to"].as_f64().unwrap() - 0.05).abs() < 0.01);
@@ -128,7 +144,12 @@ async fn test_quarantined_excluded_from_hybrid_search(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool.clone()).await.unwrap();
 
     // Store and embed a memory
-    let id = store_and_embed_for_test(&store, test_memory("important fact about rust programming"), &pool).await;
+    let id = store_and_embed_for_test(
+        &store,
+        test_memory("important fact about rust programming"),
+        &pool,
+    )
+    .await;
 
     // Verify it appears in BM25 search before quarantine
     let results_before = store.search_bm25("rust programming", 10).await.unwrap();
@@ -139,7 +160,10 @@ async fn test_quarantined_excluded_from_hybrid_search(pool: PgPool) {
 
     // Quarantine it
     store.add_memory_tag(&id, "suspicious").await.unwrap();
-    store.update_trust_level(&id, 0.05, "quarantined: test").await.unwrap();
+    store
+        .update_trust_level(&id, 0.05, "quarantined: test")
+        .await
+        .unwrap();
 
     // Verify it does NOT appear in BM25 search
     let results_after = store.search_bm25("rust programming", 10).await.unwrap();
@@ -155,12 +179,20 @@ async fn test_quarantined_excluded_from_search_similar(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool.clone()).await.unwrap();
 
     // Store a normal memory and a quarantined memory with the same embedding
-    let id_normal = store_and_embed_for_test(&store, test_memory("normal memory about cats"), &pool).await;
-    let id_quarantined = store_and_embed_for_test(&store, test_memory("quarantined memory about cats"), &pool).await;
+    let id_normal =
+        store_and_embed_for_test(&store, test_memory("normal memory about cats"), &pool).await;
+    let id_quarantined =
+        store_and_embed_for_test(&store, test_memory("quarantined memory about cats"), &pool).await;
 
     // Quarantine the second one
-    store.add_memory_tag(&id_quarantined, "suspicious").await.unwrap();
-    store.update_trust_level(&id_quarantined, 0.05, "quarantined: test").await.unwrap();
+    store
+        .add_memory_tag(&id_quarantined, "suspicious")
+        .await
+        .unwrap();
+    store
+        .update_trust_level(&id_quarantined, 0.05, "quarantined: test")
+        .await
+        .unwrap();
 
     // Search similar using the same zero embedding
     let embedding = pgvector::Vector::from(vec![0.0f32; 384]);
@@ -192,23 +224,28 @@ async fn test_quarantined_excluded_from_search_similar(pool: PgPool) {
 async fn test_unquarantine_restores_trust(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool.clone()).await.unwrap();
 
-    let mem = store.store(test_memory("memory to unquarantine")).await.unwrap();
+    let mem = store
+        .store(test_memory("memory to unquarantine"))
+        .await
+        .unwrap();
     let original_trust = mem.trust_level; // 0.5
 
     // Quarantine
     store.add_memory_tag(&mem.id, "suspicious").await.unwrap();
-    store.update_trust_level(&mem.id, 0.05, "quarantined: test").await.unwrap();
+    store
+        .update_trust_level(&mem.id, 0.05, "quarantined: test")
+        .await
+        .unwrap();
 
     // Un-quarantine
     store.unquarantine_memory(&mem.id).await.unwrap();
 
     // Verify tag removed
-    let tags: serde_json::Value =
-        sqlx::query_scalar("SELECT tags FROM memories WHERE id = $1")
-            .bind(&mem.id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let tags: serde_json::Value = sqlx::query_scalar("SELECT tags FROM memories WHERE id = $1")
+        .bind(&mem.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     let empty_vec = vec![];
     let tags_arr = tags.as_array().unwrap_or(&empty_vec);
     assert!(
@@ -217,12 +254,11 @@ async fn test_unquarantine_restores_trust(pool: PgPool) {
     );
 
     // Verify trust restored
-    let trust: f32 =
-        sqlx::query_scalar("SELECT trust_level FROM memories WHERE id = $1")
-            .bind(&mem.id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let trust: f32 = sqlx::query_scalar("SELECT trust_level FROM memories WHERE id = $1")
+        .bind(&mem.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert!(
         (trust - original_trust).abs() < 0.01,
         "Trust should be restored to {} after un-quarantine, got {}",
@@ -236,11 +272,19 @@ async fn test_unquarantine_restores_trust(pool: PgPool) {
 async fn test_unquarantined_reappears_in_search(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool.clone()).await.unwrap();
 
-    let id = store_and_embed_for_test(&store, test_memory("unique content about quantum physics"), &pool).await;
+    let id = store_and_embed_for_test(
+        &store,
+        test_memory("unique content about quantum physics"),
+        &pool,
+    )
+    .await;
 
     // Quarantine
     store.add_memory_tag(&id, "suspicious").await.unwrap();
-    store.update_trust_level(&id, 0.05, "quarantined: test").await.unwrap();
+    store
+        .update_trust_level(&id, 0.05, "quarantined: test")
+        .await
+        .unwrap();
 
     // Verify not in BM25 search
     let results_quarantined = store.search_bm25("quantum physics", 10).await.unwrap();

@@ -13,9 +13,9 @@ use axum::{
 };
 use serde_json::json;
 
+use super::types::error_json;
 use crate::store::MemoryStore;
 use crate::transport::health::AppState;
-use super::types::error_json;
 
 /// DELETE /v1/memories/{id}
 ///
@@ -31,12 +31,20 @@ pub async fn handle_delete(
     Path(id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     if !state.ready.load(Ordering::Acquire) {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(error_json("daemon not ready")));
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(error_json("daemon not ready")),
+        );
     }
 
     let store = match &state.store {
         Some(s) => s.clone(),
-        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(error_json("store not available"))),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_json("store not available")),
+            )
+        }
     };
 
     if id.trim().is_empty() {
@@ -47,17 +55,26 @@ pub async fn handle_delete(
     if let Err(e) = store.get(&id).await {
         let msg = e.to_string();
         if msg.contains("not found") || msg.contains("NotFound") {
-            return (StatusCode::NOT_FOUND, Json(error_json(&format!("Memory not found: {}", id))));
+            return (
+                StatusCode::NOT_FOUND,
+                Json(error_json(&format!("Memory not found: {}", id))),
+            );
         }
         tracing::warn!(error = %e, memory_id = %id, "delete existence check failed");
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(error_json(&format!("Delete failed: {}", e))));
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(error_json(&format!("Delete failed: {}", e))),
+        );
     }
 
     match store.delete(&id).await {
         Ok(()) => (StatusCode::NO_CONTENT, Json(json!({}))),
         Err(e) => {
             tracing::warn!(error = %e, memory_id = %id, "delete failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_json(&format!("Delete failed: {}", e))))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(error_json(&format!("Delete failed: {}", e))),
+            )
         }
     }
 }

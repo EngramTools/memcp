@@ -14,8 +14,8 @@ use tokio::sync::mpsc;
 
 use crate::config::DedupConfig;
 use crate::consolidation::similarity::find_similar_memories;
-use crate::store::MemoryStore;
 use crate::store::postgres::PostgresMemoryStore;
+use crate::store::MemoryStore;
 
 /// A job sent to the dedup worker after a memory's embedding is complete.
 pub struct DedupJob {
@@ -43,7 +43,11 @@ impl DedupWorker {
         config: DedupConfig,
         receiver: mpsc::Receiver<DedupJob>,
     ) -> Self {
-        DedupWorker { store, config, receiver }
+        DedupWorker {
+            store,
+            config,
+            receiver,
+        }
     }
 
     /// Run the dedup event loop.
@@ -109,7 +113,11 @@ impl DedupWorker {
 
                 let source_info = job.memory_id.as_str();
 
-                match self.store.merge_duplicate(&existing_id, &job.memory_id, source_info).await {
+                match self
+                    .store
+                    .merge_duplicate(&existing_id, &job.memory_id, source_info)
+                    .await
+                {
                     Ok(()) => {
                         // Update dedup merge count metric (DB-level) and Prometheus counter
                         if let Err(e) = self.store.increment_dedup_merges().await {

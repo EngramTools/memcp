@@ -196,7 +196,11 @@ impl<'a> SalienceScorer<'a> {
         }
 
         // Step 4: Sort by salience descending
-        hits.sort_by(|a, b| b.salience_score.partial_cmp(&a.salience_score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.salience_score
+                .partial_cmp(&a.salience_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 }
 
@@ -241,4 +245,3 @@ pub fn dedup_parent_chunks(hits: &mut Vec<ScoredHit>) {
         }
     });
 }
-

@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 
-use super::{EmbeddingError, EmbeddingProvider, model_dimension};
+use super::{model_dimension, EmbeddingError, EmbeddingProvider};
 
 /// Request body for OpenAI Embeddings API
 #[derive(serde::Serialize)]
@@ -123,17 +123,18 @@ impl EmbeddingProvider for OpenAIEmbeddingProvider {
             });
         }
 
-        let embed_response: EmbedResponse = response
-            .json()
-            .await
-            .map_err(|e| EmbeddingError::Generation(format!("Failed to parse API response: {}", e)))?;
+        let embed_response: EmbedResponse = response.json().await.map_err(|e| {
+            EmbeddingError::Generation(format!("Failed to parse API response: {}", e))
+        })?;
 
         embed_response
             .data
             .into_iter()
             .next()
             .map(|d| d.embedding)
-            .ok_or_else(|| EmbeddingError::Generation("API returned empty embedding list".to_string()))
+            .ok_or_else(|| {
+                EmbeddingError::Generation("API returned empty embedding list".to_string())
+            })
     }
 
     fn model_name(&self) -> &str {

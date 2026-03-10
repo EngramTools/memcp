@@ -5,13 +5,13 @@
 //! Gracefully handles missing files (log warning, retry on next poll).
 //! Supports both specific file paths and directory paths (watches for new `.jsonl` files).
 
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 /// A new line read from a watched file.
 #[derive(Debug, Clone)]
@@ -316,13 +316,16 @@ async fn process_file(
     state.offset = new_offset;
 
     for line in lines {
-        if tx.send(WatchEvent {
-            path: path.to_path_buf(),
-            line,
-        }).await.is_err() {
+        if tx
+            .send(WatchEvent {
+                path: path.to_path_buf(),
+                line,
+            })
+            .await
+            .is_err()
+        {
             tracing::warn!("Watch event channel closed");
             return;
         }
     }
 }
-

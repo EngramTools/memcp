@@ -7,9 +7,9 @@ use std::sync::atomic::Ordering;
 use axum::{extract::State, http::StatusCode, Json};
 use serde_json::json;
 
+use super::types::{error_json, AnnotateRequest};
 use crate::cli::annotate_logic;
 use crate::transport::health::AppState;
-use super::types::{AnnotateRequest, error_json};
 
 /// POST /v1/annotate
 ///
@@ -20,16 +20,27 @@ pub async fn annotate_handler(
     Json(req): Json<AnnotateRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     if !state.ready.load(Ordering::Acquire) {
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(error_json("daemon not ready")));
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(error_json("daemon not ready")),
+        );
     }
 
     let store = match &state.store {
         Some(s) => s.clone(),
-        None => return (StatusCode::SERVICE_UNAVAILABLE, Json(error_json("store not available"))),
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_json("store not available")),
+            )
+        }
     };
 
     if req.id.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(error_json("id is required and must not be empty")));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_json("id is required and must not be empty")),
+        );
     }
 
     match annotate_logic(&store, &req.id, req.tags, req.replace_tags, req.salience).await {
@@ -50,10 +61,16 @@ pub async fn annotate_handler(
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("Memory not found") || msg.contains("not found") {
-                (StatusCode::NOT_FOUND, Json(error_json(&format!("Memory not found: {}", req.id))))
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(error_json(&format!("Memory not found: {}", req.id))),
+                )
             } else {
                 tracing::warn!(error = %e, memory_id = %req.id, "annotate failed");
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(error_json(&format!("Annotate failed: {}", e))))
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(error_json(&format!("Annotate failed: {}", e))),
+                )
             }
         }
     }

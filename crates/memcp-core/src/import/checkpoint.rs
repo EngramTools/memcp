@@ -110,10 +110,7 @@ pub fn find_latest_import_dir() -> Option<PathBuf> {
         .collect();
 
     // Sort descending by name (timestamp embedded in dir name ensures chronological order).
-    entries.sort_by(|a, b| {
-        b.file_name()
-            .cmp(&a.file_name())
-    });
+    entries.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
 
     entries.into_iter().next()
 }

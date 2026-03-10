@@ -107,7 +107,10 @@ impl ImportCurator {
         let response = match self.provider.summarize(&prompt).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("LLM classification call failed: {} — defaulting to keep all", e);
+                tracing::warn!(
+                    "LLM classification call failed: {} — defaulting to keep all",
+                    e
+                );
                 return vec![CurationDecision::default(); chunks.len()];
             }
         };
@@ -128,7 +131,10 @@ impl ImportCurator {
             title, content
         );
 
-        let summary = self.provider.summarize(&prompt).await
+        let summary = self
+            .provider
+            .summarize(&prompt)
+            .await
             .map_err(|e| anyhow::anyhow!("LLM summarization failed: {}", e))?;
 
         Ok(summary)
@@ -189,18 +195,32 @@ fn parse_classification_response(response: &str, expected: usize) -> Vec<Curatio
             _ => continue,
         };
 
-        let action = parts.get(1).map(|s| parse_action(s)).unwrap_or(CurationAction::Keep);
-        let type_hint = parts.get(2)
+        let action = parts
+            .get(1)
+            .map(|s| parse_action(s))
+            .unwrap_or(CurationAction::Keep);
+        let type_hint = parts
+            .get(2)
             .filter(|s| is_valid_type_hint(s))
             .map(|s| s.to_string())
             .unwrap_or_else(|| "observation".to_string());
-        let topic = parts.get(3).filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_string());
+        let topic = parts
+            .get(3)
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_string());
 
-        decisions[idx] = Some(CurationDecision { action, type_hint, topic });
+        decisions[idx] = Some(CurationDecision {
+            action,
+            type_hint,
+            topic,
+        });
     }
 
     // Fill any unset positions with the default.
-    decisions.into_iter().map(|d| d.unwrap_or_default()).collect()
+    decisions
+        .into_iter()
+        .map(|d| d.unwrap_or_default())
+        .collect()
 }
 
 fn parse_action(s: &str) -> CurationAction {
@@ -213,7 +233,10 @@ fn parse_action(s: &str) -> CurationAction {
 }
 
 fn is_valid_type_hint(s: &str) -> bool {
-    matches!(s, "fact" | "preference" | "instruction" | "decision" | "observation")
+    matches!(
+        s,
+        "fact" | "preference" | "instruction" | "decision" | "observation"
+    )
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -273,19 +296,17 @@ mod tests {
 
     #[test]
     fn test_build_classification_prompt_contains_chunks() {
-        let chunks = vec![
-            ImportChunk {
-                content: "User prefers dark mode for all editors.".to_string(),
-                type_hint: None,
-                source: "test".to_string(),
-                tags: vec![],
-                created_at: None,
-                actor: None,
-                embedding: None,
-                embedding_model: None,
-                project: None,
-            },
-        ];
+        let chunks = vec![ImportChunk {
+            content: "User prefers dark mode for all editors.".to_string(),
+            type_hint: None,
+            source: "test".to_string(),
+            tags: vec![],
+            created_at: None,
+            actor: None,
+            embedding: None,
+            embedding_model: None,
+            project: None,
+        }];
         let prompt = build_classification_prompt(&chunks);
         assert!(prompt.contains("[1]"));
         assert!(prompt.contains("dark mode"));

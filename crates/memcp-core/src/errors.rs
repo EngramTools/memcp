@@ -13,13 +13,11 @@ pub enum MemcpError {
     #[error("Validation error: {message}")]
     Validation {
         message: String,
-        field: Option<String>
+        field: Option<String>,
     },
 
     #[error("Memory not found: {id}")]
-    NotFound {
-        id: String
-    },
+    NotFound { id: String },
 
     #[error("Configuration error: {0}")]
     Config(String),

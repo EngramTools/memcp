@@ -131,7 +131,11 @@ pub async fn batch_insert_memories(
                 // Format embedding as pgvector literal.
                 let embedding_str = format!(
                     "[{}]",
-                    embedding.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")
+                    embedding
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
                 );
 
                 if let Err(e) = sqlx::query(
@@ -157,13 +161,11 @@ pub async fn batch_insert_memories(
                     warn!("Failed to insert embedding for memory {}: {}", id, e);
                     // Non-fatal: memory was inserted, embedding insertion failed.
                     // Daemon will re-embed from pending status.
-                    sqlx::query(
-                        "UPDATE memories SET embedding_status = 'pending' WHERE id = $1"
-                    )
-                    .bind(&id)
-                    .execute(&mut *tx)
-                    .await
-                    .ok();
+                    sqlx::query("UPDATE memories SET embedding_status = 'pending' WHERE id = $1")
+                        .bind(&id)
+                        .execute(&mut *tx)
+                        .await
+                        .ok();
                 }
             }
         }

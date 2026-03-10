@@ -7,10 +7,10 @@
 mod common;
 use common::builders::MemoryBuilder;
 
-use memcp::store::postgres::PostgresMemoryStore;
-use memcp::store::MemoryStore;
 use memcp::config::{GcConfig, IdempotencyConfig};
 use memcp::gc::run_gc;
+use memcp::store::postgres::PostgresMemoryStore;
+use memcp::store::MemoryStore;
 use sqlx::PgPool;
 
 /// Set low stability for a memory (override whatever was set by store()).
@@ -29,25 +29,22 @@ async fn set_stability(pool: &PgPool, memory_id: &str, stability: f32) {
 
 /// Set a memory's created_at to a past timestamp for min_age_days testing.
 async fn set_created_at_days_ago(pool: &PgPool, memory_id: &str, days_ago: i64) {
-    sqlx::query(
-        "UPDATE memories SET created_at = NOW() - ($1 || ' days')::interval WHERE id = $2",
-    )
-    .bind(days_ago.to_string())
-    .bind(memory_id)
-    .execute(pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE memories SET created_at = NOW() - ($1 || ' days')::interval WHERE id = $2")
+        .bind(days_ago.to_string())
+        .bind(memory_id)
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 /// Returns true if the memory has been soft-deleted (deleted_at IS NOT NULL).
 async fn is_soft_deleted(pool: &PgPool, memory_id: &str) -> bool {
-    let row: Option<bool> = sqlx::query_scalar(
-        "SELECT deleted_at IS NOT NULL FROM memories WHERE id = $1",
-    )
-    .bind(memory_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap();
+    let row: Option<bool> =
+        sqlx::query_scalar("SELECT deleted_at IS NOT NULL FROM memories WHERE id = $1")
+            .bind(memory_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap();
     row.unwrap_or(false)
 }
 
@@ -73,7 +70,11 @@ async fn test_gc_prunes_low_salience(pool: PgPool) {
     let mut ids = Vec::new();
     for i in 0..5 {
         let m = store
-            .store(MemoryBuilder::new().content(&format!("GC prune test memory {}", i)).build())
+            .store(
+                MemoryBuilder::new()
+                    .content(&format!("GC prune test memory {}", i))
+                    .build(),
+            )
             .await
             .unwrap();
         ids.push(m.id);
@@ -91,24 +92,42 @@ async fn test_gc_prunes_low_salience(pool: PgPool) {
 
     let config = GcConfig {
         enabled: true,
-        salience_threshold: 0.5,  // threshold: stability < 0.5 = candidate
-        min_age_days: 1,          // 1 day old minimum
-        min_memory_floor: 0,      // no floor (0 so GC runs)
+        salience_threshold: 0.5, // threshold: stability < 0.5 = candidate
+        min_age_days: 1,         // 1 day old minimum
+        min_memory_floor: 0,     // no floor (0 so GC runs)
         gc_interval_secs: 3600,
         hard_purge_grace_days: 30,
     };
 
     let result = run_gc(&store, &config, false).await.unwrap();
-    assert!(result.pruned_count >= 2, "should prune at least 2 low-salience memories");
+    assert!(
+        result.pruned_count >= 2,
+        "should prune at least 2 low-salience memories"
+    );
 
     // Verify soft-delete
-    assert!(is_soft_deleted(&pool, &ids[0]).await, "low-salience memory 0 should be soft-deleted");
-    assert!(is_soft_deleted(&pool, &ids[1]).await, "low-salience memory 1 should be soft-deleted");
+    assert!(
+        is_soft_deleted(&pool, &ids[0]).await,
+        "low-salience memory 0 should be soft-deleted"
+    );
+    assert!(
+        is_soft_deleted(&pool, &ids[1]).await,
+        "low-salience memory 1 should be soft-deleted"
+    );
 
     // High-salience memories should NOT be deleted
-    assert!(!is_soft_deleted(&pool, &ids[2]).await, "high-salience memory 2 should NOT be deleted");
-    assert!(!is_soft_deleted(&pool, &ids[3]).await, "high-salience memory 3 should NOT be deleted");
-    assert!(!is_soft_deleted(&pool, &ids[4]).await, "high-salience memory 4 should NOT be deleted");
+    assert!(
+        !is_soft_deleted(&pool, &ids[2]).await,
+        "high-salience memory 2 should NOT be deleted"
+    );
+    assert!(
+        !is_soft_deleted(&pool, &ids[3]).await,
+        "high-salience memory 3 should NOT be deleted"
+    );
+    assert!(
+        !is_soft_deleted(&pool, &ids[4]).await,
+        "high-salience memory 4 should NOT be deleted"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +142,11 @@ async fn test_gc_respects_min_age(pool: PgPool) {
     let mut ids = Vec::new();
     for i in 0..3 {
         let m = store
-            .store(MemoryBuilder::new().content(&format!("Recent memory {}", i)).build())
+            .store(
+                MemoryBuilder::new()
+                    .content(&format!("Recent memory {}", i))
+                    .build(),
+            )
             .await
             .unwrap();
         ids.push(m.id);
@@ -151,7 +174,10 @@ async fn test_gc_respects_min_age(pool: PgPool) {
     );
 
     for id in &ids {
-        assert!(!is_soft_deleted(&pool, id).await, "recent memory should NOT be soft-deleted");
+        assert!(
+            !is_soft_deleted(&pool, id).await,
+            "recent memory should NOT be soft-deleted"
+        );
     }
 }
 
@@ -167,7 +193,11 @@ async fn test_gc_min_memory_floor(pool: PgPool) {
     let mut ids = Vec::new();
     for i in 0..3 {
         let m = store
-            .store(MemoryBuilder::new().content(&format!("Floor test memory {}", i)).build())
+            .store(
+                MemoryBuilder::new()
+                    .content(&format!("Floor test memory {}", i))
+                    .build(),
+            )
             .await
             .unwrap();
         ids.push(m.id);
@@ -193,7 +223,8 @@ async fn test_gc_min_memory_floor(pool: PgPool) {
     let reason = result.skipped_reason.unwrap();
     assert!(
         reason.contains("floor") || reason.contains("below"),
-        "skip reason should mention floor: {}", reason
+        "skip reason should mention floor: {}",
+        reason
     );
 }
 
@@ -207,7 +238,11 @@ async fn test_gc_ttl_expiry(pool: PgPool) {
 
     // Store a memory and set expires_at to yesterday
     let m = store
-        .store(MemoryBuilder::new().content("TTL expiry test memory").build())
+        .store(
+            MemoryBuilder::new()
+                .content("TTL expiry test memory")
+                .build(),
+        )
         .await
         .unwrap();
 
@@ -233,9 +268,18 @@ async fn test_gc_ttl_expiry(pool: PgPool) {
     };
 
     let result = run_gc(&store, &config, false).await.unwrap();
-    assert!(result.expired_count >= 1, "should expire at least 1 TTL-expired memory");
-    assert!(is_soft_deleted(&pool, &m.id).await, "TTL-expired memory should be soft-deleted");
-    assert!(!is_soft_deleted(&pool, &m2.id).await, "non-expired memory should NOT be soft-deleted");
+    assert!(
+        result.expired_count >= 1,
+        "should expire at least 1 TTL-expired memory"
+    );
+    assert!(
+        is_soft_deleted(&pool, &m.id).await,
+        "TTL-expired memory should be soft-deleted"
+    );
+    assert!(
+        !is_soft_deleted(&pool, &m2.id).await,
+        "non-expired memory should NOT be soft-deleted"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -248,22 +292,28 @@ async fn test_gc_hard_purge(pool: PgPool) {
 
     // Store 2 memories: one will be soft-deleted (to purge), one live (to avoid floor skip)
     let m_live = store
-        .store(MemoryBuilder::new().content("Live memory for floor").build())
+        .store(
+            MemoryBuilder::new()
+                .content("Live memory for floor")
+                .build(),
+        )
         .await
         .unwrap();
     let m_delete = store
-        .store(MemoryBuilder::new().content("Hard purge test memory").build())
+        .store(
+            MemoryBuilder::new()
+                .content("Hard purge test memory")
+                .build(),
+        )
         .await
         .unwrap();
 
     // Soft-delete m_delete with deleted_at 60 days ago (past grace period of 30 days)
-    sqlx::query(
-        "UPDATE memories SET deleted_at = NOW() - '60 days'::interval WHERE id = $1",
-    )
-    .bind(&m_delete.id)
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE memories SET deleted_at = NOW() - '60 days'::interval WHERE id = $1")
+        .bind(&m_delete.id)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     // Live count is 1 (m_live), floor=0 so GC won't skip
     let config = GcConfig {
@@ -281,8 +331,14 @@ async fn test_gc_hard_purge(pool: PgPool) {
         "should hard-purge at least 1 old soft-deleted memory, got hard_purged_count={}",
         result.hard_purged_count
     );
-    assert!(is_hard_purged(&pool, &m_delete.id).await, "hard-purged memory should no longer exist in DB");
-    assert!(!is_hard_purged(&pool, &m_live.id).await, "live memory should still exist");
+    assert!(
+        is_hard_purged(&pool, &m_delete.id).await,
+        "hard-purged memory should no longer exist in DB"
+    );
+    assert!(
+        !is_hard_purged(&pool, &m_live.id).await,
+        "live memory should still exist"
+    );
     let _ = m_live; // suppress unused warning
 }
 
@@ -298,7 +354,11 @@ async fn test_gc_dry_run(pool: PgPool) {
     let mut ids = Vec::new();
     for i in 0..3 {
         let m = store
-            .store(MemoryBuilder::new().content(&format!("Dry run test memory {}", i)).build())
+            .store(
+                MemoryBuilder::new()
+                    .content(&format!("Dry run test memory {}", i))
+                    .build(),
+            )
             .await
             .unwrap();
         ids.push(m.id.clone());
@@ -390,13 +450,11 @@ async fn test_content_hash_dedup_outside_window(pool: PgPool) {
     // Manually backdate created_at so it's outside the 1-second window.
     // The dedup query checks `created_at > NOW() - window`, so backdating
     // created_at on the memories table is sufficient.
-    sqlx::query(
-        "UPDATE memories SET created_at = NOW() - '1 hour'::interval WHERE id = $1",
-    )
-    .bind(&first.id)
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE memories SET created_at = NOW() - '1 hour'::interval WHERE id = $1")
+        .bind(&first.id)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     // Store same content again — should create new memory (outside window)
     let second = store

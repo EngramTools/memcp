@@ -55,7 +55,10 @@ pub fn write_jsonl(
             let map = obj.as_object_mut().unwrap();
             map.insert("stability".to_string(), json!(mem.stability));
             map.insert("difficulty".to_string(), json!(mem.difficulty));
-            map.insert("reinforcement_count".to_string(), json!(mem.reinforcement_count));
+            map.insert(
+                "reinforcement_count".to_string(),
+                json!(mem.reinforcement_count),
+            );
             if let Some(ts) = mem.last_reinforced_at {
                 map.insert("last_reinforced_at".to_string(), json!(ts.to_rfc3339()));
             }
@@ -87,7 +90,9 @@ mod tests {
             type_hint: type_hint.to_string(),
             source: "test".to_string(),
             tags: Some(serde_json::Value::Array(
-                tags.into_iter().map(|t| serde_json::Value::String(t.to_string())).collect(),
+                tags.into_iter()
+                    .map(|t| serde_json::Value::String(t.to_string()))
+                    .collect(),
             )),
             created_at: Utc::now(),
             actor: None,
@@ -108,7 +113,11 @@ mod tests {
     #[test]
     fn test_jsonl_output_basic() {
         let memories = vec![
-            make_memory("Rust is great for memory safety", "fact", vec!["rust", "safety"]),
+            make_memory(
+                "Rust is great for memory safety",
+                "fact",
+                vec!["rust", "safety"],
+            ),
             make_memory("Dark mode preferred for coding", "preference", vec!["ui"]),
         ];
         let opts = ExportOpts::default();
@@ -122,16 +131,23 @@ mod tests {
 
         // Each line must be valid JSON.
         for line in &lines {
-            let parsed: serde_json::Value = serde_json::from_str(line).expect("line must be valid JSON");
+            let parsed: serde_json::Value =
+                serde_json::from_str(line).expect("line must be valid JSON");
             assert!(parsed.get("content").is_some(), "content field missing");
             assert!(parsed.get("type_hint").is_some(), "type_hint field missing");
             assert!(parsed.get("tags").is_some(), "tags field missing");
-            assert!(parsed.get("created_at").is_some(), "created_at field missing");
+            assert!(
+                parsed.get("created_at").is_some(),
+                "created_at field missing"
+            );
         }
 
         // Check specific values.
         let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
-        assert_eq!(first["content"].as_str().unwrap(), "Rust is great for memory safety");
+        assert_eq!(
+            first["content"].as_str().unwrap(),
+            "Rust is great for memory safety"
+        );
         assert_eq!(first["type_hint"].as_str().unwrap(), "fact");
         let tags = first["tags"].as_array().unwrap();
         assert_eq!(tags.len(), 2);
@@ -151,9 +167,18 @@ mod tests {
 
         let line = String::from_utf8(buf).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
-        assert!(parsed.get("stability").is_some(), "stability field missing when include_state=true");
-        assert!(parsed.get("difficulty").is_some(), "difficulty field missing when include_state=true");
-        assert!(parsed.get("reinforcement_count").is_some(), "reinforcement_count field missing");
+        assert!(
+            parsed.get("stability").is_some(),
+            "stability field missing when include_state=true"
+        );
+        assert!(
+            parsed.get("difficulty").is_some(),
+            "difficulty field missing when include_state=true"
+        );
+        assert!(
+            parsed.get("reinforcement_count").is_some(),
+            "reinforcement_count field missing"
+        );
     }
 
     #[test]
@@ -172,7 +197,10 @@ mod tests {
 
         let line = String::from_utf8(buf).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
-        assert!(parsed.get("embedding").is_some(), "embedding field missing when include_embeddings=true");
+        assert!(
+            parsed.get("embedding").is_some(),
+            "embedding field missing when include_embeddings=true"
+        );
         let embedding = parsed["embedding"].as_array().unwrap();
         assert_eq!(embedding.len(), 3);
     }

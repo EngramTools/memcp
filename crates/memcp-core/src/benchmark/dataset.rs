@@ -1,7 +1,7 @@
-/// LongMemEval dataset types for parsing and categorizing benchmark questions.
-///
-/// Matches the HuggingFace LongMemEval schema:
-/// https://huggingface.co/datasets/xiaowu0162/LongMemEval
+//! LongMemEval dataset types for parsing and categorizing benchmark questions.
+//!
+//! Matches the HuggingFace LongMemEval schema:
+//! <https://huggingface.co/datasets/xiaowu0162/LongMemEval>
 
 use serde::Deserialize;
 
@@ -60,9 +60,9 @@ impl LongMemEvalQuestion {
             return "abstention";
         }
         match self.question_type.as_str() {
-            "single-session-user"
-            | "single-session-assistant"
-            | "single-session-preference" => "information_extraction",
+            "single-session-user" | "single-session-assistant" | "single-session-preference" => {
+                "information_extraction"
+            }
             "multi-session" => "multi_session",
             "temporal-reasoning" => "temporal_reasoning",
             "knowledge-update" => "knowledge_update",

@@ -101,7 +101,8 @@ impl ImportSource for JsonlReader {
                 }
             }
 
-            let source = parsed.source
+            let source = parsed
+                .source
                 .unwrap_or_else(|| "imported:jsonl".to_string());
 
             let chunk = ImportChunk {
@@ -209,7 +210,11 @@ mod tests {
 
         let reader = JsonlReader;
         let mut opts = ImportOpts::default();
-        opts.since = Some(DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z").unwrap().with_timezone(&chrono::Utc));
+        opts.since = Some(
+            DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
 
         let chunks = reader.read_chunks(file.path(), &opts).await.unwrap();
         assert_eq!(chunks.len(), 1);

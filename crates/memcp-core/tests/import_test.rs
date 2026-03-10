@@ -6,9 +6,9 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use memcp::import::{ImportEngine, ImportOpts};
 use memcp::import::dedup;
 use memcp::import::jsonl::JsonlReader;
+use memcp::import::{ImportEngine, ImportOpts};
 use memcp::store::postgres::PostgresMemoryStore;
 use memcp::store::{ListFilter, MemoryStore};
 use sqlx::PgPool;
@@ -44,7 +44,10 @@ async fn test_import_jsonl_end_to_end(pool: PgPool) {
     let result = engine.run(&reader, file.path()).await.unwrap();
 
     assert_eq!(result.total, 5, "Should read 5 chunks from JSONL");
-    assert_eq!(result.filtered, 0, "No chunks should be filtered (all > 50 chars)");
+    assert_eq!(
+        result.filtered, 0,
+        "No chunks should be filtered (all > 50 chars)"
+    );
     assert_eq!(result.failed, 0, "No failures expected");
     assert_eq!(result.imported, 5, "All 5 memories should be imported");
     assert_eq!(result.skipped_dedup, 0, "No dedup skips on first run");
@@ -62,7 +65,9 @@ async fn test_import_jsonl_end_to_end(pool: PgPool) {
 
     // Verify auto-tags were added.
     let first = &list_result.memories[0];
-    let tags = first.tags.as_ref()
+    let tags = first
+        .tags
+        .as_ref()
         .and_then(|t| t.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
         .unwrap_or_default();
@@ -94,7 +99,11 @@ async fn test_import_dry_run_does_not_write(pool: PgPool) {
         })
         .await
         .unwrap();
-    assert_eq!(list_result.memories.len(), 0, "Dry run must not write to DB");
+    assert_eq!(
+        list_result.memories.len(),
+        0,
+        "Dry run must not write to DB"
+    );
 }
 
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
@@ -115,8 +124,14 @@ async fn test_import_dedup_on_reimport(pool: PgPool) {
     let engine2 = ImportEngine::new(store.clone(), opts2);
     let second_result = engine2.run(&reader, file.path()).await.unwrap();
 
-    assert_eq!(second_result.imported, 0, "Re-import should import 0 (all deduped)");
-    assert_eq!(second_result.skipped_dedup, 5, "All 5 should be skipped as duplicates");
+    assert_eq!(
+        second_result.imported, 0,
+        "Re-import should import 0 (all deduped)"
+    );
+    assert_eq!(
+        second_result.skipped_dedup, 5,
+        "All 5 should be skipped as duplicates"
+    );
 
     // Database should still have exactly 5 memories.
     let list_result = store
@@ -135,8 +150,8 @@ async fn test_import_noise_filter_drops_short_content(pool: PgPool) {
 
     // Mix of long (signal) and short (noise) memories.
     let lines = &[
-        r#"{"content":"Short"}"#,           // < 50 chars — noise
-        r#"{"content":"Also too short"}"#,  // < 50 chars — noise
+        r#"{"content":"Short"}"#,          // < 50 chars — noise
+        r#"{"content":"Also too short"}"#, // < 50 chars — noise
         r#"{"content":"User prefers Rust for backend systems because of safety guarantees"}"#, // signal
     ];
     let file = make_jsonl_file(lines);
@@ -216,14 +231,25 @@ async fn test_import_with_project_and_extra_tags(pool: PgPool) {
     assert_eq!(list_result.memories.len(), 1);
     let memory = &list_result.memories[0];
 
-    let tags = memory.tags.as_ref()
+    let tags = memory
+        .tags
+        .as_ref()
         .and_then(|t| t.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
         .unwrap_or_default();
 
-    assert!(tags.contains(&"imported"), "Should have auto 'imported' tag");
-    assert!(tags.contains(&"extra-tag"), "Should have CLI-added extra-tag");
-    assert!(tags.contains(&"cli-added"), "Should have CLI-added cli-added");
+    assert!(
+        tags.contains(&"imported"),
+        "Should have auto 'imported' tag"
+    );
+    assert!(
+        tags.contains(&"extra-tag"),
+        "Should have CLI-added extra-tag"
+    );
+    assert!(
+        tags.contains(&"cli-added"),
+        "Should have CLI-added cli-added"
+    );
 }
 
 /// Round-trip test: export JSONL → import JSONL → data matches originals.
@@ -329,9 +355,16 @@ async fn test_export_import_round_trip(pool: PgPool) {
 
     // Each line should be valid JSON.
     for line in &export_lines {
-        let parsed: serde_json::Value = serde_json::from_str(line).expect("each JSONL line must be valid JSON");
-        assert!(parsed.get("content").is_some(), "each line must have 'content'");
-        assert!(parsed.get("type_hint").is_some(), "each line must have 'type_hint'");
+        let parsed: serde_json::Value =
+            serde_json::from_str(line).expect("each JSONL line must be valid JSON");
+        assert!(
+            parsed.get("content").is_some(),
+            "each line must have 'content'"
+        );
+        assert!(
+            parsed.get("type_hint").is_some(),
+            "each line must have 'type_hint'"
+        );
     }
 
     // Step 3: Create a second store (fresh pool with same test DB) and import the JSONL.
@@ -352,7 +385,9 @@ async fn test_export_import_round_trip(pool: PgPool) {
 
     // Verify it matches one of our stored memories.
     assert!(
-        memories_to_store.iter().any(|m| m.content == exported_content),
+        memories_to_store
+            .iter()
+            .any(|m| m.content == exported_content),
         "Exported content '{}' should match one of the stored memories",
         exported_content
     );
@@ -361,7 +396,10 @@ async fn test_export_import_round_trip(pool: PgPool) {
         "Exported type_hint '{}' should be one of the stored type_hints",
         exported_type_hint
     );
-    assert!(!exported_tags.is_empty(), "Exported tags should not be empty");
+    assert!(
+        !exported_tags.is_empty(),
+        "Exported tags should not be empty"
+    );
 
     // Step 4: Verify re-import of exported JSONL.
     // Since the DB already has these memories, they'll be dedup-skipped.
@@ -392,7 +430,8 @@ async fn test_config_noise_patterns_applied(pool: PgPool) {
     let store = Arc::new(PostgresMemoryStore::from_pool(pool).await.unwrap());
 
     // Create content that would pass the 50-char default filter but matches a custom pattern.
-    let custom_noise = "CUSTOM_NOISE: this entry should be filtered by user config but is long enough";
+    let custom_noise =
+        "CUSTOM_NOISE: this entry should be filtered by user config but is long enough";
     let signal = "User prefers Rust over Go for backend services due to memory safety guarantees";
 
     let lines = &[
@@ -413,14 +452,20 @@ async fn test_config_noise_patterns_applied(pool: PgPool) {
     let result = engine.run(&reader, file.path()).await.unwrap();
 
     assert_eq!(result.total, 2, "Should read 2 chunks");
-    assert_eq!(result.filtered, 1, "Custom noise pattern should filter 1 chunk");
-    assert_eq!(result.imported, 1, "Only the signal memory should be imported");
+    assert_eq!(
+        result.filtered, 1,
+        "Custom noise pattern should filter 1 chunk"
+    );
+    assert_eq!(
+        result.imported, 1,
+        "Only the signal memory should be imported"
+    );
 }
 
 /// Filtered items persistence: noise-filtered items are saved to filtered.jsonl.
 #[test]
 fn test_filtered_item_roundtrip() {
-    use memcp::import::checkpoint::{FilteredItem, load_filtered};
+    use memcp::import::checkpoint::{load_filtered, FilteredItem};
     use tempfile::TempDir;
 
     let dir = TempDir::new().unwrap();
@@ -451,14 +496,15 @@ fn test_filtered_item_roundtrip() {
 /// Rescue marking: save_filtered correctly marks items as rescued.
 #[test]
 fn test_rescue_marks_item_as_rescued() {
-    use memcp::import::checkpoint::{FilteredItem, load_filtered, save_filtered};
+    use memcp::import::checkpoint::{load_filtered, save_filtered, FilteredItem};
     use tempfile::TempDir;
 
     let dir = TempDir::new().unwrap();
 
     let item1 = FilteredItem {
         id: "aaaabbbb-0000-0000-0000-000000000001".to_string(),
-        content: "First item that was filtered during import and should be rescuable here".to_string(),
+        content: "First item that was filtered during import and should be rescuable here"
+            .to_string(),
         reason: "noise:too-short-actually-no".to_string(),
         source: "jsonl".to_string(),
         tags: vec![],
@@ -469,7 +515,8 @@ fn test_rescue_marks_item_as_rescued() {
 
     let item2 = FilteredItem {
         id: "aaaabbbb-0000-0000-0000-000000000002".to_string(),
-        content: "Second item that was filtered and should remain unrescued in the file".to_string(),
+        content: "Second item that was filtered and should remain unrescued in the file"
+            .to_string(),
         reason: "llm:skip".to_string(),
         source: "chatgpt".to_string(),
         tags: vec![],
@@ -504,7 +551,10 @@ fn test_find_latest_import_dir_empty() {
     let result = find_latest_import_dir();
     // Either None (no runs) or Some(path) — either is valid.
     if let Some(path) = result {
-        assert!(path.is_dir(), "find_latest_import_dir must return an existing directory");
+        assert!(
+            path.is_dir(),
+            "find_latest_import_dir must return an existing directory"
+        );
     }
 }
 
@@ -518,8 +568,8 @@ async fn test_import_no_filter_imports_all(pool: PgPool) {
 
     // Include short chunks (< 50 chars) that would normally be filtered.
     let lines = &[
-        r#"{"content":"Short"}"#,                  // < 50 chars — normally filtered
-        r#"{"content":"Also too short"}"#,          // < 50 chars — normally filtered
+        r#"{"content":"Short"}"#,          // < 50 chars — normally filtered
+        r#"{"content":"Also too short"}"#, // < 50 chars — normally filtered
         r#"{"content":"User prefers Rust for backend systems because of safety guarantees"}"#,
     ];
     let file = make_jsonl_file(lines);
@@ -534,8 +584,14 @@ async fn test_import_no_filter_imports_all(pool: PgPool) {
     let result = engine.run(&reader, file.path()).await.unwrap();
 
     assert_eq!(result.total, 3, "Should read all 3 chunks");
-    assert_eq!(result.filtered, 0, "no_filter=true must skip noise filtering entirely");
-    assert_eq!(result.imported, 3, "All 3 chunks should be imported when no_filter=true");
+    assert_eq!(
+        result.filtered, 0,
+        "no_filter=true must skip noise filtering entirely"
+    );
+    assert_eq!(
+        result.imported, 3,
+        "All 3 chunks should be imported when no_filter=true"
+    );
 }
 
 /// --no-filter=false (default): short content is still filtered.
@@ -557,7 +613,10 @@ async fn test_import_default_filter_still_active(pool: PgPool) {
     let result = engine.run(&reader, file.path()).await.unwrap();
 
     assert_eq!(result.total, 2, "Should read 2 chunks");
-    assert_eq!(result.filtered, 1, "Default filter must drop the short chunk");
+    assert_eq!(
+        result.filtered, 1,
+        "Default filter must drop the short chunk"
+    );
     assert_eq!(result.imported, 1, "Only the long chunk should be imported");
 }
 
@@ -601,6 +660,12 @@ async fn test_import_no_filter_skips_source_patterns(pool: PgPool) {
 
     // JSONL reader doesn't add source-specific patterns, but no_filter=true
     // still skips ALL noise filtering (min_chars + patterns).
-    assert_eq!(result.filtered, 0, "no_filter=true skips all noise filtering including source patterns");
-    assert_eq!(result.imported, 2, "Both chunks imported with no_filter=true");
+    assert_eq!(
+        result.filtered, 0,
+        "no_filter=true skips all noise filtering including source patterns"
+    );
+    assert_eq!(
+        result.imported, 2,
+        "Both chunks imported with no_filter=true"
+    );
 }

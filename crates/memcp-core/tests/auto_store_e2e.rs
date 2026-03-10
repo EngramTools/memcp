@@ -39,7 +39,8 @@ fn test_auto_store_ingests_jsonl() {
 
     // All 4 lines are user/assistant messages — all should parse
     assert_eq!(
-        entries.len(), 4,
+        entries.len(),
+        4,
         "parser should return 4 entries (2 user + 2 assistant)"
     );
 
@@ -51,7 +52,9 @@ fn test_auto_store_ingests_jsonl() {
         contents
     );
     assert!(
-        contents.iter().any(|c| c.contains("PostgreSQL with pgvector")),
+        contents
+            .iter()
+            .any(|c| c.contains("PostgreSQL with pgvector")),
         "assistant PostgreSQL response should be present: {:?}",
         contents
     );
@@ -62,18 +65,26 @@ fn test_auto_store_ingests_jsonl() {
     );
 
     // Verify metadata: role is stored in metadata map
-    let assistant_entries: Vec<_> = entries.iter()
-        .filter(|e| e.metadata.get("role").map(|r| r == "assistant").unwrap_or(false))
+    let assistant_entries: Vec<_> = entries
+        .iter()
+        .filter(|e| {
+            e.metadata
+                .get("role")
+                .map(|r| r == "assistant")
+                .unwrap_or(false)
+        })
         .collect();
     assert_eq!(
-        assistant_entries.len(), 2,
+        assistant_entries.len(),
+        2,
         "should have 2 assistant entries"
     );
 
     // Verify session_id extracted
     for entry in &entries {
         assert_eq!(
-            entry.session_id.as_deref(), Some("session-abc"),
+            entry.session_id.as_deref(),
+            Some("session-abc"),
             "session_id should be extracted from sessionId field"
         );
     }
@@ -119,7 +130,8 @@ fn test_auto_store_skips_empty_messages() {
     }
 
     assert_eq!(
-        entries.len(), 0,
+        entries.len(),
+        0,
         "parser should return 0 entries for empty/invalid/non-user-assistant messages"
     );
 }
@@ -167,11 +179,23 @@ fn test_auto_store_optional_fields() {
     let line = r#"{"message":{"role":"user","content":"Minimal message"}}"#;
 
     let entry = parser.parse_line(line, fake_path);
-    assert!(entry.is_some(), "should parse message without optional fields");
+    assert!(
+        entry.is_some(),
+        "should parse message without optional fields"
+    );
 
     let entry = entry.unwrap();
     assert_eq!(entry.content, "Minimal message");
-    assert!(entry.timestamp.is_none(), "timestamp should be None when missing");
-    assert!(entry.session_id.is_none(), "session_id should be None when missing");
-    assert!(entry.project.is_none(), "project should be None when missing");
+    assert!(
+        entry.timestamp.is_none(),
+        "timestamp should be None when missing"
+    );
+    assert!(
+        entry.session_id.is_none(),
+        "session_id should be None when missing"
+    );
+    assert!(
+        entry.project.is_none(),
+        "project should be None when missing"
+    );
 }

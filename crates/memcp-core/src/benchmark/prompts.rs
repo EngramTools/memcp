@@ -1,7 +1,7 @@
-/// LLM prompt templates for the LongMemEval benchmark pipeline.
-///
-/// Provides prompts for answer generation (with memory context + timestamps)
-/// and GPT-4o judge evaluation (standard and abstention variants).
+//! LLM prompt templates for the LongMemEval benchmark pipeline.
+//!
+//! Provides prompts for answer generation (with memory context + timestamps)
+//! and GPT-4o judge evaluation (standard and abstention variants).
 
 use crate::store::Memory;
 
@@ -37,11 +37,22 @@ pub fn build_answer_prompt(
          Question: {question}\n\n\
          Instructions:\n\
          1. Carefully read ALL memories above — the answer may require combining facts from multiple conversations.\n\
-         2. For counting questions (\"how many\"), scan every memory and list each matching item before giving a total.\n\
+         2. For counting questions (\"how many\"), be STRICT about what you count. Only count items that directly and \
+         specifically match the question criteria. Do not count tangentially related items, and do not count the same \
+         item twice even if mentioned in multiple memories. List each qualifying item with its source memory, then total.\n\
          3. For calculations (costs, time, distances), extract the specific numbers from the memories and show your arithmetic.\n\
-         4. For date/duration questions, identify the specific dates and calculate step by step.\n\
-         5. If the question asks about something never discussed in any memory, say \"I don't have that information in my memory.\" \
-         But if the memories contain partial or indirect evidence, attempt an answer rather than abstaining.\n\n\
+         4. For date/duration questions, identify the specific dates and calculate step by step. IMPORTANT: when a memory \
+         uses relative time expressions like \"a month ago\" or \"last week\", resolve them relative to THAT MEMORY'S \
+         creation date, not today's date.\n\
+         5. When the same topic appears in multiple memories, the MOST RECENT memory supersedes earlier ones — \
+         do NOT add or combine them. For example: if Memory 3 says \"I have 17 postcards\" and Memory 7 says \
+         \"I now have 25 postcards\", the answer is 25 (not 17+25=42). Similarly, if Memory 3 says \"I keep my shoes \
+         under the bed\" and Memory 7 says \"I moved my shoes to the closet\", the current answer is the closet.\n\
+         6. If the memories contain the specific data needed to answer — even if it requires arithmetic, combining facts, \
+         or simple inference — compute and state the answer rather than hedging. However, if the question asks about \
+         something genuinely not discussed (e.g., a role or event never mentioned), or makes a false assumption, \
+         say \"I don't have that information in my memory.\" The key distinction: do the memories contain the actual \
+         facts needed? If yes, answer. If the question assumes something not in the memories, decline.\n\n\
          Be concise and direct."
     )
 }

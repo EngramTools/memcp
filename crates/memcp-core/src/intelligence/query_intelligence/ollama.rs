@@ -9,10 +9,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DecomposedQuery, ExpandedQuery, QueryIntelligenceError, QueryIntelligenceProvider,
-    RankedCandidate, RankedResult, TimeRange, build_decomposition_prompt, build_expansion_prompt,
-    build_explain_connections_prompt, build_reranking_prompt, decomposition_schema,
-    explain_connections_schema, expansion_schema, reranking_schema,
+    build_decomposition_prompt, build_expansion_prompt, build_explain_connections_prompt,
+    build_reranking_prompt, decomposition_schema, expansion_schema, explain_connections_schema,
+    reranking_schema, DecomposedQuery, ExpandedQuery, QueryIntelligenceError,
+    QueryIntelligenceProvider, RankedCandidate, RankedResult, TimeRange,
 };
 
 // --- HTTP request/response structs (local — mirrors extraction/ollama.rs pattern) ---
@@ -143,7 +143,10 @@ impl OllamaQueryIntelligenceProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "unknown error".to_string());
-            return Err(QueryIntelligenceError::Api { status, message: body });
+            return Err(QueryIntelligenceError::Api {
+                status,
+                message: body,
+            });
         }
 
         let chat_response: OllamaChatResponse = response.json().await.map_err(|e| {
@@ -277,10 +280,7 @@ impl QueryIntelligenceProvider for OllamaQueryIntelligenceProvider {
                 })
                 .collect();
             serde_json::to_string(&arr).map_err(|e| {
-                QueryIntelligenceError::Generation(format!(
-                    "Failed to serialize candidates: {}",
-                    e
-                ))
+                QueryIntelligenceError::Generation(format!("Failed to serialize candidates: {}", e))
             })?
         };
 
@@ -313,7 +313,9 @@ impl QueryIntelligenceProvider for OllamaQueryIntelligenceProvider {
                     .as_u64()
                     .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))?;
                 let zero_idx = (idx as usize).checked_sub(1)?;
-                idx_to_real_id.get(zero_idx).map(|&real_id| real_id.to_string())
+                idx_to_real_id
+                    .get(zero_idx)
+                    .map(|&real_id| real_id.to_string())
             })
             .enumerate()
             .map(|(rank, id)| RankedResult {

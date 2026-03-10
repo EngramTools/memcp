@@ -3,8 +3,8 @@
 //! All patterns are compiled once at startup. Invalid patterns cause a startup error.
 //! Uses RegexSet for single-pass matching against all patterns.
 
-use regex::RegexSet;
 use crate::errors::MemcpError;
+use regex::RegexSet;
 
 /// Fast regex-based content filter.
 ///
@@ -23,7 +23,10 @@ impl RegexFilter {
         let set = RegexSet::new(patterns).map_err(|e| {
             MemcpError::Config(format!("Invalid content filter regex pattern: {}", e))
         })?;
-        tracing::info!(pattern_count = patterns.len(), "Content filter: regex patterns compiled");
+        tracing::info!(
+            pattern_count = patterns.len(),
+            "Content filter: regex patterns compiled"
+        );
         Ok(RegexFilter {
             patterns: set,
             pattern_strings: patterns.to_vec(),
@@ -42,4 +45,3 @@ impl RegexFilter {
         }
     }
 }
-

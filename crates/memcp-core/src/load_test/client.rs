@@ -17,8 +17,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::Instant;
 
-use super::{LoadTestConfig};
 use super::metrics::RequestResult;
+use super::LoadTestConfig;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -31,12 +31,10 @@ use super::metrics::RequestResult;
 /// Returns all results after every task has completed (or timed out / errored).
 /// Individual request failures are recorded as `is_error: true` — they do NOT
 /// propagate as Rust errors.
-pub async fn run_workload(
-    config: &LoadTestConfig,
-    client: &reqwest::Client,
-) -> Vec<RequestResult> {
+pub async fn run_workload(config: &LoadTestConfig, client: &reqwest::Client) -> Vec<RequestResult> {
     let semaphore = Arc::new(Semaphore::new(config.concurrency));
-    let results: Arc<Mutex<Vec<RequestResult>>> = Arc::new(Mutex::new(Vec::with_capacity(config.total_ops)));
+    let results: Arc<Mutex<Vec<RequestResult>>> =
+        Arc::new(Mutex::new(Vec::with_capacity(config.total_ops)));
     // Track IDs returned by /v1/store so update/annotate/delete can use them
     let stored_ids: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -44,7 +42,9 @@ pub async fn run_workload(
     let pb = ProgressBar::new(config.total_ops as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ops ({per_sec}, eta {eta})")
+            .template(
+                "[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ops ({per_sec}, eta {eta})",
+            )
             .unwrap_or_else(|_| ProgressStyle::default_bar()),
     );
     let pb = Arc::new(pb);
@@ -55,7 +55,11 @@ pub async fn run_workload(
     let mut handles = Vec::with_capacity(config.total_ops);
 
     for op_index in 0..config.total_ops {
-        let permit = semaphore.clone().acquire_owned().await.expect("semaphore acquire");
+        let permit = semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("semaphore acquire");
         let client = client.clone();
         let results = results.clone();
         let stored_ids = stored_ids.clone();
@@ -147,11 +151,7 @@ async fn run_write_op(
 ///   1 → POST /v1/recall   — 50 unique queries
 ///   2 → POST /v1/discover — fixed pattern discovery query
 ///   3 → GET  /v1/export   — export all (may return large payload)
-async fn run_read_op(
-    client: &reqwest::Client,
-    base_url: &str,
-    op_index: usize,
-) -> RequestResult {
+async fn run_read_op(client: &reqwest::Client, base_url: &str, op_index: usize) -> RequestResult {
     match op_index % 4 {
         0 => search_op(client, base_url, op_index).await,
         1 => recall_op(client, base_url, op_index).await,
@@ -242,11 +242,7 @@ async fn annotate_op(
     timed_request(client, "POST", &url, Some(body), "/v1/annotate").await
 }
 
-async fn delete_op(
-    client: &reqwest::Client,
-    base_url: &str,
-    id: &str,
-) -> RequestResult {
+async fn delete_op(client: &reqwest::Client, base_url: &str, id: &str) -> RequestResult {
     let url = format!("{}/v1/memories/{}", base_url, id);
 
     let start = Instant::now();
@@ -274,11 +270,7 @@ async fn delete_op(
     }
 }
 
-async fn search_op(
-    client: &reqwest::Client,
-    base_url: &str,
-    op_index: usize,
-) -> RequestResult {
+async fn search_op(client: &reqwest::Client, base_url: &str, op_index: usize) -> RequestResult {
     let url = format!("{}/v1/search", base_url);
     // 50 unique queries for cache variation
     let body = serde_json::json!({
@@ -289,11 +281,7 @@ async fn search_op(
     timed_request(client, "POST", &url, Some(body), "/v1/search").await
 }
 
-async fn recall_op(
-    client: &reqwest::Client,
-    base_url: &str,
-    op_index: usize,
-) -> RequestResult {
+async fn recall_op(client: &reqwest::Client, base_url: &str, op_index: usize) -> RequestResult {
     let url = format!("{}/v1/recall", base_url);
     // Use first=true for queryless recall (avoids need for embed_provider)
     let body = serde_json::json!({
@@ -306,10 +294,7 @@ async fn recall_op(
     timed_request(client, "POST", &url, Some(body), "/v1/recall").await
 }
 
-async fn discover_op(
-    client: &reqwest::Client,
-    base_url: &str,
-) -> RequestResult {
+async fn discover_op(client: &reqwest::Client, base_url: &str) -> RequestResult {
     let url = format!("{}/v1/discover", base_url);
     let body = serde_json::json!({
         "query": "discover patterns",
@@ -319,10 +304,7 @@ async fn discover_op(
     timed_request(client, "POST", &url, Some(body), "/v1/discover").await
 }
 
-async fn export_op(
-    client: &reqwest::Client,
-    base_url: &str,
-) -> RequestResult {
+async fn export_op(client: &reqwest::Client, base_url: &str) -> RequestResult {
     let url = format!("{}/v1/export", base_url);
 
     let start = Instant::now();

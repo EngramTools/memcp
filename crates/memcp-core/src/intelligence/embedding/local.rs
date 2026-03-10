@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::task;
 
-use super::{EmbeddingError, EmbeddingProvider, model_dimension};
+use super::{model_dimension, EmbeddingError, EmbeddingProvider};
 
 /// Local embedding provider backed by fastembed.
 ///
@@ -89,9 +89,9 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
                 .embed(vec![text], None)
                 .map_err(|e| EmbeddingError::Generation(e.to_string()))?;
 
-            embeddings
-                .pop()
-                .ok_or_else(|| EmbeddingError::Generation("fastembed returned empty result".to_string()))
+            embeddings.pop().ok_or_else(|| {
+                EmbeddingError::Generation("fastembed returned empty result".to_string())
+            })
         })
         .await
         .map_err(|e| EmbeddingError::Generation(format!("spawn_blocking panicked: {}", e)))?

@@ -6,18 +6,18 @@
 use async_trait::async_trait;
 use regex::Regex;
 use serde::Deserialize;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::errors::MemcpError;
 use super::parser::ParsedEntry;
+use crate::errors::MemcpError;
 
 /// Category classification result from LLM or heuristic.
 #[derive(Debug, Clone)]
 pub struct CategoryResult {
     pub category: String,
-    pub action: String,  // "store", "skip", "store-low"
+    pub action: String, // "store", "skip", "store-low"
 }
 
 /// Trait for deciding whether a parsed entry should be stored.
@@ -27,7 +27,9 @@ pub trait FilterStrategy: Send + Sync {
     async fn should_store(&self, entry: &ParsedEntry) -> Result<bool, MemcpError>;
 
     /// Get the last classification result (if any). Only CategoryFilter with LLM returns Some.
-    fn last_classification(&self) -> Option<CategoryResult> { None }
+    fn last_classification(&self) -> Option<CategoryResult> {
+        None
+    }
 }
 
 /// LLM-based filter — calls Ollama or OpenAI to decide relevance.
@@ -111,7 +113,9 @@ impl FilterStrategy for LlmFilter {
                     .json(&body)
                     .send()
                     .await
-                    .map_err(|e| MemcpError::Internal(format!("LLM filter request failed: {}", e)))?;
+                    .map_err(|e| {
+                        MemcpError::Internal(format!("LLM filter request failed: {}", e))
+                    })?;
 
                 if !resp.status().is_success() {
                     let status = resp.status();
@@ -144,7 +148,9 @@ impl FilterStrategy for LlmFilter {
                     .json(&body)
                     .send()
                     .await
-                    .map_err(|e| MemcpError::Internal(format!("LLM filter request failed: {}", e)))?;
+                    .map_err(|e| {
+                        MemcpError::Internal(format!("LLM filter request failed: {}", e))
+                    })?;
 
                 if !resp.status().is_success() {
                     let status = resp.status();
@@ -278,7 +284,8 @@ impl LlmCategoryClassifier {
         let category = response_text.trim().to_lowercase().replace(' ', "-");
 
         // Look up action for this category, default to "store" for unknown categories
-        let action = self.category_actions
+        let action = self
+            .category_actions
             .get(&category)
             .cloned()
             .unwrap_or_else(|| "store".to_string());
@@ -440,7 +447,9 @@ impl FilterStrategy for CategoryFilter {
             match tokio::time::timeout(
                 std::time::Duration::from_secs(3),
                 classifier.classify(&entry.content),
-            ).await {
+            )
+            .await
+            {
                 Ok(Some(result)) => {
                     tracing::debug!(
                         category = %result.category,
@@ -457,10 +466,14 @@ impl FilterStrategy for CategoryFilter {
                     return Ok(should_store);
                 }
                 Ok(None) => {
-                    tracing::debug!("LLM category classifier returned None, falling back to heuristic");
+                    tracing::debug!(
+                        "LLM category classifier returned None, falling back to heuristic"
+                    );
                 }
                 Err(_) => {
-                    tracing::warn!("LLM category classifier timed out (3s), falling back to heuristic");
+                    tracing::warn!(
+                        "LLM category classifier timed out (3s), falling back to heuristic"
+                    );
                 }
             }
         }
@@ -483,7 +496,10 @@ impl FilterStrategy for CategoryFilter {
 
     fn last_classification(&self) -> Option<CategoryResult> {
         // Use try_lock to avoid blocking — if locked, return None
-        self.last_result.try_lock().ok().and_then(|guard| guard.clone())
+        self.last_result
+            .try_lock()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 }
 
@@ -512,10 +528,7 @@ pub fn create_filter(
                     "https://api.openai.com/v1".to_string(),
                     extraction_config.openai_api_key.clone(),
                 ),
-                _ => (
-                    extraction_config.ollama_base_url.clone(),
-                    None,
-                ),
+                _ => (extraction_config.ollama_base_url.clone(), None),
             };
             Box::new(LlmFilter::new(
                 provider.to_string(),
@@ -525,35 +538,45 @@ pub fn create_filter(
             ))
         }
         "category" => {
-            let llm_classifier = auto_store_config.category_filter.llm_provider.as_ref().map(|provider| {
-                let model = auto_store_config.category_filter.llm_model.clone()
-                    .unwrap_or_else(|| model.to_string());
-                let (base_url, api_key) = match provider.as_str() {
-                    "openai" => (
-                        "https://api.openai.com/v1".to_string(),
-                        extraction_config.openai_api_key.clone(),
-                    ),
-                    _ => (
-                        extraction_config.ollama_base_url.clone(),
-                        None,
-                    ),
-                };
-                LlmCategoryClassifier::new(
-                    provider.clone(),
-                    base_url,
-                    model,
-                    api_key,
-                    auto_store_config.category_filter.category_actions.clone(),
-                )
-            });
-            Box::new(CategoryFilter::new(&auto_store_config.category_filter, llm_classifier))
+            let llm_classifier =
+                auto_store_config
+                    .category_filter
+                    .llm_provider
+                    .as_ref()
+                    .map(|provider| {
+                        let model = auto_store_config
+                            .category_filter
+                            .llm_model
+                            .clone()
+                            .unwrap_or_else(|| model.to_string());
+                        let (base_url, api_key) = match provider.as_str() {
+                            "openai" => (
+                                "https://api.openai.com/v1".to_string(),
+                                extraction_config.openai_api_key.clone(),
+                            ),
+                            _ => (extraction_config.ollama_base_url.clone(), None),
+                        };
+                        LlmCategoryClassifier::new(
+                            provider.clone(),
+                            base_url,
+                            model,
+                            api_key,
+                            auto_store_config.category_filter.category_actions.clone(),
+                        )
+                    });
+            Box::new(CategoryFilter::new(
+                &auto_store_config.category_filter,
+                llm_classifier,
+            ))
         }
         "heuristic" => Box::new(HeuristicFilter),
         "none" => Box::new(NoFilter),
         other => {
-            tracing::warn!(mode = other, "Unknown filter mode, falling back to heuristic");
+            tracing::warn!(
+                mode = other,
+                "Unknown filter mode, falling back to heuristic"
+            );
             Box::new(HeuristicFilter)
         }
     }
 }
-

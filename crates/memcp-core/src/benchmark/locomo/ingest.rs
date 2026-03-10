@@ -48,8 +48,7 @@ async fn ingest_per_turn(
             let content = format!("{}: {}", turn.speaker, turn.text);
 
             // Offset each turn by 1 second within the session to preserve ordering.
-            let created_at = session_base_time
-                .map(|t| t + Duration::seconds(turn_idx as i64));
+            let created_at = session_base_time.map(|t| t + Duration::seconds(turn_idx as i64));
 
             let memory = CreateMemory {
                 content,
@@ -74,6 +73,7 @@ async fn ingest_per_turn(
                 trust_level: None,
                 session_id: None,
                 agent_role: None,
+                write_path: None,
             };
 
             let stored = store.store(memory).await?;
@@ -134,6 +134,7 @@ async fn ingest_per_session(
             trust_level: None,
             session_id: None,
             agent_role: None,
+            write_path: None,
         };
 
         let stored = store.store(memory).await?;
@@ -164,7 +165,7 @@ pub fn parse_locomo_date(date_str: &str) -> Option<DateTime<Utc>> {
     // Strip the time+on prefix and parse just the date part.
     if let Some(pos) = date_str.find(" on ") {
         let date_part = &date_str[pos + 4..]; // e.g. "8 May, 2023"
-        // Try "D Month, YYYY"
+                                              // Try "D Month, YYYY"
         if let Ok(d) = NaiveDate::parse_from_str(date_part, "%d %B, %Y") {
             return d.and_hms_opt(0, 0, 0).map(|dt| Utc.from_utc_datetime(&dt));
         }

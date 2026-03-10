@@ -75,12 +75,15 @@ pub fn token_counts(tokens: &[String]) -> HashMap<String, usize> {
 fn build_locomo_answer_prompt(question: &str, memories: &[Memory]) -> String {
     let mut context_parts = Vec::new();
     for (i, m) in memories.iter().enumerate() {
-        let actor = m
-            .actor
-            .as_deref()
-            .unwrap_or("Unknown");
+        let actor = m.actor.as_deref().unwrap_or("Unknown");
         let date = m.created_at.format("%B %d, %Y");
-        context_parts.push(format!("[Memory {}] ({}, {}): {}", i + 1, actor, date, m.content));
+        context_parts.push(format!(
+            "[Memory {}] ({}, {}): {}",
+            i + 1,
+            actor,
+            date,
+            m.content
+        ));
     }
     let context = if context_parts.is_empty() {
         "No relevant memories found.".to_string()
@@ -158,12 +161,20 @@ mod tests {
         // "The capital is Paris" vs "Paris": 1 common token out of 4 predicted / 1 ground truth.
         // precision=0.25, recall=1.0, F1 = 2*0.25*1.0/(0.25+1.0) = 0.4
         let score = f1_score("The capital is Paris", "Paris");
-        assert!(score > 0.0, "Expected F1 > 0.0 (partial overlap), got {}", score);
+        assert!(
+            score > 0.0,
+            "Expected F1 > 0.0 (partial overlap), got {}",
+            score
+        );
         assert!(score < 1.0, "Expected F1 < 1.0, got {}", score);
 
         // "Paris France" vs "Paris": precision=0.5, recall=1.0, F1=2/3 > 0.5
         let score2 = f1_score("Paris France", "Paris");
-        assert!(score2 > 0.5, "Expected F1 > 0.5 for 'Paris France' vs 'Paris', got {}", score2);
+        assert!(
+            score2 > 0.5,
+            "Expected F1 > 0.5 for 'Paris France' vs 'Paris', got {}",
+            score2
+        );
     }
 
     #[test]

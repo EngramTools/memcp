@@ -248,8 +248,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let f1 = dir.path().join("notes.md");
         let f2 = dir.path().join("decisions.md");
-        std::fs::write(&f1, "# Note\nThis is a note with enough content to pass the noise filter.").unwrap();
-        std::fs::write(&f2, "# Decision\nWe chose Rust for memory safety guarantees and performance.").unwrap();
+        std::fs::write(
+            &f1,
+            "# Note\nThis is a note with enough content to pass the noise filter.",
+        )
+        .unwrap();
+        std::fs::write(
+            &f2,
+            "# Decision\nWe chose Rust for memory safety guarantees and performance.",
+        )
+        .unwrap();
 
         let reader = MarkdownReader;
         let opts = ImportOpts::default();

@@ -1,10 +1,10 @@
-/// Benchmark ingestion logic: converts LongMemEval sessions into stored memories.
-///
-/// Each turn in a session becomes an individual memory with:
-/// - session_id tag for grouping
-/// - turn index tag for ordering
-/// - role tag for filtering
-/// - created_at override from haystack_dates for temporal reasoning accuracy
+//! Benchmark ingestion logic: converts LongMemEval sessions into stored memories.
+//!
+//! Each turn in a session becomes an individual memory with:
+//! - session_id tag for grouping
+//! - turn index tag for ordering
+//! - role tag for filtering
+//! - created_at override from haystack_dates for temporal reasoning accuracy
 
 use std::sync::Arc;
 
@@ -72,6 +72,7 @@ pub async fn ingest_question(
                 trust_level: None,
                 session_id: None,
                 agent_role: None,
+                write_path: None,
             };
 
             let stored = store.store(memory).await?;

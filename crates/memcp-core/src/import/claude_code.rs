@@ -77,15 +77,19 @@ impl ClaudeCodeReader {
     ///
     /// Each header + following content becomes one ImportChunk. If a section
     /// is very long (>2048 chars), it's further split using chunk_content().
-    fn split_into_sections(content: &str, source_path: &str, project: Option<&str>) -> Vec<ImportChunk> {
+    fn split_into_sections(
+        content: &str,
+        source_path: &str,
+        project: Option<&str>,
+    ) -> Vec<ImportChunk> {
         let mut chunks = Vec::new();
         let mut current_header: Option<String> = None;
         let mut current_lines: Vec<&str> = Vec::new();
 
         let flush_section = |header: &Option<String>,
-                              lines: &[&str],
-                              chunks: &mut Vec<ImportChunk>,
-                              project: Option<&str>| {
+                             lines: &[&str],
+                             chunks: &mut Vec<ImportChunk>,
+                             project: Option<&str>| {
             let body = lines.join("\n").trim().to_string();
             if body.is_empty() {
                 return;
@@ -190,7 +194,11 @@ impl ClaudeCodeReader {
             let parsed: HistoryLine = match serde_json::from_str(trimmed) {
                 Ok(p) => p,
                 Err(e) => {
-                    debug!("history.jsonl line {}: JSON parse error: {}", line_num + 1, e);
+                    debug!(
+                        "history.jsonl line {}: JSON parse error: {}",
+                        line_num + 1,
+                        e
+                    );
                     continue;
                 }
             };
@@ -243,24 +251,40 @@ fn extract_message_text(message: &Option<serde_json::Value>) -> Option<String> {
 
     match msg {
         serde_json::Value::String(s) => {
-            if s.is_empty() { None } else { Some(s.clone()) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.clone())
+            }
         }
         serde_json::Value::Object(map) => {
             let content = map.get("content")?;
             match content {
                 serde_json::Value::String(s) => {
-                    if s.is_empty() { None } else { Some(s.clone()) }
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s.clone())
+                    }
                 }
                 serde_json::Value::Array(arr) => {
                     // Concatenate all text content blocks.
-                    let text: String = arr.iter().filter_map(|block| {
-                        if block.get("type")?.as_str()? == "text" {
-                            block.get("text")?.as_str().map(|s| s.to_string())
-                        } else {
-                            None
-                        }
-                    }).collect::<Vec<_>>().join("\n");
-                    if text.is_empty() { None } else { Some(text) }
+                    let text: String = arr
+                        .iter()
+                        .filter_map(|block| {
+                            if block.get("type")?.as_str()? == "text" {
+                                block.get("text")?.as_str().map(|s| s.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if text.is_empty() {
+                        None
+                    } else {
+                        Some(text)
+                    }
                 }
                 _ => None,
             }
@@ -282,13 +306,7 @@ impl ImportSource for ClaudeCodeReader {
     /// Noise patterns for history.jsonl (MEMORY.md is already curated, needs no filtering).
     fn noise_patterns(&self) -> Vec<&'static str> {
         vec![
-            "Let me ",
-            "I'll ",
-            "I will ",
-            "I've ",
-            "I have ",
-            "LGTM",
-            "lgtm",
+            "Let me ", "I'll ", "I will ", "I've ", "I have ", "LGTM", "lgtm",
         ]
     }
 
@@ -412,7 +430,10 @@ fn collect_memory_files(
                 Err(e) => warn!("Failed to read {:?}: {}", path, e),
             }
         } else if include_history
-            && path.file_name().map(|f| f == "history.jsonl").unwrap_or(false)
+            && path
+                .file_name()
+                .map(|f| f == "history.jsonl")
+                .unwrap_or(false)
         {
             match ClaudeCodeReader::read_history_jsonl(&path) {
                 Ok(file_chunks) => chunks.extend(file_chunks),
@@ -433,7 +454,11 @@ fn extract_project_from_path(path: &Path) -> Option<String> {
     loop {
         if current.file_name()?.to_string_lossy() == "memory" {
             // Parent of "memory" dir is the project slug.
-            let slug = current.parent()?.file_name()?.to_string_lossy().into_owned();
+            let slug = current
+                .parent()?
+                .file_name()?
+                .to_string_lossy()
+                .into_owned();
             if slug.starts_with('-') {
                 return Some(ClaudeCodeReader::project_name_from_slug(&slug));
             }
@@ -478,7 +503,8 @@ mod tests {
 
     #[test]
     fn test_split_into_sections_basic() {
-        let content = "# Architecture\nRust project using Tokio.\n\n## Storage\nPostgres with pgvector.";
+        let content =
+            "# Architecture\nRust project using Tokio.\n\n## Storage\nPostgres with pgvector.";
         let chunks = ClaudeCodeReader::split_into_sections(content, "test.md", None);
         assert_eq!(chunks.len(), 2);
         assert!(chunks[0].content.contains("Architecture"));
@@ -495,14 +521,19 @@ mod tests {
 
     #[test]
     fn test_split_project_tag() {
-        let chunks = ClaudeCodeReader::split_into_sections("# Test\nContent", "test.md", Some("myproject"));
+        let chunks =
+            ClaudeCodeReader::split_into_sections("# Test\nContent", "test.md", Some("myproject"));
         assert_eq!(chunks[0].project, Some("myproject".to_string()));
     }
 
     #[tokio::test]
     async fn test_read_memory_md_file() {
         let mut f = NamedTempFile::with_suffix(".md").unwrap();
-        writeln!(f, "# User Preferences\nDark mode preferred.\n## Editor\nVSCode with Rust analyzer.").unwrap();
+        writeln!(
+            f,
+            "# User Preferences\nDark mode preferred.\n## Editor\nVSCode with Rust analyzer."
+        )
+        .unwrap();
 
         let reader = ClaudeCodeReader::new(false);
         let opts = ImportOpts::default();
@@ -556,7 +587,10 @@ mod tests {
         let msg = Some(serde_json::json!({
             "content": "This is the response text"
         }));
-        assert_eq!(extract_message_text(&msg), Some("This is the response text".to_string()));
+        assert_eq!(
+            extract_message_text(&msg),
+            Some("This is the response text".to_string())
+        );
     }
 
     #[test]

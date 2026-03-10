@@ -58,10 +58,20 @@ pub async fn find_similar_memories(
     let mut results = Vec::with_capacity(rows.len());
     for row in &rows {
         use sqlx::Row;
-        let mid: String = row.try_get("memory_id").map_err(|e| MemcpError::Storage(e.to_string()))?;
-        let sim: f64 = row.try_get("cosine_similarity").map_err(|e| MemcpError::Storage(e.to_string()))?;
-        let content: String = row.try_get("content").map_err(|e| MemcpError::Storage(e.to_string()))?;
-        results.push(SimilarMemory { memory_id: mid, similarity: sim, content });
+        let mid: String = row
+            .try_get("memory_id")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?;
+        let sim: f64 = row
+            .try_get("cosine_similarity")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?;
+        let content: String = row
+            .try_get("content")
+            .map_err(|e| MemcpError::Storage(e.to_string()))?;
+        results.push(SimilarMemory {
+            memory_id: mid,
+            similarity: sim,
+            content,
+        });
     }
 
     Ok(results)

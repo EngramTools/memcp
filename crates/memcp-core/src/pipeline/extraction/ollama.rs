@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::{ExtractionError, ExtractionProvider, ExtractionResult, build_extraction_prompt};
+use super::{build_extraction_prompt, ExtractionError, ExtractionProvider, ExtractionResult};
 
 /// Request body for Ollama /api/chat with structured output
 #[derive(Serialize)]
@@ -141,20 +141,24 @@ impl ExtractionProvider for OllamaExtractionProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "unknown error".to_string());
-            return Err(ExtractionError::Api { status, message: body });
+            return Err(ExtractionError::Api {
+                status,
+                message: body,
+            });
         }
 
-        let chat_response: OllamaChatResponse = response
-            .json()
-            .await
-            .map_err(|e| ExtractionError::Generation(format!("Failed to parse Ollama response: {}", e)))?;
+        let chat_response: OllamaChatResponse = response.json().await.map_err(|e| {
+            ExtractionError::Generation(format!("Failed to parse Ollama response: {}", e))
+        })?;
 
         // The content field is a JSON string — parse it into ExtractionOutput
         let output: ExtractionOutput = serde_json::from_str(&chat_response.message.content)
-            .map_err(|e| ExtractionError::Generation(format!(
-                "Failed to parse extraction JSON from model output: {} (content: {})",
-                e, &chat_response.message.content
-            )))?;
+            .map_err(|e| {
+                ExtractionError::Generation(format!(
+                    "Failed to parse extraction JSON from model output: {} (content: {})",
+                    e, &chat_response.message.content
+                ))
+            })?;
 
         Ok(ExtractionResult {
             entities: output.entities,

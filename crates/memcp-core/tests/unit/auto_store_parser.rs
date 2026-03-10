@@ -1,8 +1,6 @@
-use memcp::auto_store::parser::{
-    ClaudeCodeParser, GenericJsonlParser, LogParser, OpenclawParser,
-};
-use memcp::auto_store::parser::extract_agent_from_path;
 use memcp::auto_store::parser::create_parser;
+use memcp::auto_store::parser::extract_agent_from_path;
+use memcp::auto_store::parser::{ClaudeCodeParser, GenericJsonlParser, LogParser, OpenclawParser};
 use std::path::Path;
 
 #[test]
@@ -86,11 +84,15 @@ fn test_openclaw_parser_skips_session_header() {
 #[test]
 fn test_extract_agent_from_path() {
     assert_eq!(
-        extract_agent_from_path(Path::new("/Users/test/.openclaw/agents/vita/sessions/abc.jsonl")),
+        extract_agent_from_path(Path::new(
+            "/Users/test/.openclaw/agents/vita/sessions/abc.jsonl"
+        )),
         Some("vita".to_string())
     );
     assert_eq!(
-        extract_agent_from_path(Path::new("/home/user/.openclaw/agents/main/sessions/xyz.jsonl")),
+        extract_agent_from_path(Path::new(
+            "/home/user/.openclaw/agents/main/sessions/xyz.jsonl"
+        )),
         Some("main".to_string())
     );
     assert_eq!(

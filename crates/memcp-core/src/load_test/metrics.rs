@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use super::{EndpointStats};
+use super::EndpointStats;
 
 // ─── Raw Result ───────────────────────────────────────────────────────────────
 
@@ -39,7 +39,7 @@ pub struct RequestResult {
 /// assert_eq!(p50, 50);
 /// assert_eq!(p95, 95); // or 100 depending on rounding
 /// ```
-pub fn compute_percentiles(latencies: &mut Vec<u64>) -> (u64, u64, u64) {
+pub fn compute_percentiles(latencies: &mut [u64]) -> (u64, u64, u64) {
     if latencies.is_empty() {
         return (0, 0, 0);
     }
@@ -70,7 +70,9 @@ pub fn aggregate_results(results: &[RequestResult]) -> HashMap<String, EndpointS
     let mut groups: HashMap<String, (Vec<u64>, usize)> = HashMap::new();
 
     for r in results {
-        let entry = groups.entry(r.endpoint.clone()).or_insert_with(|| (Vec::new(), 0));
+        let entry = groups
+            .entry(r.endpoint.clone())
+            .or_insert_with(|| (Vec::new(), 0));
         entry.0.push(r.latency_ms);
         if r.is_error {
             entry.1 += 1;
@@ -152,10 +154,30 @@ mod tests {
     #[test]
     fn test_aggregate_results_groups_by_endpoint() {
         let results = vec![
-            RequestResult { endpoint: "/v1/store".into(), status: 200, latency_ms: 10, is_error: false },
-            RequestResult { endpoint: "/v1/store".into(), status: 200, latency_ms: 20, is_error: false },
-            RequestResult { endpoint: "/v1/search".into(), status: 200, latency_ms: 50, is_error: false },
-            RequestResult { endpoint: "/v1/search".into(), status: 500, latency_ms: 100, is_error: true },
+            RequestResult {
+                endpoint: "/v1/store".into(),
+                status: 200,
+                latency_ms: 10,
+                is_error: false,
+            },
+            RequestResult {
+                endpoint: "/v1/store".into(),
+                status: 200,
+                latency_ms: 20,
+                is_error: false,
+            },
+            RequestResult {
+                endpoint: "/v1/search".into(),
+                status: 200,
+                latency_ms: 50,
+                is_error: false,
+            },
+            RequestResult {
+                endpoint: "/v1/search".into(),
+                status: 500,
+                latency_ms: 100,
+                is_error: true,
+            },
         ];
 
         let stats = aggregate_results(&results);

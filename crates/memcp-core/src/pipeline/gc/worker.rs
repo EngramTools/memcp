@@ -73,7 +73,9 @@ pub async fn run_gc(
     let mut all_deleted_parents: Vec<String> = candidate_ids;
     all_deleted_parents.extend(expired_ids.iter().cloned());
     if !all_deleted_parents.is_empty() {
-        let chunk_count = store.soft_delete_chunks_by_parents(&all_deleted_parents).await?;
+        let chunk_count = store
+            .soft_delete_chunks_by_parents(&all_deleted_parents)
+            .await?;
         if chunk_count > 0 {
             tracing::info!(chunk_count, "GC: cascade soft-deleted orphaned chunks");
         }
@@ -104,4 +106,3 @@ pub async fn run_gc(
         candidates: vec![], // not populated outside dry-run
     })
 }
-

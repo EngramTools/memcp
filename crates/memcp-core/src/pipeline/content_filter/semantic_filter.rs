@@ -101,4 +101,3 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     }
     (dot / (norm_a * norm_b)) as f64
 }
-

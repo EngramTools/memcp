@@ -9,13 +9,13 @@
 mod common;
 use common::builders::MemoryBuilder;
 
-use std::sync::Arc;
-use memcp::store::postgres::PostgresMemoryStore;
-use memcp::store::{MemoryStore, ListFilter, CreateMemory};
-use memcp::config::{RecallConfig, GcConfig};
-use memcp::recall::RecallEngine;
+use memcp::config::{GcConfig, RecallConfig};
 use memcp::gc::run_gc;
+use memcp::recall::RecallEngine;
+use memcp::store::postgres::PostgresMemoryStore;
+use memcp::store::{CreateMemory, ListFilter, MemoryStore};
 use sqlx::PgPool;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // Embedding helpers
@@ -31,7 +31,13 @@ fn spike_emb(seed: usize, dim: usize) -> Vec<f32> {
 }
 
 fn emb_str(v: &[f32]) -> String {
-    format!("[{}]", v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(","))
+    format!(
+        "[{}]",
+        v.iter()
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
 
 /// Insert a mock embedding and mark memory as complete.
@@ -58,13 +64,12 @@ async fn insert_mock_embedding(pool: &PgPool, memory_id: &str, embedding: &[f32]
 
 /// Get current salience stability for a memory.
 async fn get_stability(pool: &PgPool, memory_id: &str) -> f32 {
-    let row: Option<f32> = sqlx::query_scalar(
-        "SELECT stability FROM memory_salience WHERE memory_id = $1",
-    )
-    .bind(memory_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap();
+    let row: Option<f32> =
+        sqlx::query_scalar("SELECT stability FROM memory_salience WHERE memory_id = $1")
+            .bind(memory_id)
+            .fetch_optional(pool)
+            .await
+            .unwrap();
     row.unwrap_or(1.0) // default stability
 }
 
@@ -85,26 +90,51 @@ async fn test_store_search_recall_journey(pool: PgPool) {
     // Store 5 diverse memories
     // Note: RecallEngine no-extraction tier only recalls fact/summary type_hints.
     // Using "fact" for all so the journey test exercises the full recall path.
-    let m_dark = store.store(MemoryBuilder::new()
-        .content("User prefers dark mode in all editors")
-        .type_hint("fact")
-        .build()).await.unwrap();
-    let m_rust = store.store(MemoryBuilder::new()
-        .content("Team uses Rust 2021 edition for all backend services")
-        .type_hint("fact")
-        .build()).await.unwrap();
-    let m_db = store.store(MemoryBuilder::new()
-        .content("PostgreSQL with pgvector is the chosen database")
-        .type_hint("decision")
-        .build()).await.unwrap();
-    let m_test = store.store(MemoryBuilder::new()
-        .content("Run cargo test before every commit")
-        .type_hint("instruction")
-        .build()).await.unwrap();
-    let m_ui = store.store(MemoryBuilder::new()
-        .content("Frontend uses React with TypeScript strict mode")
-        .type_hint("fact")
-        .build()).await.unwrap();
+    let m_dark = store
+        .store(
+            MemoryBuilder::new()
+                .content("User prefers dark mode in all editors")
+                .type_hint("fact")
+                .build(),
+        )
+        .await
+        .unwrap();
+    let m_rust = store
+        .store(
+            MemoryBuilder::new()
+                .content("Team uses Rust 2021 edition for all backend services")
+                .type_hint("fact")
+                .build(),
+        )
+        .await
+        .unwrap();
+    let m_db = store
+        .store(
+            MemoryBuilder::new()
+                .content("PostgreSQL with pgvector is the chosen database")
+                .type_hint("decision")
+                .build(),
+        )
+        .await
+        .unwrap();
+    let m_test = store
+        .store(
+            MemoryBuilder::new()
+                .content("Run cargo test before every commit")
+                .type_hint("instruction")
+                .build(),
+        )
+        .await
+        .unwrap();
+    let m_ui = store
+        .store(
+            MemoryBuilder::new()
+                .content("Frontend uses React with TypeScript strict mode")
+                .type_hint("fact")
+                .build(),
+        )
+        .await
+        .unwrap();
 
     // Insert embeddings: dark mode gets same spike as query (perfect match)
     insert_mock_embedding(&pool, &m_dark.id, &query_emb).await;
@@ -131,7 +161,11 @@ async fn test_store_search_recall_journey(pool: PgPool) {
     // Should return at least the dark mode preference (high similarity)
     assert!(result1.count > 0, "first recall should return results");
 
-    let ids1: Vec<&str> = result1.memories.iter().map(|m| m.memory_id.as_str()).collect();
+    let ids1: Vec<&str> = result1
+        .memories
+        .iter()
+        .map(|m| m.memory_id.as_str())
+        .collect();
     assert!(
         ids1.contains(&m_dark.id.as_str()),
         "dark mode preference should be in results (highest similarity): got {:?}",
@@ -151,13 +185,12 @@ async fn test_store_search_recall_journey(pool: PgPool) {
     // Recall records the session (which we proved by dedup) — this is the key correctness
     // property. The session dedup above already proves the recall pipeline ran end-to-end.
     // Optionally verify the recall session was recorded in recall_sessions table.
-    let session_count: Option<i64> = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM recall_sessions WHERE session_id = $1",
-    )
-    .bind(&session_id)
-    .fetch_optional(&pool)
-    .await
-    .unwrap_or(None);
+    let session_count: Option<i64> =
+        sqlx::query_scalar("SELECT COUNT(*) FROM recall_sessions WHERE session_id = $1")
+            .bind(&session_id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap_or(None);
     // session_count may be None if the table doesn't exist, which is fine
     // The dedup proof above is sufficient to prove recall pipeline worked
     let _ = session_count;
@@ -172,15 +205,25 @@ async fn test_feedback_affects_future_salience(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool.clone()).await.unwrap();
 
     // Store two memories
-    let m_useful = store.store(MemoryBuilder::new()
-        .content("Memory that the user found useful")
-        .type_hint("fact")
-        .build()).await.unwrap();
+    let m_useful = store
+        .store(
+            MemoryBuilder::new()
+                .content("Memory that the user found useful")
+                .type_hint("fact")
+                .build(),
+        )
+        .await
+        .unwrap();
 
-    let m_irrelevant = store.store(MemoryBuilder::new()
-        .content("Memory that the user found irrelevant")
-        .type_hint("fact")
-        .build()).await.unwrap();
+    let m_irrelevant = store
+        .store(
+            MemoryBuilder::new()
+                .content("Memory that the user found irrelevant")
+                .type_hint("fact")
+                .build(),
+        )
+        .await
+        .unwrap();
 
     // Record initial salience
     let initial_useful = get_stability(&pool, &m_useful.id).await;
@@ -190,7 +233,10 @@ async fn test_feedback_affects_future_salience(pool: PgPool) {
     store.apply_feedback(&m_useful.id, "useful").await.unwrap();
 
     // Apply "irrelevant" feedback
-    store.apply_feedback(&m_irrelevant.id, "irrelevant").await.unwrap();
+    store
+        .apply_feedback(&m_irrelevant.id, "irrelevant")
+        .await
+        .unwrap();
 
     // Check salience changed
     let after_useful = get_stability(&pool, &m_useful.id).await;
@@ -199,12 +245,14 @@ async fn test_feedback_affects_future_salience(pool: PgPool) {
     assert!(
         after_useful > initial_useful,
         "useful feedback should increase stability: before={:.4}, after={:.4}",
-        initial_useful, after_useful
+        initial_useful,
+        after_useful
     );
     assert!(
         after_irrelevant < initial_irrelevant,
         "irrelevant feedback should decrease stability: before={:.4}, after={:.4}",
-        initial_irrelevant, after_irrelevant
+        initial_irrelevant,
+        after_irrelevant
     );
 }
 
@@ -219,10 +267,15 @@ async fn test_gc_lifecycle(pool: PgPool) {
     // Store 5 memories
     let mut ids: Vec<String> = Vec::new();
     for i in 0..5 {
-        let m = store.store(MemoryBuilder::new()
-            .content(&format!("GC lifecycle memory {}", i))
-            .type_hint("fact")
-            .build()).await.unwrap();
+        let m = store
+            .store(
+                MemoryBuilder::new()
+                    .content(&format!("GC lifecycle memory {}", i))
+                    .type_hint("fact")
+                    .build(),
+            )
+            .await
+            .unwrap();
         ids.push(m.id);
     }
 
@@ -240,13 +293,11 @@ async fn test_gc_lifecycle(pool: PgPool) {
         .unwrap();
 
         // Set created_at to 60 days ago
-        sqlx::query(
-            "UPDATE memories SET created_at = NOW() - '60 days'::interval WHERE id = $1",
-        )
-        .bind(id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("UPDATE memories SET created_at = NOW() - '60 days'::interval WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     // Run GC — should soft-delete the 2 low-salience memories
@@ -268,13 +319,12 @@ async fn test_gc_lifecycle(pool: PgPool) {
 
     // Verify soft-delete
     for id in low_ids {
-        let deleted: Option<bool> = sqlx::query_scalar(
-            "SELECT deleted_at IS NOT NULL FROM memories WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
+        let deleted: Option<bool> =
+            sqlx::query_scalar("SELECT deleted_at IS NOT NULL FROM memories WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
         assert!(
             deleted.unwrap_or(false),
             "low-salience memory {} should be soft-deleted",
@@ -284,13 +334,11 @@ async fn test_gc_lifecycle(pool: PgPool) {
 
     // Backdate deleted_at beyond the hard_purge_grace_days (30 days)
     for id in low_ids {
-        sqlx::query(
-            "UPDATE memories SET deleted_at = NOW() - '60 days'::interval WHERE id = $1",
-        )
-        .bind(id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("UPDATE memories SET deleted_at = NOW() - '60 days'::interval WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     // Run GC again — should hard purge the 2 soft-deleted memories
@@ -330,48 +378,55 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
         .unwrap();
 
     // a. Store memory with idempotency_key="journey-key-1"
-    let first = store.store(CreateMemory {
-        content: "Idempotency journey test memory".to_string(),
-        type_hint: "fact".to_string(),
-        source: "test".to_string(),
-        tags: None,
-        created_at: None,
-        actor: None,
-        actor_type: "test".to_string(),
-        audience: "global".to_string(),
-        idempotency_key: Some("journey-key-1".to_string()),
-        parent_id: None,
-        chunk_index: None,
-        total_chunks: None,
-        event_time: None,
-        event_time_precision: None,
-        project: None,
-        trust_level: None,
-        session_id: None,
-        agent_role: None,
-    }).await.unwrap();
+    let first = store
+        .store(CreateMemory {
+            content: "Idempotency journey test memory".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "test".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: Some("journey-key-1".to_string()),
+            parent_id: None,
+            chunk_index: None,
+            total_chunks: None,
+            event_time: None,
+            event_time_precision: None,
+            project: None,
+            trust_level: None,
+            session_id: None,
+            agent_role: None,
+        })
+        .await
+        .unwrap();
 
     // b. Store again with same idempotency_key — should return same ID
-    let second = store.store(CreateMemory {
-        content: "Idempotency journey test memory — updated content should be ignored".to_string(),
-        type_hint: "fact".to_string(),
-        source: "test".to_string(),
-        tags: None,
-        created_at: None,
-        actor: None,
-        actor_type: "test".to_string(),
-        audience: "global".to_string(),
-        idempotency_key: Some("journey-key-1".to_string()),
-        parent_id: None,
-        chunk_index: None,
-        total_chunks: None,
-        event_time: None,
-        event_time_precision: None,
-        project: None,
-        trust_level: None,
-        session_id: None,
-        agent_role: None,
-    }).await.unwrap();
+    let second = store
+        .store(CreateMemory {
+            content: "Idempotency journey test memory — updated content should be ignored"
+                .to_string(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "test".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: Some("journey-key-1".to_string()),
+            parent_id: None,
+            chunk_index: None,
+            total_chunks: None,
+            event_time: None,
+            event_time_precision: None,
+            project: None,
+            trust_level: None,
+            session_id: None,
+            agent_role: None,
+        })
+        .await
+        .unwrap();
 
     assert_eq!(
         first.id, second.id,
@@ -379,47 +434,53 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
     );
 
     // c. Store same content without key — content-hash dedup catches it within window
-    let third = store.store(CreateMemory {
-        content: "Content hash dedup journey test".to_string(),
-        type_hint: "fact".to_string(),
-        source: "test".to_string(),
-        tags: None,
-        created_at: None,
-        actor: None,
-        actor_type: "test".to_string(),
-        audience: "global".to_string(),
-        idempotency_key: None,
-        parent_id: None,
-        chunk_index: None,
-        total_chunks: None,
-        event_time: None,
-        event_time_precision: None,
-        project: None,
-        trust_level: None,
-        session_id: None,
-        agent_role: None,
-    }).await.unwrap();
+    let third = store
+        .store(CreateMemory {
+            content: "Content hash dedup journey test".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "test".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: None,
+            parent_id: None,
+            chunk_index: None,
+            total_chunks: None,
+            event_time: None,
+            event_time_precision: None,
+            project: None,
+            trust_level: None,
+            session_id: None,
+            agent_role: None,
+        })
+        .await
+        .unwrap();
 
-    let fourth = store.store(CreateMemory {
-        content: "Content hash dedup journey test".to_string(),
-        type_hint: "fact".to_string(),
-        source: "test".to_string(),
-        tags: None,
-        created_at: None,
-        actor: None,
-        actor_type: "test".to_string(),
-        audience: "global".to_string(),
-        idempotency_key: None,
-        parent_id: None,
-        chunk_index: None,
-        total_chunks: None,
-        event_time: None,
-        event_time_precision: None,
-        project: None,
-        trust_level: None,
-        session_id: None,
-        agent_role: None,
-    }).await.unwrap();
+    let fourth = store
+        .store(CreateMemory {
+            content: "Content hash dedup journey test".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "test".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: None,
+            parent_id: None,
+            chunk_index: None,
+            total_chunks: None,
+            event_time: None,
+            event_time_precision: None,
+            project: None,
+            trust_level: None,
+            session_id: None,
+            agent_role: None,
+        })
+        .await
+        .unwrap();
 
     assert_eq!(
         third.id, fourth.id,
@@ -427,34 +488,35 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
     );
 
     // d. Backdate created_at beyond dedup window — store again, assert new ID
-    sqlx::query(
-        "UPDATE memories SET created_at = NOW() - '2 hours'::interval WHERE id = $1",
-    )
-    .bind(&third.id)
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE memories SET created_at = NOW() - '2 hours'::interval WHERE id = $1")
+        .bind(&third.id)
+        .execute(&pool)
+        .await
+        .unwrap();
 
-    let fifth = store.store(CreateMemory {
-        content: "Content hash dedup journey test".to_string(),
-        type_hint: "fact".to_string(),
-        source: "test".to_string(),
-        tags: None,
-        created_at: None,
-        actor: None,
-        actor_type: "test".to_string(),
-        audience: "global".to_string(),
-        idempotency_key: None,
-        parent_id: None,
-        chunk_index: None,
-        total_chunks: None,
-        event_time: None,
-        event_time_precision: None,
-        project: None,
-        trust_level: None,
-        session_id: None,
-        agent_role: None,
-    }).await.unwrap();
+    let fifth = store
+        .store(CreateMemory {
+            content: "Content hash dedup journey test".to_string(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "test".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: None,
+            parent_id: None,
+            chunk_index: None,
+            total_chunks: None,
+            event_time: None,
+            event_time_precision: None,
+            project: None,
+            trust_level: None,
+            session_id: None,
+            agent_role: None,
+        })
+        .await
+        .unwrap();
 
     assert_ne!(
         third.id, fifth.id,
@@ -473,37 +535,44 @@ async fn test_store_list_get_delete_journey(pool: PgPool) {
     // Store 3 memories with a unique source for isolation
     let source = "journey-crud-test";
     for i in 0..3 {
-        store.store(CreateMemory {
-            content: format!("CRUD journey memory {}", i),
-            type_hint: "fact".to_string(),
-            source: source.to_string(),
-            tags: Some(vec![format!("idx:{}", i)]),
-            created_at: None,
-            actor: None,
-            actor_type: "test".to_string(),
-            audience: "global".to_string(),
-            idempotency_key: None,
-            parent_id: None,
-            chunk_index: None,
-            total_chunks: None,
-            event_time: None,
-            event_time_precision: None,
-            project: None,
-            trust_level: None,
-            session_id: None,
-            agent_role: None,
-        }).await.unwrap();
+        store
+            .store(CreateMemory {
+                content: format!("CRUD journey memory {}", i),
+                type_hint: "fact".to_string(),
+                source: source.to_string(),
+                tags: Some(vec![format!("idx:{}", i)]),
+                created_at: None,
+                actor: None,
+                actor_type: "test".to_string(),
+                audience: "global".to_string(),
+                idempotency_key: None,
+                parent_id: None,
+                chunk_index: None,
+                total_chunks: None,
+                event_time: None,
+                event_time_precision: None,
+                project: None,
+                trust_level: None,
+                session_id: None,
+                agent_role: None,
+            })
+            .await
+            .unwrap();
     }
 
     // List — should return 3 memories
-    let list_result = store.list(ListFilter {
-        source: Some(source.to_string()),
-        limit: 20,
-        ..Default::default()
-    }).await.unwrap();
+    let list_result = store
+        .list(ListFilter {
+            source: Some(source.to_string()),
+            limit: 20,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
 
     assert_eq!(
-        list_result.memories.len(), 3,
+        list_result.memories.len(),
+        3,
         "list should return all 3 stored memories"
     );
 
@@ -523,14 +592,18 @@ async fn test_store_list_get_delete_journey(pool: PgPool) {
     );
 
     // List again — should return 2 memories
-    let list_after = store.list(ListFilter {
-        source: Some(source.to_string()),
-        limit: 20,
-        ..Default::default()
-    }).await.unwrap();
+    let list_after = store
+        .list(ListFilter {
+            source: Some(source.to_string()),
+            limit: 20,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
 
     assert_eq!(
-        list_after.memories.len(), 2,
+        list_after.memories.len(),
+        2,
         "list after delete should return 2 memories"
     );
 }

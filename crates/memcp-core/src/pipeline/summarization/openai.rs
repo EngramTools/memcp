@@ -97,15 +97,15 @@ impl SummarizationProvider for OpenAISummarizationProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "unknown error".to_string());
-            return Err(SummarizationError::Api { status, message: body });
+            return Err(SummarizationError::Api {
+                status,
+                message: body,
+            });
         }
 
-        let parsed: OpenAIResponse = response
-            .json()
-            .await
-            .map_err(|e| {
-                SummarizationError::Generation(format!("Failed to parse OpenAI response: {}", e))
-            })?;
+        let parsed: OpenAIResponse = response.json().await.map_err(|e| {
+            SummarizationError::Generation(format!("Failed to parse OpenAI response: {}", e))
+        })?;
 
         let summary = parsed
             .choices

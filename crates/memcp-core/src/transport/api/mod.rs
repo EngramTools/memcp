@@ -4,26 +4,25 @@
 //! into the health server in `health::serve()`, enabling auth middleware to
 //! be layered on `/v1/*` in Phase 12 without affecting /health or /status.
 
-pub mod types;
+pub mod annotate;
+pub mod delete;
+pub mod discover;
+pub mod export;
 pub mod recall;
 pub mod search;
 pub mod store;
-pub mod annotate;
+pub mod types;
 pub mod update;
-pub mod delete;
-pub mod export;
-pub mod discover;
 
 use std::sync::Arc;
 
 use axum::{
+    routing::{delete, get, post},
     Router,
-    routing::{get, post, delete},
 };
 use tower_governor::{
-    GovernorLayer, GovernorError,
-    governor::GovernorConfigBuilder,
-    key_extractor::GlobalKeyExtractor,
+    governor::GovernorConfigBuilder, key_extractor::GlobalKeyExtractor, GovernorError,
+    GovernorLayer,
 };
 
 use crate::config::RateLimitConfig;
@@ -40,10 +39,14 @@ use crate::transport::health::AppState;
 fn build_rate_limit_layer(
     rps: u32,
     burst_multiplier: u32,
-) -> GovernorLayer<GlobalKeyExtractor, ::governor::middleware::StateInformationMiddleware, axum::body::Body> {
+) -> GovernorLayer<
+    GlobalKeyExtractor,
+    ::governor::middleware::StateInformationMiddleware,
+    axum::body::Body,
+> {
     use axum::body::Body;
-    use axum::http::{Response as HttpResponse, StatusCode};
     use axum::http::header::{CONTENT_TYPE, RETRY_AFTER};
+    use axum::http::{Response as HttpResponse, StatusCode};
 
     let rps = rps.max(1);
     let burst = (rps * burst_multiplier).max(1);
@@ -80,7 +83,8 @@ fn build_rate_limit_layer(
                 .parse()
                 .unwrap_or_else(|_| "1".parse().unwrap()),
         );
-        resp.headers_mut().insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, "application/json".parse().unwrap());
         resp
     })
 }

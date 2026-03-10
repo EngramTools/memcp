@@ -1,8 +1,8 @@
-/// Benchmark runner orchestrator for the LongMemEval evaluation pipeline.
-///
-/// Runs the full per-question pipeline: truncate -> ingest -> search -> generate -> score.
-/// Supports checkpoint/resume so interrupted runs can continue from where they left off.
-/// Config matrix enables comparison of search weight configurations.
+//! Benchmark runner orchestrator for the LongMemEval evaluation pipeline.
+//!
+//! Runs the full per-question pipeline: truncate -> ingest -> search -> generate -> score.
+//! Supports checkpoint/resume so interrupted runs can continue from where they left off.
+//! Config matrix enables comparison of search weight configurations.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -19,8 +19,8 @@ use crate::store::postgres::PostgresMemoryStore;
 use crate::store::{ListFilter, Memory, MemoryStore};
 
 use super::dataset::LongMemEvalQuestion;
-use super::{evaluate, BenchmarkConfig, BenchmarkState, QuestionResult};
 use super::ingest::ingest_question;
+use super::{evaluate, BenchmarkConfig, BenchmarkState, QuestionResult};
 
 /// Run benchmark for a single configuration across all questions.
 ///
@@ -33,6 +33,7 @@ use super::ingest::ingest_question;
 /// 6. Save checkpoint after each question (for resume support)
 ///
 /// Returns Vec of QuestionResult for all questions processed.
+#[allow(clippy::too_many_arguments)] // Benchmark params are all distinct; struct refactor deferred
 pub async fn run_benchmark(
     questions: &[LongMemEvalQuestion],
     config: &BenchmarkConfig,
@@ -112,7 +113,12 @@ pub async fn run_benchmark(
         if config.qi_expansion {
             if let Some(ref provider) = qi_provider {
                 let timeout = Duration::from_secs(10);
-                match tokio::time::timeout(timeout, provider.expand(&question.question)).await {
+                match tokio::time::timeout(
+                    timeout,
+                    provider.expand_with_date(&question.question, &question.question_date),
+                )
+                .await
+                {
                     Ok(Ok(expanded)) => {
                         if !expanded.variants.is_empty() {
                             // Always keep the original question as a search variant
@@ -181,16 +187,16 @@ pub async fn run_benchmark(
                 .hybrid_search(
                     variant,
                     query_embedding.as_ref(),
-                    20,    // fetch 20 candidates per variant
-                    created_after,
-                    created_before,
-                    None,  // no tag filters
+                    20,   // fetch 20 candidates per variant
+                    None, // no hard date filter — use soft boost instead
+                    None, // no hard date filter — use soft boost instead
+                    None, // no tag filters
                     bm25_k,
                     vector_k,
                     symbolic_k,
-                    None,  // no source filter for benchmark
-                    None,  // no audience filter for benchmark
-                    None,  // no project filter for benchmark
+                    None, // no source filter for benchmark
+                    None, // no audience filter for benchmark
+                    None, // no project filter for benchmark
                 )
                 .await?;
 
@@ -199,14 +205,43 @@ pub async fn run_benchmark(
                 let id = hit.memory.id.clone();
                 match merged.get(&id) {
                     Some(existing) if existing.rrf_score >= hit.rrf_score => {}
-                    _ => { merged.insert(id, hit); }
+                    _ => {
+                        merged.insert(id, hit);
+                    }
                 }
             }
         }
 
         // Collect merged hits sorted by rrf_score descending
         let mut hits: Vec<HybridRawHit> = merged.into_values().collect();
-        hits.sort_by(|a, b| b.rrf_score.partial_cmp(&a.rrf_score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.rrf_score
+                .partial_cmp(&a.rrf_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Temporal soft boost: 2x rrf_score for memories whose event_time (or created_at)
+        // falls within the QI-extracted time range. Matches server pipeline step 12.5.
+        if created_after.is_some() || created_before.is_some() {
+            for hit in &mut hits {
+                let t = hit.memory.event_time.unwrap_or(hit.memory.created_at);
+                let in_range = match (created_after, created_before) {
+                    (Some(after), Some(before)) => t >= after && t <= before,
+                    (Some(after), None) => t >= after,
+                    (None, Some(before)) => t <= before,
+                    (None, None) => false,
+                };
+                if in_range {
+                    hit.rrf_score *= 2.0;
+                }
+            }
+            // Re-sort after boost
+            hits.sort_by(|a, b| {
+                b.rrf_score
+                    .partial_cmp(&a.rrf_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
 
         tracing::debug!(
             question_id = %question.question_id,
@@ -218,24 +253,32 @@ pub async fn run_benchmark(
         // Step 3b: QI reranking — LLM reorders the 20 candidates (fail-open)
         if config.qi_reranking {
             if let Some(ref provider) = qi_provider {
-                let candidates: Vec<RankedCandidate> = hits.iter().enumerate().map(|(i, h)| {
-                    RankedCandidate {
+                let candidates: Vec<RankedCandidate> = hits
+                    .iter()
+                    .enumerate()
+                    .map(|(i, h)| RankedCandidate {
                         id: h.memory.id.to_string(),
                         content: h.memory.content.chars().take(500).collect(),
                         current_rank: i + 1,
-                    }
-                }).collect();
+                    })
+                    .collect();
 
                 let timeout = Duration::from_secs(15);
-                match tokio::time::timeout(timeout, provider.rerank(&question.question, &candidates)).await {
+                match tokio::time::timeout(
+                    timeout,
+                    provider.rerank(&question.question, &candidates),
+                )
+                .await
+                {
                     Ok(Ok(ranked)) => {
                         // Build id → position map from LLM ranking
-                        let rank_map: HashMap<String, usize> = ranked.iter()
-                            .map(|r| (r.id.clone(), r.llm_rank))
-                            .collect();
+                        let rank_map: HashMap<String, usize> =
+                            ranked.iter().map(|r| (r.id.clone(), r.llm_rank)).collect();
                         // Sort hits by LLM rank; unranked items go to the end
                         hits.sort_by_key(|h| {
-                            *rank_map.get(&h.memory.id.to_string()).unwrap_or(&usize::MAX)
+                            *rank_map
+                                .get(&h.memory.id.to_string())
+                                .unwrap_or(&usize::MAX)
                         });
                         tracing::debug!(
                             question_id = %question.question_id,
@@ -269,7 +312,9 @@ pub async fn run_benchmark(
         // This isolates memcp's search quality from the LLM's reasoning ability.
         let retrieved_sources: HashSet<&str> = memories.iter().map(|m| m.source.as_str()).collect();
         let evidence_sessions_total = question.answer_session_ids.len();
-        let evidence_sessions_found = question.answer_session_ids.iter()
+        let evidence_sessions_found = question
+            .answer_session_ids
+            .iter()
             .filter(|id| retrieved_sources.contains(format!("benchmark:session-{}", id).as_str()))
             .count();
 
@@ -311,7 +356,9 @@ pub async fn run_benchmark(
         };
 
         // Update checkpoint state
-        state.completed_question_ids.push(question.question_id.clone());
+        state
+            .completed_question_ids
+            .push(question.question_id.clone());
         state.results.push(result.clone());
 
         // Save checkpoint after each question so interrupted runs can resume

@@ -44,7 +44,8 @@ pub async fn export_handler(
                 StatusCode::SERVICE_UNAVAILABLE,
                 [(header::CONTENT_TYPE, "application/json")],
                 r#"{"error":"store not available"}"#.to_string(),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
@@ -56,7 +57,8 @@ pub async fn export_handler(
                 StatusCode::BAD_REQUEST,
                 [(header::CONTENT_TYPE, "application/json")],
                 format!("{{\"error\":\"{}\"}}", e),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
@@ -68,7 +70,8 @@ pub async fn export_handler(
                     StatusCode::BAD_REQUEST,
                     [(header::CONTENT_TYPE, "application/json")],
                     format!("{{\"error\":\"invalid since timestamp: {}\"}}", e),
-                ).into_response();
+                )
+                    .into_response();
             }
         }
     } else {
@@ -98,19 +101,17 @@ pub async fn export_handler(
     let mut buf: Vec<u8> = Vec::new();
 
     match engine.run_to_writer(&mut buf, &opts).await {
-        Ok(_) => {
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, content_type)],
-                String::from_utf8_lossy(&buf).into_owned(),
-            ).into_response()
-        }
-        Err(e) => {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                [(header::CONTENT_TYPE, "application/json")],
-                format!("{{\"error\":\"export failed: {}\"}}", e),
-            ).into_response()
-        }
+        Ok(_) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, content_type)],
+            String::from_utf8_lossy(&buf).into_owned(),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "application/json")],
+            format!("{{\"error\":\"export failed: {}\"}}", e),
+        )
+            .into_response(),
     }
 }

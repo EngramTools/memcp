@@ -267,20 +267,18 @@ impl LogParser for GenericJsonlParser {
             return None;
         }
 
-        let timestamp = obj
-            .get("timestamp")
-            .and_then(|t| {
-                // Try string first, then epoch ms
-                if let Some(s) = t.as_str() {
-                    DateTime::parse_from_rfc3339(s)
-                        .ok()
-                        .map(|dt| dt.with_timezone(&Utc))
-                } else if let Some(ms) = t.as_i64() {
-                    DateTime::from_timestamp_millis(ms)
-                } else {
-                    None
-                }
-            });
+        let timestamp = obj.get("timestamp").and_then(|t| {
+            // Try string first, then epoch ms
+            if let Some(s) = t.as_str() {
+                DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc))
+            } else if let Some(ms) = t.as_i64() {
+                DateTime::from_timestamp_millis(ms)
+            } else {
+                None
+            }
+        });
 
         let session_id = obj
             .get("sessionId")
@@ -353,9 +351,11 @@ pub fn create_parser(format: &str) -> Box<dyn LogParser> {
         "auto" => Box::new(AutoDetectParser::new()),
         "generic-jsonl" | "generic" => Box::new(GenericJsonlParser),
         other => {
-            tracing::warn!(format = other, "Unknown auto-store format, falling back to auto-detect");
+            tracing::warn!(
+                format = other,
+                "Unknown auto-store format, falling back to auto-detect"
+            );
             Box::new(AutoDetectParser::new())
         }
     }
 }
-

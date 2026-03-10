@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::{ExtractionError, ExtractionProvider, ExtractionResult, build_extraction_prompt};
+use super::{build_extraction_prompt, ExtractionError, ExtractionProvider, ExtractionResult};
 
 /// Request body for OpenAI Chat Completions API
 #[derive(Serialize)]
@@ -74,7 +74,11 @@ impl OpenAIExtractionProvider {
     ///
     /// # Errors
     /// Returns `ExtractionError::NotConfigured` if api_key is empty.
-    pub fn new(api_key: String, model: String, max_content_chars: usize) -> Result<Self, ExtractionError> {
+    pub fn new(
+        api_key: String,
+        model: String,
+        max_content_chars: usize,
+    ) -> Result<Self, ExtractionError> {
         if api_key.trim().is_empty() {
             return Err(ExtractionError::NotConfigured(
                 "OpenAI API key is required when using the openai extraction provider. \
@@ -135,26 +139,31 @@ impl ExtractionProvider for OpenAIExtractionProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "unknown error".to_string());
-            return Err(ExtractionError::Api { status, message: body });
+            return Err(ExtractionError::Api {
+                status,
+                message: body,
+            });
         }
 
-        let chat_response: ChatResponse = response
-            .json()
-            .await
-            .map_err(|e| ExtractionError::Generation(format!("Failed to parse OpenAI response: {}", e)))?;
+        let chat_response: ChatResponse = response.json().await.map_err(|e| {
+            ExtractionError::Generation(format!("Failed to parse OpenAI response: {}", e))
+        })?;
 
         let content_str = chat_response
             .choices
             .into_iter()
             .next()
             .map(|c| c.message.content)
-            .ok_or_else(|| ExtractionError::Generation("OpenAI returned empty choices list".to_string()))?;
+            .ok_or_else(|| {
+                ExtractionError::Generation("OpenAI returned empty choices list".to_string())
+            })?;
 
-        let output: ExtractionOutput = serde_json::from_str(&content_str)
-            .map_err(|e| ExtractionError::Generation(format!(
+        let output: ExtractionOutput = serde_json::from_str(&content_str).map_err(|e| {
+            ExtractionError::Generation(format!(
                 "Failed to parse extraction JSON from model output: {} (content: {})",
                 e, &content_str
-            )))?;
+            ))
+        })?;
 
         Ok(ExtractionResult {
             entities: output.entities,

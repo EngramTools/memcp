@@ -57,9 +57,18 @@ fn type_hint_for(i: usize) -> &'static str {
 
 /// Tag assignment: ~30% no tags, ~40% one tag, ~30% two tags.
 fn tags_for(i: usize) -> Option<serde_json::Value> {
-    let tag_pool = ["rust", "memory", "search", "config", "daemon", "cli", "gc", "embedding"];
+    let tag_pool = [
+        "rust",
+        "memory",
+        "search",
+        "config",
+        "daemon",
+        "cli",
+        "gc",
+        "embedding",
+    ];
     match i % 10 {
-        0..=2 => None, // 30% no tags
+        0..=2 => None,                                                    // 30% no tags
         3..=6 => Some(serde_json::json!([tag_pool[i % tag_pool.len()]])), // 40% one tag
         _ => Some(serde_json::json!([
             tag_pool[i % tag_pool.len()],
@@ -169,7 +178,10 @@ async fn stress_100k_memories(pool: PgPool) {
             })
         });
 
-        store.store(create).await.expect("store() failed during stress insert");
+        store
+            .store(create)
+            .await
+            .expect("store() failed during stress insert");
 
         if i % 2000 == 1999 {
             println!("  store() path: {}k done...", (i - 90_000 + 1) / 1000 + 90);
@@ -177,7 +189,11 @@ async fn stress_100k_memories(pool: PgPool) {
     }
 
     let insert_ms = insert_start.elapsed().as_millis();
-    println!("  Bulk insert done in {}ms ({:.1}s)", insert_ms, insert_ms as f64 / 1000.0);
+    println!(
+        "  Bulk insert done in {}ms ({:.1}s)",
+        insert_ms,
+        insert_ms as f64 / 1000.0
+    );
 
     // ─── Phase 2: Search performance ─────────────────────────────────────────
     //
@@ -189,7 +205,7 @@ async fn stress_100k_memories(pool: PgPool) {
     let search_results = store
         .hybrid_search(
             "stress test memory",
-            None,      // no embedding — BM25 only
+            None, // no embedding — BM25 only
             10,
             None,      // created_after
             None,      // created_before
@@ -205,7 +221,11 @@ async fn stress_100k_memories(pool: PgPool) {
         .expect("hybrid_search failed");
 
     let search_ms = search_start.elapsed().as_millis();
-    println!("  Search returned {} results in {}ms", search_results.len(), search_ms);
+    println!(
+        "  Search returned {} results in {}ms",
+        search_results.len(),
+        search_ms
+    );
     assert!(
         search_ms < 2000,
         "BM25 search took {}ms — expected <2000ms at 100k scale",
@@ -254,7 +274,11 @@ async fn stress_100k_memories(pool: PgPool) {
         .expect("list() page 2 failed");
 
     let list_p2_ms = list_p2_start.elapsed().as_millis();
-    println!("  Page 2: {} memories in {}ms", page2.memories.len(), list_p2_ms);
+    println!(
+        "  Page 2: {} memories in {}ms",
+        page2.memories.len(),
+        list_p2_ms
+    );
     assert!(
         list_p2_ms < 200,
         "List page 2 took {}ms — expected <200ms",
@@ -314,7 +338,10 @@ async fn stress_100k_memories(pool: PgPool) {
         .expect("soft_delete_memories failed");
     let delete_ms = delete_start.elapsed().as_millis();
 
-    println!("  Soft-deleted {} memories in {}ms", deleted_count, delete_ms);
+    println!(
+        "  Soft-deleted {} memories in {}ms",
+        deleted_count, delete_ms
+    );
     assert!(
         delete_ms < 1000,
         "Soft delete 100 took {}ms — expected <1000ms",
@@ -324,7 +351,11 @@ async fn stress_100k_memories(pool: PgPool) {
     // ─── Summary ─────────────────────────────────────────────────────────────
 
     println!("\n=== Stress Test Results (100k memories) ===");
-    println!("  Bulk insert:     {}ms ({:.1}s)", insert_ms, insert_ms as f64 / 1000.0);
+    println!(
+        "  Bulk insert:     {}ms ({:.1}s)",
+        insert_ms,
+        insert_ms as f64 / 1000.0
+    );
     println!("  Search (BM25):   {}ms", search_ms);
     println!("  List page 1:     {}ms", list_p1_ms);
     println!("  List page 2:     {}ms", list_p2_ms);

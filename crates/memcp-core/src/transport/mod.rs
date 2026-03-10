@@ -5,9 +5,9 @@
 //! and IPC (Unix socket for daemon<->CLI communication).
 //! Wires together storage/, intelligence/, and pipeline/ layers.
 
-pub mod server;
+pub mod api;
+pub mod daemon;
 pub mod health;
 pub mod ipc;
-pub mod daemon;
-pub mod api;
 pub mod metrics;
+pub mod server;

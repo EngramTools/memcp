@@ -13,9 +13,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::config::CurationConfig;
 use crate::pipeline::curation::algorithmic::detect_injection_signals;
 use crate::pipeline::curation::worker::run_curation;
-use crate::pipeline::curation::{
-    ClusterMember, CurationAction, CurationError, CurationProvider,
-};
+use crate::pipeline::curation::{ClusterMember, CurationAction, CurationError, CurationProvider};
 use crate::store::postgres::PostgresMemoryStore;
 
 // ─── Violation Types ─────────────────────────────────────────────────────────
@@ -72,6 +70,12 @@ pub struct TrustWorkloadState {
     pub curation_metrics: Arc<Mutex<CurationMetrics>>,
 }
 
+impl Default for TrustWorkloadState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TrustWorkloadState {
     /// Create a new empty trust workload state.
     pub fn new() -> Self {
@@ -90,10 +94,7 @@ impl TrustWorkloadState {
 ///
 /// For each quarantined ID found in search results, adds a
 /// `QuarantinedInSearchResults` violation. Returns the count of violations found.
-pub async fn check_search_results(
-    state: &TrustWorkloadState,
-    result_ids: &[String],
-) -> usize {
+pub async fn check_search_results(state: &TrustWorkloadState, result_ids: &[String]) -> usize {
     let quarantined = state.quarantined_ids.read().await;
     let mut violation_count = 0;
 
@@ -135,9 +136,7 @@ pub fn audit_memory(
     // Check for "suspicious" tag
     let has_suspicious = tags
         .and_then(|t| t.as_array())
-        .map_or(false, |arr| {
-            arr.iter().any(|v| v.as_str() == Some("suspicious"))
-        });
+        .is_some_and(|arr| arr.iter().any(|v| v.as_str() == Some("suspicious")));
 
     if !has_suspicious {
         violations.push(CorrectnessViolation {
@@ -161,9 +160,7 @@ pub fn audit_memory(
     }
 
     // Check metadata.trust_history exists
-    let has_audit_trail = metadata
-        .and_then(|m| m.get("trust_history"))
-        .is_some();
+    let has_audit_trail = metadata.and_then(|m| m.get("trust_history")).is_some();
 
     if !has_audit_trail {
         violations.push(CorrectnessViolation {
@@ -238,10 +235,7 @@ impl CurationProvider for MockLlmProvider {
             if !signals.is_empty() {
                 actions.push(CurationAction::Suspicious {
                     memory_id: member.id.clone(),
-                    reason: format!(
-                        "algorithmic: {} signal(s) detected",
-                        signals.len()
-                    ),
+                    reason: format!("algorithmic: {} signal(s) detected", signals.len()),
                     signals,
                 });
                 continue;
@@ -273,10 +267,7 @@ impl CurationProvider for MockLlmProvider {
         Ok(actions)
     }
 
-    async fn synthesize_merge(
-        &self,
-        sources: &[ClusterMember],
-    ) -> Result<String, CurationError> {
+    async fn synthesize_merge(&self, sources: &[ClusterMember]) -> Result<String, CurationError> {
         tokio::time::sleep(self.latency).await;
         let merged = sources
             .iter()
@@ -321,7 +312,14 @@ pub async fn run_curation_loop(
 
         let cycle_start = std::time::Instant::now();
 
-        match run_curation(&store, &config, Some(provider as &dyn CurationProvider), false).await {
+        match run_curation(
+            &store,
+            &config,
+            Some(provider as &dyn CurationProvider),
+            false,
+        )
+        .await
+        {
             Ok(result) => {
                 let elapsed_ms = cycle_start.elapsed().as_millis() as u64;
 
@@ -379,10 +377,11 @@ pub async fn post_run_audit(
     let mut quarantined_ids = state.quarantined_ids.write().await;
 
     for row in &rows {
-        let has_suspicious = row.tags
+        let has_suspicious = row
+            .tags
             .as_ref()
             .and_then(|t| t.as_array())
-            .map_or(false, |arr| arr.iter().any(|v| v.as_str() == Some("suspicious")));
+            .is_some_and(|arr| arr.iter().any(|v| v.as_str() == Some("suspicious")));
 
         if has_suspicious {
             // Memory was quarantined — verify consistency
@@ -661,8 +660,7 @@ mod tests {
         use crate::load_test::TrustCorpusConfig;
         use std::sync::atomic::Ordering;
 
-        let db_url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set for e2e test");
+        let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for e2e test");
 
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(10)
@@ -675,7 +673,9 @@ mod tests {
         crate::MIGRATOR.run(&pool).await.expect("Migrations failed");
 
         // Clear existing data
-        corpus::clear_corpus(&pool).await.expect("clear_corpus failed");
+        corpus::clear_corpus(&pool)
+            .await
+            .expect("clear_corpus failed");
         sqlx::query("TRUNCATE TABLE curation_runs CASCADE")
             .execute(&pool)
             .await
@@ -782,12 +782,7 @@ mod tests {
         // Check for quarantine violations specifically (tag/trust/audit consistency)
         let quarantine_violations: Vec<_> = violations
             .iter()
-            .filter(|v| {
-                matches!(
-                    v.violation_type,
-                    ViolationType::QuarantinedInSearchResults
-                )
-            })
+            .filter(|v| matches!(v.violation_type, ViolationType::QuarantinedInSearchResults))
             .collect();
         assert!(
             quarantine_violations.is_empty(),

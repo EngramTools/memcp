@@ -399,6 +399,7 @@ impl RecallEngine {
                 trust_level: candidate.trust_level,
                 session_id: None,
                 agent_role: None,
+                write_path: None,
                 metadata: serde_json::json!({}),
             };
 

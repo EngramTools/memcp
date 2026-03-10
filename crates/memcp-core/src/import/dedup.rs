@@ -24,7 +24,8 @@ pub fn normalize_content(content: &str) -> String {
 
     // Remove common markdown formatting characters that don't affect meaning.
     // Headers: remove leading # characters and surrounding whitespace.
-    s = s.lines()
+    s = s
+        .lines()
         .map(|line| {
             let trimmed = line.trim_start_matches('#').trim();
             trimmed.to_string()
@@ -33,10 +34,15 @@ pub fn normalize_content(content: &str) -> String {
         .join("\n");
 
     // Remove bold/italic markers.
-    s = s.replace("**", "").replace('*', "").replace("__", "").replace('_', "");
+    s = s
+        .replace("**", "")
+        .replace('*', "")
+        .replace("__", "")
+        .replace('_', "");
 
     // Remove blockquotes.
-    s = s.lines()
+    s = s
+        .lines()
         .map(|line| line.trim_start_matches('>').trim().to_string())
         .collect::<Vec<_>>()
         .join("\n");
@@ -45,9 +51,13 @@ pub fn normalize_content(content: &str) -> String {
     s = s.replace("```", "").replace('`', "");
 
     // Remove list markers at line start.
-    s = s.lines()
+    s = s
+        .lines()
         .map(|line| {
-            let trimmed = line.trim_start_matches("- ").trim_start_matches("* ").trim_start_matches("+ ");
+            let trimmed = line
+                .trim_start_matches("- ")
+                .trim_start_matches("* ")
+                .trim_start_matches("+ ");
             trimmed.to_string()
         })
         .collect::<Vec<_>>()
@@ -103,13 +113,16 @@ pub async fn check_existing(pool: &PgPool, hashes: &[String]) -> anyhow::Result<
         "SELECT content FROM memories
          WHERE content IS NOT NULL
            AND deleted_at IS NULL
-           AND created_at >= NOW() - ($1 || ' days')::INTERVAL"
+           AND created_at >= NOW() - ($1 || ' days')::INTERVAL",
     )
     .bind(IMPORT_DEDUP_WINDOW_DAYS.to_string())
     .fetch_all(pool)
     .await
     .map_err(|e| {
-        warn!("Dedup query failed, proceeding without store-level dedup: {}", e);
+        warn!(
+            "Dedup query failed, proceeding without store-level dedup: {}",
+            e
+        );
         e
     })?;
 

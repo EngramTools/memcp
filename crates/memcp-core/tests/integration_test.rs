@@ -1,9 +1,9 @@
+use serde_json::{json, Value};
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
-use std::io::{Write, BufRead, BufReader};
-use std::sync::mpsc::{channel, Sender, Receiver};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
-use serde_json::{json, Value};
 
 /// Locate the memcp binary in the workspace target directory.
 /// In a workspace, binaries from other crates are built into the shared target/ dir.
@@ -271,7 +271,8 @@ fn test_initialize_handshake() {
         }
     });
 
-    let response = client.send_request(initialize_request)
+    let response = client
+        .send_request(initialize_request)
         .expect("Failed to get initialize response");
 
     // Verify response structure
@@ -309,7 +310,8 @@ fn test_tool_discovery() {
             "clientInfo": {"name": "test", "version": "1.0"}
         }
     });
-    client.send_request(initialize_request)
+    client
+        .send_request(initialize_request)
         .expect("Failed to initialize");
 
     // Send initialized notification
@@ -325,7 +327,8 @@ fn test_tool_discovery() {
         "id": 2
     });
 
-    let response = client.send_request(tools_list_request)
+    let response = client
+        .send_request(tools_list_request)
         .expect("Failed to get tools/list response");
 
     // Verify response
@@ -334,10 +337,11 @@ fn test_tool_discovery() {
     assert!(response["result"]["tools"].is_array());
 
     let tools = response["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 12, "Should have exactly 12 tools");
+    assert_eq!(tools.len(), 13, "Should have exactly 13 tools");
 
     // Check all expected tools are present
-    let tool_names: Vec<String> = tools.iter()
+    let tool_names: Vec<String> = tools
+        .iter()
         .map(|t| t["name"].as_str().unwrap().to_string())
         .collect();
 
@@ -353,6 +357,7 @@ fn test_tool_discovery() {
     assert!(tool_names.contains(&"feedback_memory".to_string()));
     assert!(tool_names.contains(&"recall_memory".to_string()));
     assert!(tool_names.contains(&"annotate_memory".to_string()));
+    assert!(tool_names.contains(&"discover_memories".to_string()));
 
     // Verify each tool has required fields
     for tool in tools {
@@ -380,7 +385,8 @@ fn test_store_memory_success() {
             "clientInfo": {"name": "test", "version": "1.0"}
         }
     });
-    client.send_request(initialize_request)
+    client
+        .send_request(initialize_request)
         .expect("Failed to initialize");
 
     client.send_notification(json!({
@@ -403,7 +409,8 @@ fn test_store_memory_success() {
         }
     });
 
-    let response = client.send_request(store_request)
+    let response = client
+        .send_request(store_request)
         .expect("Failed to get store_memory response");
 
     // Verify success response
@@ -447,7 +454,8 @@ fn test_store_memory_validation_error() {
             "clientInfo": {"name": "test", "version": "1.0"}
         }
     });
-    client.send_request(initialize_request)
+    client
+        .send_request(initialize_request)
         .expect("Failed to initialize");
 
     client.send_notification(json!({
@@ -468,7 +476,8 @@ fn test_store_memory_validation_error() {
         }
     });
 
-    let response = client.send_request(store_request)
+    let response = client
+        .send_request(store_request)
         .expect("Failed to get store_memory response");
 
     // Verify validation error response
@@ -480,10 +489,17 @@ fn test_store_memory_validation_error() {
     assert_eq!(result["isError"], true, "Should have isError: true");
 
     // Check error message mentions "content"
-    let content_arr = result["content"].as_array().expect("content should be array");
-    let error_text = content_arr[0]["text"].as_str().expect("should have error text");
-    assert!(error_text.to_lowercase().contains("content"),
-            "Error message should mention 'content': {}", error_text);
+    let content_arr = result["content"]
+        .as_array()
+        .expect("content should be array");
+    let error_text = content_arr[0]["text"]
+        .as_str()
+        .expect("should have error text");
+    assert!(
+        error_text.to_lowercase().contains("content"),
+        "Error message should mention 'content': {}",
+        error_text
+    );
 }
 
 #[test]
@@ -501,7 +517,8 @@ fn test_health_check() {
             "clientInfo": {"name": "test", "version": "1.0"}
         }
     });
-    client.send_request(initialize_request)
+    client
+        .send_request(initialize_request)
         .expect("Failed to initialize");
 
     client.send_notification(json!({
@@ -520,7 +537,8 @@ fn test_health_check() {
         }
     });
 
-    let response = client.send_request(health_request)
+    let response = client
+        .send_request(health_request)
         .expect("Failed to get health_check response");
 
     // Verify health check response
@@ -555,7 +573,8 @@ fn test_search_memory() {
             "clientInfo": {"name": "test", "version": "1.0"}
         }
     });
-    client.send_request(initialize_request)
+    client
+        .send_request(initialize_request)
         .expect("Failed to initialize");
 
     client.send_notification(json!({
@@ -576,7 +595,8 @@ fn test_search_memory() {
         }
     });
 
-    let response = client.send_request(search_request)
+    let response = client
+        .send_request(search_request)
         .expect("Failed to get search_memory response");
 
     // Verify search response
@@ -591,8 +611,10 @@ fn test_search_memory() {
     if result["structuredContent"].is_object() {
         let search_result = &result["structuredContent"];
         // Server returns "memories" array (not "results")
-        assert!(search_result["memories"].is_array() || search_result["total_results"].is_number(),
-            "Should have memories array or total_results field");
+        assert!(
+            search_result["memories"].is_array() || search_result["total_results"].is_number(),
+            "Should have memories array or total_results field"
+        );
 
         if let Some(memories) = search_result["memories"].as_array() {
             if !memories.is_empty() {
@@ -623,24 +645,27 @@ async fn test_store_then_get_contract() {
     initialize_mcp_test_client(&client);
 
     // Store a memory via JSON-RPC
-    let store_response = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 2,
-        "params": {
-            "name": "store_memory",
-            "arguments": {
-                "content": "contract test data",
-                "type_hint": "fact",
-                "source": "contract-test"
+    let store_response = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 2,
+            "params": {
+                "name": "store_memory",
+                "arguments": {
+                    "content": "contract test data",
+                    "type_hint": "fact",
+                    "source": "contract-test"
+                }
             }
-        }
-    })).expect("Failed to get store_memory response");
+        }))
+        .expect("Failed to get store_memory response");
 
     assert_eq!(store_response["jsonrpc"], "2.0");
     assert_eq!(store_response["id"], 2);
     assert!(
-        store_response["result"]["isError"].is_null() || store_response["result"]["isError"] == false,
+        store_response["result"]["isError"].is_null()
+            || store_response["result"]["isError"] == false,
         "store_memory should not return isError: {}",
         store_response
     );
@@ -652,17 +677,19 @@ async fn test_store_then_get_contract() {
     let stored_id = stored_id.to_string();
 
     // Get the memory back via JSON-RPC
-    let get_response = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 3,
-        "params": {
-            "name": "get_memory",
-            "arguments": {
-                "id": stored_id
+    let get_response = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 3,
+            "params": {
+                "name": "get_memory",
+                "arguments": {
+                    "id": stored_id
+                }
             }
-        }
-    })).expect("Failed to get get_memory response");
+        }))
+        .expect("Failed to get get_memory response");
 
     assert_eq!(get_response["jsonrpc"], "2.0");
     assert_eq!(get_response["id"], 3);
@@ -676,12 +703,21 @@ async fn test_store_then_get_contract() {
 
     // Verify data persisted correctly
     let memory = &get_result["structuredContent"];
-    assert_eq!(memory["content"], "contract test data",
-        "content should round-trip through store→get: {}", memory);
-    assert_eq!(memory["type_hint"], "fact",
-        "type_hint should round-trip through store→get: {}", memory);
-    assert_eq!(memory["source"], "contract-test",
-        "source should round-trip through store→get: {}", memory);
+    assert_eq!(
+        memory["content"], "contract test data",
+        "content should round-trip through store→get: {}",
+        memory
+    );
+    assert_eq!(
+        memory["type_hint"], "fact",
+        "type_hint should round-trip through store→get: {}",
+        memory
+    );
+    assert_eq!(
+        memory["source"], "contract-test",
+        "source should round-trip through store→get: {}",
+        memory
+    );
 
     client.cleanup().await;
 }
@@ -696,22 +732,25 @@ async fn test_store_then_search_contract() {
     initialize_mcp_test_client(&client);
 
     // Store a memory with distinctive content for searching
-    let store_response = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 2,
-        "params": {
-            "name": "store_memory",
-            "arguments": {
-                "content": "Rust memory persistence verification",
-                "type_hint": "fact",
-                "source": "contract-test"
+    let store_response = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 2,
+            "params": {
+                "name": "store_memory",
+                "arguments": {
+                    "content": "Rust memory persistence verification",
+                    "type_hint": "fact",
+                    "source": "contract-test"
+                }
             }
-        }
-    })).expect("Failed to store memory");
+        }))
+        .expect("Failed to store memory");
 
     assert!(
-        store_response["result"]["isError"].is_null() || store_response["result"]["isError"] == false,
+        store_response["result"]["isError"].is_null()
+            || store_response["result"]["isError"] == false,
         "store_memory should succeed: {}",
         store_response
     );
@@ -723,37 +762,43 @@ async fn test_store_then_search_contract() {
         .to_string();
 
     // Search for the stored memory
-    let search_response = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 3,
-        "params": {
-            "name": "search_memory",
-            "arguments": {
-                "query": "Rust memory persistence"
+    let search_response = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 3,
+            "params": {
+                "name": "search_memory",
+                "arguments": {
+                    "query": "Rust memory persistence"
+                }
             }
-        }
-    })).expect("Failed to search memory");
+        }))
+        .expect("Failed to search memory");
 
     assert_eq!(search_response["jsonrpc"], "2.0");
     assert_eq!(search_response["id"], 3);
     assert!(
-        search_response["result"]["isError"].is_null() || search_response["result"]["isError"] == false,
+        search_response["result"]["isError"].is_null()
+            || search_response["result"]["isError"] == false,
         "search_memory should not return isError: {}",
         search_response
     );
 
     // Verify the stored memory appears in search results
     let search_result = &search_response["result"]["structuredContent"];
-    let memories = search_result["memories"].as_array()
+    let memories = search_result["memories"]
+        .as_array()
         .expect("search_memory should return memories array");
 
-    let found = memories.iter().any(|m| {
-        m["id"].as_str() == Some(&stored_id)
-    });
-    assert!(found,
+    let found = memories
+        .iter()
+        .any(|m| m["id"].as_str() == Some(&stored_id));
+    assert!(
+        found,
         "Stored memory (id={}) should appear in search results. Got: {}",
-        stored_id, search_result);
+        stored_id, search_result
+    );
 
     client.cleanup().await;
 }
@@ -768,22 +813,25 @@ async fn test_store_then_delete_contract() {
     initialize_mcp_test_client(&client);
 
     // Store a memory
-    let store_response = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 2,
-        "params": {
-            "name": "store_memory",
-            "arguments": {
-                "content": "memory to be deleted",
-                "type_hint": "fact",
-                "source": "contract-test"
+    let store_response = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 2,
+            "params": {
+                "name": "store_memory",
+                "arguments": {
+                    "content": "memory to be deleted",
+                    "type_hint": "fact",
+                    "source": "contract-test"
+                }
             }
-        }
-    })).expect("Failed to store memory");
+        }))
+        .expect("Failed to store memory");
 
     assert!(
-        store_response["result"]["isError"].is_null() || store_response["result"]["isError"] == false,
+        store_response["result"]["isError"].is_null()
+            || store_response["result"]["isError"] == false,
         "store_memory should succeed: {}",
         store_response
     );
@@ -794,47 +842,54 @@ async fn test_store_then_delete_contract() {
         .to_string();
 
     // Delete the memory
-    let delete_response = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 3,
-        "params": {
-            "name": "delete_memory",
-            "arguments": {
-                "id": stored_id.clone()
+    let delete_response = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 3,
+            "params": {
+                "name": "delete_memory",
+                "arguments": {
+                    "id": stored_id.clone()
+                }
             }
-        }
-    })).expect("Failed to delete memory");
+        }))
+        .expect("Failed to delete memory");
 
     assert_eq!(delete_response["jsonrpc"], "2.0");
     assert_eq!(delete_response["id"], 3);
     assert!(
-        delete_response["result"]["isError"].is_null() || delete_response["result"]["isError"] == false,
+        delete_response["result"]["isError"].is_null()
+            || delete_response["result"]["isError"] == false,
         "delete_memory should succeed: {}",
         delete_response
     );
 
     // Attempt to get the deleted memory — should return isError: true or empty
-    let get_response = client.send_request(json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "id": 4,
-        "params": {
-            "name": "get_memory",
-            "arguments": {
-                "id": stored_id
+    let get_response = client
+        .send_request(json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "id": 4,
+            "params": {
+                "name": "get_memory",
+                "arguments": {
+                    "id": stored_id
+                }
             }
-        }
-    })).expect("Failed to send get_memory request");
+        }))
+        .expect("Failed to send get_memory request");
 
     assert_eq!(get_response["jsonrpc"], "2.0");
     assert_eq!(get_response["id"], 4);
 
     // After deletion, get_memory should return isError: true
     let get_result = &get_response["result"];
-    assert_eq!(get_result["isError"], true,
+    assert_eq!(
+        get_result["isError"], true,
         "get_memory after delete should return isError: true. Got: {}",
-        get_response);
+        get_response
+    );
 
     client.cleanup().await;
 }
