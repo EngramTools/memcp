@@ -328,11 +328,17 @@ async fn execute_curation(
                         suspicious_count += 1;
                         continue;
                     }
-                    let _ = store.add_memory_tag(&memory_id, "suspicious").await;
+                    let _ = store.add_memory_tag(&memory_id, "curation:flagged").await;
+                    tracing::warn!(
+                        memory_id = %memory_id,
+                        reason = %reason,
+                        signals = ?signals,
+                        "Suspicious memory flagged by curation — trust lowered to 0.1"
+                    );
                     let _ = store
                         .update_trust_level(
                             &memory_id,
-                            0.05,
+                            0.1,
                             &format!("quarantined: {} [signals: {}]", reason, signals.join(", ")),
                         )
                         .await;
