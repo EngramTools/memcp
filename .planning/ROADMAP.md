@@ -629,7 +629,7 @@ Plans:
 - **Depends on**: Phase 20
 - **Origin**: Security hardening for open-source release — agents storing conversation transcripts inevitably capture secrets and PII
 - **Requirements:** [RED-01, RED-02, RED-03, RED-04, RED-05, RED-06, RED-07, RED-08, RED-09, RED-10, RED-11, RED-12, RED-13]
-- **Plans:** 1/2 plans executed
+- **Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 21-01-PLAN.md — RedactionEngine core (patterns, entropy, allowlist, config, unit tests)
