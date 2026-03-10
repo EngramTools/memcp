@@ -592,7 +592,7 @@ Plans:
 ## Phase 18: Benchmark Safety Hardening
 - **Goal**: Harden benchmark runner against accidental data destruction. Current implementation uses TRUNCATE on the same store instance — running benchmarks against a production DB would destroy data. Add safety guards: require explicit `--destructive` flag or separate DB URL, warn on non-benchmark schemas, document safe usage.
 - **Status**: Planned
-- **Plans:** 1/2 plans executed
+- **Plans:** 2/2 plans complete
 - **Requirements:** [BENCH-SAFE-01, BENCH-SAFE-02, BENCH-SAFE-03, BENCH-SAFE-04]
 
 Plans:
@@ -623,10 +623,16 @@ Plans:
 - **Depends on**: Phase 16
 - **Gap Closure**: Closes code debt items from v1.0 audit (affects phases 07.5, 10.2)
 
----
-*Open-source fork cutoff: After Phase 20, fork memcp into a public MIT repo containing phases 01–20 (core memory server + test suite + gap closures). Phase 12+ (auth, boosting, hosted features) stays in the private memcp repo (or engram repo) — never published to the public fork. See engram Phase 4.5 and /Users/ayoamadi/projects/engram/.planning/ROADMAP.md for strategy.*
+## Phase 21: PII & Secret Redaction
+- **Goal**: Detect and redact PII (emails, phone numbers, SSNs, credit cards) and secrets (API keys, tokens, passwords) from memory content before storage. Pre-store redaction in the ingest pipeline prevents sensitive data from reaching the database, logs, backups, or search results. Ships with a default rule set (~30 high-confidence patterns covering major API key providers + common PII formats) using `RegexSet` for single-pass scanning. Partial masking for secrets (preserve prefix for debuggability: `sk-ant-***`), full replacement for PII (`[REDACTED:email]`). Per-category config toggles in `memcp.toml`. Entropy-based post-filtering on generic patterns to reduce false positives. Extends the existing `ContentFilter` pipeline (Phase 06.4) with a new `RedactionFilter` that transforms content instead of dropping it.
+- **Status**: Planned
+- **Depends on**: Phase 20
+- **Origin**: Security hardening for open-source release — agents storing conversation transcripts inevitably capture secrets and PII
 
-*Rationale: BSL doesn't prevent AI-assisted reimplementation in another language. Keeping competitive features in a private repo is stronger practical defense. Core memory server (01–11) is genuinely useful open-source; auth, boosting, and hosted features are the competitive moat.*
+---
+*Open-source fork cutoff: After Phase 21, fork memcp into a public MIT repo containing phases 01–21 (core memory server + test suite + gap closures + PII redaction). Phase 12+ (auth, boosting, hosted features) stays in the private memcp repo (or engram repo) — never published to the public fork. See engram Phase 4.5 and /Users/ayoamadi/projects/engram/.planning/ROADMAP.md for strategy.*
+
+*Rationale: BSL doesn't prevent AI-assisted reimplementation in another language. Keeping competitive features in a private repo is stronger practical defense. Core memory server (01–21) is genuinely useful open-source; auth, boosting, and hosted features are the competitive moat.*
 
 ## Phase 12: Auth & API Keys
 - **Goal**: API key authentication for the MCP interface. NOT full multi-tenant isolation inside memcp — engram uses container-per-tenant, so each memcp instance runs single-tenant. This phase adds the auth layer so a memcp instance rejects unauthorized callers.
