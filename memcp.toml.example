@@ -1,87 +1,492 @@
-# memcp configuration example
-# Copy to memcp.toml and customize as needed.
-# All values shown are defaults — uncomment and change what you need.
-# Environment variables override config: MEMCP_DATABASE_URL, MEMCP_LOG_LEVEL, etc.
-# Nested sections use double underscores: MEMCP_AUTO_STORE__ENABLED=true
+# memcp configuration
+#
+# Config is loaded in layers: defaults -> memcp.toml -> environment variables.
+# Environment variables use MEMCP__ prefix with double underscores for nesting:
+#   MEMCP__EMBEDDING__PROVIDER=openai
+#
+# Copy this file to memcp.toml and uncomment the fields you want to change.
 
-# log_level = "info"
-# log_file = "/tmp/memcp.log"  # optional file log (in addition to stderr)
-
-# PostgreSQL connection URL
-# Also settable via DATABASE_URL or MEMCP_DATABASE_URL env var
+# PostgreSQL database URL (requires pgvector extension)
+# Env: MEMCP__DATABASE_URL or DATABASE_URL
 # database_url = "postgres://memcp:memcp@localhost:5432/memcp"
 
+# Log level: trace, debug, info, warn, error
+# Env: MEMCP__LOG_LEVEL
+# log_level = "info"
+
+# Optional file path for log output (in addition to stderr)
+# Env: MEMCP__LOG_FILE
+# log_file = "/var/log/memcp.log"
+
+# =============================================================================
+# MAIN SECTIONS
+# =============================================================================
+
 [embedding]
-# provider = "fastembed"          # "fastembed" (local, default) or "openai"
-# model = "BAAI/bge-small-en-v1.5"
+# Embedding provider: "local" (fastembed, no API key) or "openai"
+# Env: MEMCP__EMBEDDING__PROVIDER
+# provider = "local"
+
+# Local fastembed model identifier
+# Env: MEMCP__EMBEDDING__LOCAL_MODEL
+# local_model = "AllMiniLML6V2"
+
+# OpenAI embedding model (when provider = "openai")
+# Env: MEMCP__EMBEDDING__OPENAI_MODEL
+# openai_model = "text-embedding-3-small"
+
+# OpenAI API key (required when provider = "openai")
+# Env: MEMCP__EMBEDDING__OPENAI_API_KEY
+# openai_api_key = "sk-..."
+
+# OpenAI-compatible base URL (for Google Gemini, local vLLM, etc.)
+# Env: MEMCP__EMBEDDING__OPENAI_BASE_URL
+# openai_base_url = "https://api.openai.com/v1"
+
+# Model weight cache directory
+# Env: MEMCP__EMBEDDING__CACHE_DIR
+# cache_dir = "~/.cache/memcp/models"
+
+# Override vector dimension (auto-detected from model if omitted)
+# Env: MEMCP__EMBEDDING__DIMENSION
 # dimension = 384
-# batch_size = 32
+
+# Re-embed when only tags change (default: false, saves compute)
+# Env: MEMCP__EMBEDDING__REEMBED_ON_TAG_CHANGE
+# reembed_on_tag_change = false
+
+# Multi-model tiers (advanced). Empty = single-model mode.
+# [embedding.tiers.fast]
+# provider = "local"
+# model = "AllMiniLML6V2"
+#
+# [embedding.tiers.quality]
+# provider = "openai"
+# model = "text-embedding-3-small"
+# routing = { type_hints = ["decision"], min_stability = 0.8 }
+# promotion = { min_reinforcements = 3, min_stability = 0.8, sweep_interval_minutes = 60, batch_cap = 15 }
 
 [search]
-# bm25_backend = "native"        # "native" (PostgreSQL tsvector) or "paradedb" (pg_search extension)
-# default_min_salience = 0.3     # global floor for search results (0.0–1.0), omit to disable
-# salience_hint_mode = false     # include hint when all results filtered by salience
+# BM25 backend: "native" (PostgreSQL tsvector) or "paradedb" (pg_search extension)
+# Env: MEMCP__SEARCH__BM25_BACKEND
+# bm25_backend = "native"
 
-[salience]
-# base_stability = 2.5
-# reinforcement_bonus = 0.3
-# rrf_weight = 0.6               # how much search relevance counts vs memory strength
-# salience_weight = 0.4
+# Global default minimum salience for search results (0.0-1.0)
+# Env: MEMCP__SEARCH__DEFAULT_MIN_SALIENCE
+# default_min_salience = 0.0
 
-[extraction]
-# enabled = true
-# provider = "ollama"            # "ollama" or "openai"
-# model = "llama3.2"
-
-[consolidation]
-# enabled = false
-# similarity_threshold = 0.92
-# max_cluster_size = 5
-
-[query_intelligence]
-# expansion_enabled = false      # LLM-powered query expansion
-# rerank_enabled = false         # LLM-powered re-ranking of top results
-# provider = "ollama"
-# model = "llama3.2"
+# Show hint when results filtered by salience threshold
+# Env: MEMCP__SEARCH__SALIENCE_HINT_MODE
+# salience_hint_mode = false
 
 [auto_store]
-# enabled = false                # set to true to activate the auto-store sidecar
-# watch_paths = []               # directories or files to watch for JSONL
-                                 # leave empty to auto-discover ~/.claude/projects/
-# format = "claude-code"         # "claude-code", "openclaw", or "generic-jsonl"
-# filter_mode = "none"           # "none" (default), "category", "heuristic", or "llm"
-                                 # "none" works out of the box — no external deps needed
-                                 # set to "llm" for AI-powered filtering (requires Ollama)
+# Whether auto-store sidecar is enabled
+# Env: MEMCP__AUTO_STORE__ENABLED
+# enabled = false
+
+# Paths to watch for conversation log files (supports ~ expansion)
+# watch_paths = ["~/.claude/projects/myproject"]
+
+# Log format: "claude-code", "auto", or "generic-jsonl"
+# Env: MEMCP__AUTO_STORE__FORMAT
+# format = "claude-code"
+
+# Filter mode: "llm", "heuristic", "category", or "none"
+# Env: MEMCP__AUTO_STORE__FILTER_MODE
+# filter_mode = "none"
+
+# LLM provider for filtering: "ollama" or "openai"
+# Env: MEMCP__AUTO_STORE__FILTER_PROVIDER
 # filter_provider = "ollama"
+
+# Model for LLM filter
+# Env: MEMCP__AUTO_STORE__FILTER_MODEL
 # filter_model = "llama3.2"
-# poll_interval_secs = 5         # fallback polling interval for directory scanning
-# dedup_window_secs = 300        # time window for content dedup (seconds)
 
-[auto_store.category_filter]
-# block_tool_narration = true
-# tool_narration_patterns = []   # additional regex patterns to block (extends built-in list)
+# Poll interval in seconds
+# Env: MEMCP__AUTO_STORE__POLL_INTERVAL_SECS
+# poll_interval_secs = 5
 
-[content_filter]
-# enabled = false                # topic exclusion filter
-# excluded_topics = []           # e.g. ["medical", "financial"]
-
-[summarization]
-# enabled = false                # summarize assistant responses before storing
-# provider = "ollama"            # "ollama" or "openai"
-# model = "llama3.2"
-
-[dedup]
-# enabled = true                 # semantic deduplication (embedding-based)
-# similarity_threshold = 0.95
-
-[idempotency]
-# enabled = true                 # content-hash dedup + caller-provided idempotency keys
-# ttl_secs = 86400               # how long to remember seen content hashes (24h default)
+# Dedup window in seconds (identical content within window is skipped)
+# Env: MEMCP__AUTO_STORE__DEDUP_WINDOW_SECS
+# dedup_window_secs = 300
 
 [gc]
-# enabled = false                # garbage collection for low-salience memories
-# min_age_days = 30
-# salience_threshold = 0.1
+# Whether garbage collection is enabled
+# Env: MEMCP__GC__ENABLED
+# enabled = true
 
-[status_line]
-# enabled = false                # Claude Code status line integration
+# FSRS stability threshold below which memories are pruning candidates
+# Env: MEMCP__GC__SALIENCE_THRESHOLD
+# salience_threshold = 0.3
+
+# Minimum age in days before a memory can be pruned
+# Env: MEMCP__GC__MIN_AGE_DAYS
+# min_age_days = 30
+
+# Never prune below this many live memories
+# Env: MEMCP__GC__MIN_MEMORY_FLOOR
+# min_memory_floor = 100
+
+# GC interval in seconds (default: 3600 = 1 hour)
+# Env: MEMCP__GC__GC_INTERVAL_SECS
+# gc_interval_secs = 3600
+
+# Days after soft-delete before hard purge
+# Env: MEMCP__GC__HARD_PURGE_GRACE_DAYS
+# hard_purge_grace_days = 30
+
+[recall]
+# Maximum memories per recall
+# Env: MEMCP__RECALL__MAX_MEMORIES
+# max_memories = 3
+
+# Minimum relevance threshold (0.0-1.0)
+# Env: MEMCP__RECALL__MIN_RELEVANCE
+# min_relevance = 0.7
+
+# Session idle expiry in seconds (default: 86400 = 24h)
+# Env: MEMCP__RECALL__SESSION_IDLE_SECS
+# session_idle_secs = 86400
+
+# Stability multiplier for recall salience bump
+# Env: MEMCP__RECALL__BUMP_MULTIPLIER
+# bump_multiplier = 0.15
+
+# Maximum stability value (recall bump stops here)
+# Env: MEMCP__RECALL__STABILITY_CEILING
+# stability_ceiling = 100.0
+
+# Max characters per memory in recall output (truncated beyond this)
+# Env: MEMCP__RECALL__TRUNCATION_CHARS
+# truncation_chars = 200
+
+# Enable related_count hints per recalled memory
+# Env: MEMCP__RECALL__RELATED_CONTEXT_ENABLED
+# related_context_enabled = true
+
+# Tag boost weight per matching tag (additive)
+# Env: MEMCP__RECALL__TAG_BOOST_WEIGHT
+# tag_boost_weight = 0.1
+
+# Session topic tracking for implicit boosting
+# Env: MEMCP__RECALL__SESSION_TOPIC_TRACKING
+# session_topic_tracking = true
+
+[curation]
+# Whether curation is enabled (periodic memory self-maintenance)
+# Env: MEMCP__CURATION__ENABLED
+# enabled = false
+
+# Curation interval in seconds (default: 86400 = daily)
+# Env: MEMCP__CURATION__INTERVAL_SECS
+# interval_secs = 86400
+
+# Clustering similarity threshold
+# Env: MEMCP__CURATION__CLUSTER_SIMILARITY_THRESHOLD
+# cluster_similarity_threshold = 0.85
+
+# Stale salience threshold
+# Env: MEMCP__CURATION__STALE_SALIENCE_THRESHOLD
+# stale_salience_threshold = 0.3
+
+# Minimum age in days before stale flagging
+# Env: MEMCP__CURATION__STALE_AGE_DAYS
+# stale_age_days = 30
+
+# Max operations per run
+# max_merges_per_run = 20
+# max_flags_per_run = 50
+# max_strengthens_per_run = 50
+# max_candidates_per_run = 500
+# max_merge_group_size = 5
+
+# LLM provider: "ollama" or "openai" (None = algorithmic-only)
+# Env: MEMCP__CURATION__LLM_PROVIDER
+# llm_provider = "ollama"
+
+# Ollama server URL
+# Env: MEMCP__CURATION__OLLAMA_BASE_URL
+# ollama_base_url = "http://localhost:11434"
+
+# Ollama model for curation
+# Env: MEMCP__CURATION__OLLAMA_MODEL
+# ollama_model = "llama3.2:3b"
+
+[query_intelligence]
+# Enable query expansion
+# Env: MEMCP__QUERY_INTELLIGENCE__EXPANSION_ENABLED
+# expansion_enabled = false
+
+# Enable LLM re-ranking
+# Env: MEMCP__QUERY_INTELLIGENCE__RERANKING_ENABLED
+# reranking_enabled = false
+
+# Provider for expansion: "ollama" or "openai"
+# Env: MEMCP__QUERY_INTELLIGENCE__EXPANSION_PROVIDER
+# expansion_provider = "ollama"
+
+# Provider for reranking: "ollama" or "openai"
+# Env: MEMCP__QUERY_INTELLIGENCE__RERANKING_PROVIDER
+# reranking_provider = "ollama"
+
+# Ollama base URL
+# Env: MEMCP__QUERY_INTELLIGENCE__OLLAMA_BASE_URL
+# ollama_base_url = "http://localhost:11434"
+
+# OpenAI-compatible base URL (for custom endpoints)
+# Env: MEMCP__QUERY_INTELLIGENCE__OPENAI_BASE_URL
+# openai_base_url = "https://api.openai.com/v1"
+
+# OpenAI-compatible API key
+# Env: MEMCP__QUERY_INTELLIGENCE__OPENAI_API_KEY
+# openai_api_key = "sk-..."
+
+# Enable multi-query decomposition
+# Env: MEMCP__QUERY_INTELLIGENCE__MULTI_QUERY_ENABLED
+# multi_query_enabled = true
+
+# Latency budget in ms
+# Env: MEMCP__QUERY_INTELLIGENCE__LATENCY_BUDGET_MS
+# latency_budget_ms = 2000
+
+[redaction]
+# Whether secret detection is enabled (API keys, tokens, private keys)
+# Env: MEMCP__REDACTION__SECRETS_ENABLED
+# secrets_enabled = true
+
+# Whether PII detection is enabled (SSN, credit card)
+# Env: MEMCP__REDACTION__PII_ENABLED
+# pii_enabled = false
+
+# Shannon entropy threshold for generic secret detection
+# Env: MEMCP__REDACTION__ENTROPY_THRESHOLD
+# entropy_threshold = 3.5
+
+# Allowlist: values and patterns that bypass redaction
+# [redaction.allowlist]
+# values = ["example-api-key-123"]
+# patterns = ["test_.*"]
+
+# Custom redaction rules
+# [[redaction.custom_rules]]
+# pattern = "CUSTOM_SECRET_([A-Za-z0-9]+)"
+# category = "custom-secret"
+# mask_style = "partial"
+# prefix_len = 4
+
+# =============================================================================
+# ADVANCED SECTIONS
+# =============================================================================
+
+# [salience]
+# # FSRS salience scoring weights (should sum to 1.0)
+# # Env: MEMCP__SALIENCE__W_RECENCY
+# # w_recency = 0.25
+# # Env: MEMCP__SALIENCE__W_ACCESS
+# # w_access = 0.15
+# # Env: MEMCP__SALIENCE__W_SEMANTIC
+# # w_semantic = 0.45
+# # Env: MEMCP__SALIENCE__W_REINFORCE
+# # w_reinforce = 0.15
+# # Exponential recency decay rate (~70-day half-life)
+# # Env: MEMCP__SALIENCE__RECENCY_LAMBDA
+# # recency_lambda = 0.01
+# # Show dimension breakdown in results
+# # Env: MEMCP__SALIENCE__DEBUG_SCORING
+# # debug_scoring = false
+
+# [extraction]
+# # Entity + fact extraction from memories via LLM
+# # Env: MEMCP__EXTRACTION__ENABLED
+# # enabled = true
+# # Env: MEMCP__EXTRACTION__PROVIDER
+# # provider = "ollama"  # "ollama" or "openai"
+# # Env: MEMCP__EXTRACTION__OLLAMA_BASE_URL
+# # ollama_base_url = "http://localhost:11434"
+# # Env: MEMCP__EXTRACTION__OLLAMA_MODEL
+# # ollama_model = "llama3.2:3b"
+# # Env: MEMCP__EXTRACTION__OPENAI_MODEL
+# # openai_model = "gpt-4o-mini"
+# # Env: MEMCP__EXTRACTION__MAX_CONTENT_CHARS
+# # max_content_chars = 1500
+
+# [consolidation]
+# # Similarity-based memory merging
+# # Env: MEMCP__CONSOLIDATION__ENABLED
+# # enabled = true
+# # Env: MEMCP__CONSOLIDATION__SIMILARITY_THRESHOLD
+# # similarity_threshold = 0.92
+# # Env: MEMCP__CONSOLIDATION__MAX_CONSOLIDATION_GROUP
+# # max_consolidation_group = 5
+
+# [dedup]
+# # Post-embedding semantic deduplication
+# # Env: MEMCP__DEDUP__ENABLED
+# # enabled = true
+# # Env: MEMCP__DEDUP__SIMILARITY_THRESHOLD
+# # similarity_threshold = 0.95
+
+# [chunking]
+# # Long-content chunking for auto-store content
+# # Env: MEMCP__CHUNKING__ENABLED
+# # enabled = true
+# # Env: MEMCP__CHUNKING__MAX_CHUNK_CHARS
+# # max_chunk_chars = 1024
+# # Env: MEMCP__CHUNKING__OVERLAP_SENTENCES
+# # overlap_sentences = 2
+# # Env: MEMCP__CHUNKING__MIN_CONTENT_CHARS
+# # min_content_chars = 2048
+
+# [idempotency]
+# # Content-hash dedup window and caller-provided key TTL
+# # Env: MEMCP__IDEMPOTENCY__DEDUP_WINDOW_SECS
+# # dedup_window_secs = 60
+# # Env: MEMCP__IDEMPOTENCY__KEY_TTL_SECS
+# # key_ttl_secs = 86400
+# # Env: MEMCP__IDEMPOTENCY__MAX_KEY_LENGTH
+# # max_key_length = 256
+
+# [temporal]
+# # Temporal event time extraction from memory content
+# # Env: MEMCP__TEMPORAL__LLM_ENABLED
+# # llm_enabled = false
+# # Env: MEMCP__TEMPORAL__PROVIDER
+# # provider = "ollama"
+# # Env: MEMCP__TEMPORAL__OLLAMA_MODEL
+# # ollama_model = "llama3.2:3b"
+
+# [content_filter]
+# # Content filtering (topic exclusion)
+# # Env: MEMCP__CONTENT_FILTER__ENABLED
+# # enabled = false
+# # Env: MEMCP__CONTENT_FILTER__DEFAULT_ACTION
+# # default_action = "drop"  # "drop" (silent) or "reject" (return error)
+# # regex_patterns = []
+# # excluded_topics = []
+# # Env: MEMCP__CONTENT_FILTER__SEMANTIC_THRESHOLD
+# # semantic_threshold = 0.85
+
+# [summarization]
+# # Auto-summarization for auto-store sidecar
+# # Env: MEMCP__SUMMARIZATION__ENABLED
+# # enabled = false
+# # Env: MEMCP__SUMMARIZATION__PROVIDER
+# # provider = "ollama"  # "ollama" or "openai"
+# # Env: MEMCP__SUMMARIZATION__OLLAMA_MODEL
+# # ollama_model = "llama3.2:3b"
+# # Env: MEMCP__SUMMARIZATION__OPENAI_BASE_URL
+# # openai_base_url = "https://api.openai.com/v1"
+# # Env: MEMCP__SUMMARIZATION__MAX_INPUT_CHARS
+# # max_input_chars = 4000
+
+# [health]
+# # Health HTTP server (container lifecycle probes)
+# # Env: MEMCP__HEALTH__ENABLED
+# # enabled = true
+# # Env: MEMCP__HEALTH__PORT
+# # port = 9090
+# # Env: MEMCP__HEALTH__BIND
+# # bind = "0.0.0.0"
+
+# [resource_caps]
+# # Container deployment resource limits
+# # Env: MEMCP__RESOURCE_CAPS__MAX_MEMORIES
+# # max_memories = 10000  # None = unlimited
+# # Env: MEMCP__RESOURCE_CAPS__MAX_EMBEDDING_BATCH_SIZE
+# # max_embedding_batch_size = 64
+# # Env: MEMCP__RESOURCE_CAPS__MAX_SEARCH_RESULTS
+# # max_search_results = 100
+# # Env: MEMCP__RESOURCE_CAPS__MAX_DB_CONNECTIONS
+# # max_db_connections = 10
+
+# [store]
+# # Store operation configuration
+# # Env: MEMCP__STORE__SYNC_TIMEOUT_SECS
+# # sync_timeout_secs = 5
+
+# [retention]
+# # Type-specific FSRS stability initialization
+# # Env: MEMCP__RETENTION__DEFAULT_STABILITY
+# # default_stability = 2.5
+# # [retention.type_stability]
+# # decision = 5.0
+# # preference = 5.0
+# # instruction = 3.5
+# # fact = 2.5
+# # observation = 1.0
+# # summary = 2.0
+
+# [import]
+# # Import pipeline configuration
+# # noise_patterns = []
+# # Env: MEMCP__IMPORT__BATCH_SIZE
+# # batch_size = 100
+# # default_project = "myproject"
+
+# [enrichment]
+# # Retroactive neighbor enrichment
+# # Env: MEMCP__ENRICHMENT__ENABLED
+# # enabled = false
+# # Env: MEMCP__ENRICHMENT__BATCH_LIMIT
+# # batch_limit = 50
+# # Env: MEMCP__ENRICHMENT__SWEEP_INTERVAL_SECS
+# # sweep_interval_secs = 3600
+# # Env: MEMCP__ENRICHMENT__NEIGHBOR_DEPTH
+# # neighbor_depth = 5
+# # Env: MEMCP__ENRICHMENT__NEIGHBOR_SIMILARITY_THRESHOLD
+# # neighbor_similarity_threshold = 0.7
+
+# [rate_limit]
+# # HTTP API rate limiting
+# # Env: MEMCP__RATE_LIMIT__ENABLED
+# # enabled = true
+# # Env: MEMCP__RATE_LIMIT__GLOBAL_RPS
+# # global_rps = 200
+# # recall_rps = 100
+# # store_rps = 50
+# # search_rps = 100
+# # discover_rps = 50
+# # export_rps = 10
+# # Env: MEMCP__RATE_LIMIT__BURST_MULTIPLIER
+# # burst_multiplier = 2
+
+# [observability]
+# # Prometheus metrics and pool polling
+# # Env: MEMCP__OBSERVABILITY__METRICS_ENABLED
+# # metrics_enabled = true
+# # Env: MEMCP__OBSERVABILITY__POOL_POLL_INTERVAL_SECS
+# # pool_poll_interval_secs = 10
+
+# [promotion]
+# # Memory tier promotion (multi-model mode)
+# # Env: MEMCP__PROMOTION__MIN_REINFORCEMENTS
+# # min_reinforcements = 3
+# # Env: MEMCP__PROMOTION__MIN_STABILITY
+# # min_stability = 0.8
+# # Env: MEMCP__PROMOTION__SWEEP_INTERVAL_MINUTES
+# # sweep_interval_minutes = 60
+# # Env: MEMCP__PROMOTION__BATCH_CAP
+# # batch_cap = 15
+
+# [category_filter]
+# # Category-aware auto-store filter (used when auto_store.filter_mode = "category")
+# # Env: MEMCP__AUTO_STORE__CATEGORY_FILTER__ENABLED
+# # enabled = true
+# # block_tool_narration = true
+# # [category_filter.category_actions]
+# # decision = "store"
+# # preference = "store"
+# # tool-narration = "skip"
+# # ephemeral = "skip"
+# # code-output = "store-low"
+
+# [user]
+# # User-specific context for memory resolution
+# # Env: MEMCP__USER__BIRTH_YEAR
+# # birth_year = 1990
+
+# [project]
+# # Project scoping (isolates memories by codebase)
+# # Env: MEMCP__PROJECT__DEFAULT_PROJECT
+# # default_project = "myproject"
