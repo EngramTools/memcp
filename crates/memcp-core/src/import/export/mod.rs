@@ -235,7 +235,7 @@ impl ExportEngine {
                     m.id, m.content, m.type_hint, m.source, m.tags,
                     m.created_at, m.actor, m.actor_type, m.audience,
                     m.project, m.event_time, m.event_time_precision,
-                    ms.stability, ms.difficulty, ms.reinforcement_count, ms.last_reinforced_at,
+                    ms.stability::float8, ms.difficulty::float8, ms.reinforcement_count, ms.last_reinforced_at,
                     me.embedding::text AS embedding_text, me.model_name AS embedding_model
                 FROM memories m
                 LEFT JOIN memory_salience ms ON m.id = ms.memory_id
@@ -252,7 +252,7 @@ impl ExportEngine {
                     m.id, m.content, m.type_hint, m.source, m.tags,
                     m.created_at, m.actor, m.actor_type, m.audience,
                     m.project, m.event_time, m.event_time_precision,
-                    ms.stability, ms.difficulty, ms.reinforcement_count, ms.last_reinforced_at
+                    ms.stability::float8, ms.difficulty::float8, ms.reinforcement_count, ms.last_reinforced_at
                 FROM memories m
                 LEFT JOIN memory_salience ms ON m.id = ms.memory_id
                 WHERE {}
