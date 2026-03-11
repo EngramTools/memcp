@@ -356,7 +356,10 @@ async fn execute_curation(
                     suspicious_count += 1;
                 }
 
-                CurationAction::Skip { .. } => {
+                CurationAction::Skip { memory_id, .. } => {
+                    if !dry_run {
+                        let _ = store.add_memory_tag(&memory_id, "curation:reviewed").await;
+                    }
                     skipped_count += 1;
                 }
             }

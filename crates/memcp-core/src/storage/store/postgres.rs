@@ -3852,6 +3852,7 @@ impl PostgresMemoryStore {
              WHERE m.deleted_at IS NULL \
              AND m.embedding_status = 'complete' \
              AND NOT (m.type_hint = 'curated' AND m.created_at > NOW() - INTERVAL '1 hour') \
+             AND (m.tags IS NULL OR NOT m.tags @> to_jsonb('curation:reviewed'::text)) \
              AND (m.updated_at > $1 OR m.created_at > $1) \
              ORDER BY m.created_at ASC \
              LIMIT $2"
@@ -3872,6 +3873,7 @@ impl PostgresMemoryStore {
              WHERE m.deleted_at IS NULL \
              AND m.embedding_status = 'complete' \
              AND NOT (m.type_hint = 'curated' AND m.created_at > NOW() - INTERVAL '1 hour') \
+             AND (m.tags IS NULL OR NOT m.tags @> to_jsonb('curation:reviewed'::text)) \
              ORDER BY m.created_at ASC \
              LIMIT $1"
         };
