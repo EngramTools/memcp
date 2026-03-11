@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
 
+pub use algorithmic::CurationSensitivity;
 use crate::config::CurationConfig;
 
 /// Errors that can occur during curation.

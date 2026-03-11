@@ -1458,6 +1458,11 @@ pub struct CurationConfig {
     #[serde(default)]
     pub enabled: bool,
 
+    /// Sensitivity level for injection detection (default: Medium — matches original behavior).
+    /// Low = lenient (fewer flags), High = aggressive (more flags).
+    #[serde(default)]
+    pub sensitivity: crate::pipeline::curation::algorithmic::CurationSensitivity,
+
     /// How often to run curation in seconds (default: 86400 — daily)
     #[serde(default = "default_curation_interval_secs")]
     pub interval_secs: u64,
@@ -1587,6 +1592,7 @@ impl Default for CurationConfig {
             openai_base_url: default_curation_openai_base_url(),
             openai_api_key: None,
             openai_model: default_curation_openai_model(),
+            sensitivity: Default::default(),
         }
     }
 }
