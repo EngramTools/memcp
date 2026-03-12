@@ -722,6 +722,20 @@ async fn create_embedding_provider(
     memcp::daemon::create_embedding_provider(config).await
 }
 
+/// Redact credentials from a database URL for safe logging.
+/// Returns "host:port/db" without username or password.
+fn redact_db_url(url: &str) -> String {
+    // Try to find the @ sign and extract host info after it
+    if let Some(at_pos) = url.find('@') {
+        let scheme_end = url.find("://").map(|p| p + 3).unwrap_or(0);
+        let scheme = &url[..scheme_end];
+        let after_at = &url[at_pos + 1..];
+        format!("{}***@{}", scheme, after_at)
+    } else {
+        url.to_string()
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // 1. Parse CLI args
@@ -1944,7 +1958,7 @@ async fn main() -> Result<()> {
             pg_store_init.set_retention_config(config.retention.clone());
             let store = Arc::new(pg_store_init);
 
-            tracing::info!(database_url = %config.database_url, "PostgreSQL store initialized");
+            tracing::info!(database_url = %redact_db_url(&config.database_url), "PostgreSQL store initialized");
 
             // 6. Create embedding provider and pipeline
             let provider = create_embedding_provider(&config)

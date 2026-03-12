@@ -303,7 +303,7 @@ async fn run_longmemeval(cli: &Cli) -> Result<(), anyhow::Error> {
     }
 
     // Initialize database (isolated in benchmark schema)
-    tracing::info!(database_url = %cli.database_url, schema = "benchmark", "Connecting to database");
+    tracing::info!(database_url = %memcp::errors::redact_url(&cli.database_url), schema = "benchmark", "Connecting to database");
     let store = Arc::new(
         PostgresMemoryStore::new_with_schema(
             &cli.database_url,
@@ -563,7 +563,7 @@ async fn run_locomo(cli: &Cli) -> Result<(), anyhow::Error> {
     }
 
     // Initialize database (isolated in benchmark schema)
-    tracing::info!(database_url = %cli.database_url, schema = "benchmark", "Connecting to database");
+    tracing::info!(database_url = %memcp::errors::redact_url(&cli.database_url), schema = "benchmark", "Connecting to database");
     let store = Arc::new(
         PostgresMemoryStore::new_with_schema(
             &cli.database_url,

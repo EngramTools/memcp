@@ -59,7 +59,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             .await
             {
                 Ok(mut s) => {
-                    tracing::info!(database_url = %config.database_url, "PostgreSQL store initialized");
+                    tracing::info!(database_url = %crate::errors::redact_url(&config.database_url), "PostgreSQL store initialized");
                     // Apply type-specific FSRS stability config before wrapping in Arc
                     s.set_retention_config(config.retention.clone());
                     break Arc::new(s);
