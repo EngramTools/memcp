@@ -72,6 +72,7 @@ fn test_memory(content: &str) -> CreateMemory {
         trust_level: Some(0.5),
         session_id: None,
         agent_role: None,
+        write_path: None,
     }
 }
 

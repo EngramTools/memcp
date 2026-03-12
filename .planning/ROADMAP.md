@@ -670,7 +670,7 @@ Plans:
 **Requirements:** [TCL-01, TCL-02, TCL-03, TCL-04, TCL-05]
 **Depends on:** Phase 22
 **Research:** [OpenViking Tiered Context Loading](../research/openviking-tiered-context-loading.md)
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 - [x] 23-00-PLAN.md — Wave 0: test scaffolds for abstraction (Nyquist)

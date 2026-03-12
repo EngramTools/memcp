@@ -285,6 +285,7 @@ async fn test_export_import_round_trip(pool: PgPool) {
             trust_level: None,
             session_id: None,
             agent_role: None,
+            write_path: None,
         },
         CreateMemory {
             content: "Dark mode is the preferred UI theme for all development tools and code editors".to_string(),
@@ -305,6 +306,7 @@ async fn test_export_import_round_trip(pool: PgPool) {
             trust_level: None,
             session_id: None,
             agent_role: None,
+            write_path: None,
         },
         CreateMemory {
             content: "PostgreSQL chosen over MySQL for better JSON support and pgvector extension availability".to_string(),
@@ -325,6 +327,7 @@ async fn test_export_import_round_trip(pool: PgPool) {
             trust_level: None,
             session_id: None,
             agent_role: None,
+            write_path: None,
         },
     ];
 

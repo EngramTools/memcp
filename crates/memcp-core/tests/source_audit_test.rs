@@ -34,6 +34,7 @@ async fn test_direct_store_preserves_source(pool: PgPool) {
             trust_level: None,
             session_id: None,
             agent_role: None,
+            write_path: None,
         })
         .await
         .unwrap();
@@ -75,6 +76,7 @@ async fn test_user_actor_type_gets_high_trust(pool: PgPool) {
             trust_level: None,
             session_id: None,
             agent_role: None,
+            write_path: None,
         })
         .await
         .unwrap();

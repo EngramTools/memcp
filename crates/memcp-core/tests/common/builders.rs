@@ -111,6 +111,7 @@ impl MemoryBuilder {
             trust_level: self.trust_level,
             session_id: None,
             agent_role: None,
+            write_path: None,
         }
     }
 
