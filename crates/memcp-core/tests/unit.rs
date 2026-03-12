@@ -51,3 +51,6 @@ mod redaction;
 
 #[path = "unit/entropy.rs"]
 mod entropy;
+
+#[path = "unit/abstraction.rs"]
+mod abstraction;
