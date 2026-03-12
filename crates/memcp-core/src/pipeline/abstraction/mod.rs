@@ -9,6 +9,7 @@
 
 pub mod ollama;
 pub mod openai;
+pub mod worker;
 
 use async_trait::async_trait;
 use std::sync::Arc;

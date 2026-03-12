@@ -2898,6 +2898,77 @@ impl PostgresMemoryStore {
         Ok(count.0)
     }
 
+    /// Fetch memories with abstraction_status = 'pending' for worker processing.
+    ///
+    /// Returns full Memory rows ordered by creation time (oldest first).
+    /// The abstraction worker uses this to process memories that need L0/L1 generation.
+    pub async fn get_pending_abstractions(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<crate::store::Memory>, MemcpError> {
+        let rows = sqlx::query(
+            "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
+             extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
+             actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
+             event_time, event_time_precision, project, \
+             trust_level, session_id, agent_role, write_path, metadata, \
+             abstract_text, overview_text, abstraction_status \
+             FROM memories WHERE abstraction_status = 'pending' AND deleted_at IS NULL \
+             ORDER BY created_at ASC LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to fetch pending abstractions: {}", e)))?;
+
+        rows.iter().map(row_to_memory).collect()
+    }
+
+    /// Update abstract_text, overview_text, and abstraction_status for a memory.
+    ///
+    /// Called by the abstraction worker on successful LLM generation.
+    /// Sets abstraction_status = 'complete' along with the generated texts.
+    pub async fn update_abstraction_fields(
+        &self,
+        id: &str,
+        abstract_text: &str,
+        overview_text: Option<&str>,
+        status: &str,
+    ) -> Result<(), MemcpError> {
+        sqlx::query(
+            "UPDATE memories SET abstract_text = $1, overview_text = $2, abstraction_status = $3, updated_at = NOW() \
+             WHERE id = $4",
+        )
+        .bind(abstract_text)
+        .bind(overview_text)
+        .bind(status)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to update abstraction fields: {}", e)))?;
+        Ok(())
+    }
+
+    /// Update only abstraction_status for a memory (used on failure).
+    ///
+    /// Called by the abstraction worker when LLM generation fails.
+    /// Fail-open: memory stays usable with full content for embedding.
+    pub async fn update_abstraction_status(
+        &self,
+        id: &str,
+        status: &str,
+    ) -> Result<(), MemcpError> {
+        sqlx::query(
+            "UPDATE memories SET abstraction_status = $1, updated_at = NOW() WHERE id = $2",
+        )
+        .bind(status)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to update abstraction status: {}", e)))?;
+        Ok(())
+    }
+
     /// Fetch GC candidates: low-salience memories older than min_age_days.
     ///
     /// Excludes consolidated originals (they should never be pruned individually).

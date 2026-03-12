@@ -29,6 +29,7 @@ use crate::extraction::pipeline::ExtractionPipeline;
 use crate::extraction::{ExtractionJob, ExtractionProvider};
 use crate::gc::{self, DedupWorker};
 use crate::ipc::{embed_socket_path, start_embed_listener};
+use crate::pipeline::abstraction::{create_abstraction_provider, worker::run_abstraction_worker};
 use crate::query_intelligence::ollama::OllamaQueryIntelligenceProvider;
 use crate::query_intelligence::openai::OpenAIQueryIntelligenceProvider;
 use crate::query_intelligence::QueryIntelligenceProvider;
@@ -187,6 +188,35 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         tokio::spawn(async move {
             start_embed_listener(socket_path, embed_provider, qi_provider, multi_tier).await;
         });
+    }
+
+    // 3.8. Spawn abstraction worker BEFORE embedding pipeline so abstracts are
+    // generated before embeddings pick up memories. This prevents the race condition
+    // where a memory gets embedded against full content when an abstract is pending.
+    if config.abstraction.enabled {
+        match create_abstraction_provider(&config.abstraction) {
+            Ok(Some(abstraction_provider)) => {
+                let abstraction_store = store.clone();
+                let abstraction_config = config.abstraction.clone();
+                tokio::spawn(async move {
+                    run_abstraction_worker(abstraction_store, abstraction_provider, abstraction_config).await;
+                });
+                tracing::info!(
+                    provider = %config.abstraction.provider,
+                    min_content_length = config.abstraction.min_content_length,
+                    generate_overview = config.abstraction.generate_overview,
+                    "Abstraction worker started"
+                );
+            }
+            Ok(None) => {
+                tracing::info!("Abstraction disabled via config");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to initialize abstraction provider — abstraction disabled");
+            }
+        }
+    } else {
+        tracing::info!("Abstraction disabled via config");
     }
 
     // 4. Create embedding pipeline (uses router for multi-tier support)
