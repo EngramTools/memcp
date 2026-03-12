@@ -642,8 +642,30 @@ Plans:
 - [ ] 21-01-PLAN.md — RedactionEngine core (patterns, entropy, allowlist, config, unit tests)
 - [ ] 21-02-PLAN.md — Wire redaction into all ingestion paths (CLI, HTTP, MCP, auto-store) + integration tests
 
+## Phase 22: Security Hardening
+- **Goal**: Pre-release security audit and hardening. Input validation bounds on all entry points (MCP, HTTP, CLI). Panic-path audit (replace unwrap/expect in request handlers with proper error returns). Dependency audit (cargo audit in CI). Error message sanitization (no DB URLs, internal paths, or memory content in error responses). Import pipeline audit (symlink traversal, path canonicalization). SSRF prevention for configurable embedding provider URLs.
+- **Status**: Not started
+- **Depends on**: Phase 21
+- **Requirements:** [SEC-01, SEC-02, SEC-03, SEC-04, SEC-05, SEC-06, SEC-07]
+
+Requirements:
+- SEC-01: Input validation — max content size (configurable, default 100KB), max tag count (32), max tag length (256), max search query length (10KB), max batch size for bulk ops. Enforced at transport layer (MCP + HTTP + CLI) with clear error messages.
+- SEC-02: Panic audit — zero unwrap/expect calls in MCP tool handlers, HTTP route handlers, and CLI command handlers. All replaced with proper Result propagation or error responses. Audit script added to CI.
+- SEC-03: Dependency audit — `cargo audit` added to CI (GitHub Actions). Deny known vulnerable crates. Dependabot or Renovate for automated updates.
+- SEC-04: Error sanitization — no DATABASE_URL, file paths, or raw memory content in error responses. Custom error types with safe user-facing messages. Audit all `anyhow!`/`thiserror` Display impls.
+- SEC-05: Import security — canonicalize all extracted paths (no symlink following outside temp dir), validate file names (no ../ components), enforce max decompressed size per file and total. Audit existing ZIP bomb protection completeness.
+- SEC-06: SSRF prevention — validate and allowlist embedding provider URLs (must be HTTPS, no private IP ranges, no localhost unless explicitly configured). Reject file:// and other dangerous schemes.
+- SEC-07: Unsafe audit — document all `unsafe` blocks (if any), verify soundness, add safety comments per Rust convention.
+- SEC-08: Request timeouts — all outbound HTTP calls (reqwest to OpenAI, Ollama, extraction, summarization) must have explicit connect + read timeouts (e.g., 30s). Prevent indefinite hangs from unresponsive upstream APIs.
+- SEC-09: Mutex safety — replace `.lock().unwrap()` on Mutex/RwLock with `.lock().expect("context")` or proper error handling. Audit all lock sites in server.rs and ref_map.
+
+Plans:
+- [ ] 22-01-PLAN.md — Input validation layer (transport-level bounds) + panic audit + CI clippy deny(unwrap_used) [Wave 1]
+- [ ] 22-02-PLAN.md — Error sanitization + import hardening + SSRF prevention + unsafe audit [Wave 2, depends on 01]
+- [ ] 22-03-PLAN.md — cargo audit CI + dependency policy + integration tests for all rejection paths [Wave 2, depends on 01]
+
 ---
-*Open-source fork cutoff: After Phase 21, fork memcp into a public MIT repo containing phases 01–21 (core memory server + test suite + gap closures + PII redaction). Phase 12+ (auth, boosting, hosted features) stays in the private memcp repo (or engram repo) — never published to the public fork. See engram Phase 4.5 and /Users/ayoamadi/projects/engram/.planning/ROADMAP.md for strategy.*
+*Open-source fork cutoff: After Phase 22, fork memcp into a public MIT repo containing phases 01–22 (core memory server + test suite + gap closures + PII redaction + security hardening). Phase 12+ (auth, boosting, hosted features) stays in the private memcp repo (or engram repo) — never published to the public fork. See engram Phase 4.5 and /Users/ayoamadi/projects/engram/.planning/ROADMAP.md for strategy.*
 
 *Rationale: BSL doesn't prevent AI-assisted reimplementation in another language. Keeping competitive features in a private repo is stronger practical defense. Core memory server (01–21) is genuinely useful open-source; auth, boosting, and hosted features are the competitive moat.*
 
@@ -661,7 +683,7 @@ Plans:
 - **Goal**: Retrieval and evolution improvements informed by competitive landscape analysis (engram/.planning/competitive-landscape.md). Focuses on the highest-impact ideas from code review of 10+ competitor codebases.
 - **Status**: DONE (5/5 plans done)
 - **Requirements:** [UUID-01, UUID-02, RET-01, RET-02, MQ-01, MQ-02, MQ-03, ENR-01, ENR-02, ENR-03, DISC-01, DISC-02, DISC-03]
-- **Plans:** 5/5 plans complete
+- **Plans:** 1/3 plans executed
 
 Requirements:
 - UUID-01: UuidRefMap with session-scoped integer-to-UUID mapping
