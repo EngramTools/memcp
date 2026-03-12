@@ -9,6 +9,7 @@
 // Fixing all is deferred — handler-level safety is enforced by crate-level deny.
 #![allow(clippy::unwrap_used)]
 
+pub mod abstraction;
 pub mod auto_store;
 pub mod chunking;
 pub mod consolidation;

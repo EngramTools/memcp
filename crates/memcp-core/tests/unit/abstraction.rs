@@ -1,25 +1,34 @@
 // Tests for AbstractionProvider and depth fallback logic
-// These are placeholders — implementation fills them in as plans 01-03 execute.
+
+use memcp::config::AbstractionConfig;
+use memcp::pipeline::abstraction::create_abstraction_provider;
 
 #[test]
-#[ignore = "requires Plan 01: AbstractionConfig + provider"]
 fn test_create_abstraction_provider_disabled() {
     // TCL-01: create_abstraction_provider returns None when disabled
-    todo!("Plan 01 fills this in")
+    let config = AbstractionConfig::default(); // enabled: false
+    let result = create_abstraction_provider(&config).unwrap();
+    assert!(result.is_none());
 }
 
 #[test]
-#[ignore = "requires Plan 01: AbstractionConfig + provider"]
 fn test_create_abstraction_provider_ollama() {
     // TCL-01: create_abstraction_provider returns Some for ollama
-    todo!("Plan 01 fills this in")
+    let mut config = AbstractionConfig::default();
+    config.enabled = true;
+    let result = create_abstraction_provider(&config).unwrap();
+    assert!(result.is_some());
+    assert_eq!(result.unwrap().model_name(), "llama3.2:3b");
 }
 
 #[test]
-#[ignore = "requires Plan 01: AbstractionConfig + provider"]
 fn test_create_abstraction_provider_openai_missing_key() {
     // TCL-01: openai without key returns error
-    todo!("Plan 01 fills this in")
+    let mut config = AbstractionConfig::default();
+    config.enabled = true;
+    config.provider = "openai".to_string();
+    let result = create_abstraction_provider(&config);
+    assert!(result.is_err());
 }
 
 #[test]

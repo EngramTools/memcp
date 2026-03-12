@@ -40,6 +40,7 @@ pub use intelligence::embedding;
 pub use intelligence::query_intelligence;
 pub use intelligence::recall;
 pub use intelligence::search;
+pub use pipeline::abstraction;
 pub use pipeline::auto_store;
 pub use pipeline::chunking;
 pub use pipeline::consolidation;
