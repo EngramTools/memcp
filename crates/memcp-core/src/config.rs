@@ -1328,6 +1328,118 @@ impl Default for SummarizationConfig {
     }
 }
 
+/// Configuration for the tiered content abstraction subsystem.
+///
+/// Generates L0 abstracts (~100 tokens) and optional L1 overviews (~500 tokens)
+/// for memory entries, improving semantic search quality and enabling tiered context loading.
+/// Disabled by default — opt in via `[abstraction] enabled = true`.
+/// Nested env var overrides use double underscores:
+///   MEMCP_ABSTRACTION__ENABLED=true
+///   MEMCP_ABSTRACTION__PROVIDER=openai
+///   MEMCP_ABSTRACTION__GENERATE_OVERVIEW=true
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AbstractionConfig {
+    /// Whether abstraction is enabled (default: false — opt-in)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Which provider to use: "ollama" (local, default) or "openai" (any OpenAI-compatible API)
+    #[serde(default = "default_abstraction_provider")]
+    pub provider: String,
+
+    /// Whether to generate L1 overviews in addition to L0 abstracts (default: false)
+    /// When false, only abstract_text (L0) is generated.
+    #[serde(default)]
+    pub generate_overview: bool,
+
+    /// System prompt template for L0 abstract generation.
+    /// {content} is replaced with the (truncated) memory content.
+    #[serde(default = "default_abstract_prompt_template")]
+    pub abstract_prompt_template: String,
+
+    /// System prompt template for L1 overview generation.
+    /// {content} is replaced with the (truncated) memory content.
+    #[serde(default = "default_overview_prompt_template")]
+    pub overview_prompt_template: String,
+
+    /// Ollama server base URL
+    #[serde(default = "default_ollama_base_url")]
+    pub ollama_base_url: String,
+
+    /// Ollama model for abstraction
+    #[serde(default = "default_abstraction_ollama_model")]
+    pub ollama_model: String,
+
+    /// OpenAI-compatible base URL (supports OpenAI, Kimi/Moonshot, local vLLM, etc.)
+    #[serde(default = "default_abstraction_openai_base_url")]
+    pub openai_base_url: String,
+
+    /// OpenAI-compatible API key — required when provider = "openai"
+    #[serde(default)]
+    pub openai_api_key: Option<String>,
+
+    /// OpenAI-compatible model for abstraction (e.g. "gpt-4o-mini")
+    #[serde(default = "default_abstraction_openai_model")]
+    pub openai_model: String,
+
+    /// Maximum input characters before truncation (default: 4000)
+    #[serde(default = "default_abstraction_max_input_chars")]
+    pub max_input_chars: usize,
+
+    /// Minimum content length (chars) to trigger abstraction (default: 200).
+    /// Memories shorter than this are marked 'skipped' — abstraction adds no value.
+    #[serde(default = "default_abstraction_min_content_length")]
+    pub min_content_length: usize,
+}
+
+fn default_abstraction_provider() -> String {
+    "ollama".to_string()
+}
+fn default_abstraction_ollama_model() -> String {
+    "llama3.2:3b".to_string()
+}
+fn default_abstraction_openai_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
+}
+fn default_abstraction_openai_model() -> String {
+    "gpt-4o-mini".to_string()
+}
+fn default_abstraction_max_input_chars() -> usize {
+    4000
+}
+fn default_abstraction_min_content_length() -> usize {
+    200
+}
+fn default_abstract_prompt_template() -> String {
+    "Summarize the following memory into a single concise sentence (under 100 tokens) \
+     that captures the key information for semantic search: {content}"
+        .to_string()
+}
+fn default_overview_prompt_template() -> String {
+    "Create a structured overview of the following memory in 3-5 bullet points \
+     (under 500 tokens): {content}"
+        .to_string()
+}
+
+impl Default for AbstractionConfig {
+    fn default() -> Self {
+        AbstractionConfig {
+            enabled: false,
+            provider: default_abstraction_provider(),
+            generate_overview: false,
+            abstract_prompt_template: default_abstract_prompt_template(),
+            overview_prompt_template: default_overview_prompt_template(),
+            ollama_base_url: default_ollama_base_url(),
+            ollama_model: default_abstraction_ollama_model(),
+            openai_base_url: default_abstraction_openai_base_url(),
+            openai_api_key: None,
+            openai_model: default_abstraction_openai_model(),
+            max_input_chars: default_abstraction_max_input_chars(),
+            min_content_length: default_abstraction_min_content_length(),
+        }
+    }
+}
+
 /// Configuration for the health HTTP server (container lifecycle probes).
 ///
 /// Provides /health and /status endpoints for orchestrators (Fly.io, Railway, k8s).
@@ -2174,6 +2286,12 @@ pub struct Config {
     #[serde(default)]
     pub redaction: RedactionConfig,
 
+    /// Tiered content abstraction configuration (L0 abstract + L1 overview generation).
+    /// Disabled by default — opt in via `[abstraction] enabled = true`.
+    /// Existing configs without [abstraction] section still work (serde default applied).
+    #[serde(default)]
+    pub abstraction: AbstractionConfig,
+
     /// Input size limits (content, tags, query, batch).
     /// Prevents resource exhaustion via oversized inputs at all transport layers.
     /// Existing configs without [input_limits] section still work (serde default applied).
@@ -2225,6 +2343,7 @@ impl Default for Config {
             observability: ObservabilityConfig::default(),
             redaction: RedactionConfig::default(),
             input_limits: crate::validation::InputLimitsConfig::default(),
+            abstraction: AbstractionConfig::default(),
         }
     }
 }
@@ -2298,6 +2417,12 @@ impl Config {
             validate_provider_url(url, allow)
                 .map_err(|e| MemcpError::Config(format!("embedding.openai_base_url: {}", e)))?;
         }
+
+        // Abstraction URLs
+        validate_provider_url(&self.abstraction.ollama_base_url, allow)
+            .map_err(|e| MemcpError::Config(format!("abstraction.ollama_base_url: {}", e)))?;
+        validate_provider_url(&self.abstraction.openai_base_url, allow)
+            .map_err(|e| MemcpError::Config(format!("abstraction.openai_base_url: {}", e)))?;
 
         Ok(())
     }
