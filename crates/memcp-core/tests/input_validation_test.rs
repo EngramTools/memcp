@@ -140,6 +140,7 @@ fn test_custom_config_limits() {
         max_tag_length: 10,
         max_query_length: 20,
         max_batch_size: 5,
+        allow_localhost_http: true,
     };
 
     // Content over custom limit
