@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 22-03-PLAN.md
-last_updated: "2026-03-12T01:41:50.143Z"
+stopped_at: Completed 22-02-PLAN.md
+last_updated: "2026-03-12T01:49:55.000Z"
 progress:
   total_phases: 59
   completed_phases: 37
@@ -21,6 +21,7 @@ Phase 22-security-hardening — Plan 2 of 3 complete
 Progress: [████████████████░░░░] 111/138 plans (81%)
 
 ## Active Context
+- Last completed: Phase 22-02 -- Error Sanitization, Import Hardening & SSRF Prevention (sanitized error Display impls, ZIP path traversal protection, SSRF URL validation, unsafe audit clean bill)
 - Last completed: Phase 22-03 -- Dependency Audit CI Enforcement (Dependabot config for cargo + GitHub Actions, CI audit step verified)
 - Last completed: Phase 22-01 -- Input Validation & Panic Safety (validation.rs module, 12 timeout-hardened clients, clippy::unwrap_used deny lint, 10 tests)
 - Last completed: Phase 09-04 -- QA Playbook (46 YAML test cases for agent execution, human playbook with 5 journeys, isolated QA database on port 5434)
@@ -67,11 +68,17 @@ See: .planning/PROJECT.md (updated 2026-03-10)
 **Current focus:** Phase 19 — Requirements Traceability
 
 ## Session Continuity
-Last session: 2026-03-12T01:41:50.138Z
-Stopped at: Completed 22-03-PLAN.md
+Last session: 2026-03-12T01:49:55.000Z
+Stopped at: Completed 22-02-PLAN.md
 Resume file: None
 
 ## Accumulated Context
+
+### Phase 22-02 Decisions
+- Phase 22-02: Storage error Display always returns "Database operation failed" -- raw sqlx text never exposed
+- Phase 22-02: HTTPS allowed to private IPs (needed for internal services); HTTP only to localhost
+- Phase 22-02: ZIP path traversal entries skipped with warning, not hard-erroring the import
+- Phase 22-02: URL validation at Config::load() time -- fail fast before any connections
 
 ### Phase 11.1-01 Decisions
 - Phase 11.1-01: Trust levels calibrated: user/cli=0.8, auto-store=0.3, import=0.4, default=0.5
