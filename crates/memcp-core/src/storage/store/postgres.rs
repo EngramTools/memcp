@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! PostgreSQL-backed implementation of MemoryStore
 //!
 //! Uses sqlx with PgPool for connection pooling and production-grade persistence.

@@ -1064,7 +1064,7 @@ async fn build_embedding_router(config: &Config) -> Result<EmbeddingRouter> {
         let default = if tiers.contains_key("fast") {
             "fast".to_string()
         } else {
-            tiers.keys().next().unwrap().clone()
+            tiers.keys().next().expect("at least one embedding tier must be configured").clone()
         };
         tracing::info!(
             tiers = ?tiers.keys().collect::<Vec<_>>(),

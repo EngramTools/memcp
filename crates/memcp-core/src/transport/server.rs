@@ -2154,7 +2154,8 @@ Callable from code_execution_20260120 sandboxes."
                 }
             };
 
-            let query = params.query.as_ref().unwrap();
+            // SAFETY: has_query is true only when params.query is Some(non-empty)
+            let query = params.query.as_ref().expect("query is Some when has_query is true");
             let query_embedding = match embedding_provider.embed(query).await {
                 Ok(emb) => emb,
                 Err(e) => {

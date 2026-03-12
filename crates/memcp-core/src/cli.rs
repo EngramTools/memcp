@@ -1455,10 +1455,9 @@ pub async fn build_status(
         "curation": curation_stats,
     });
     if let Some(checks) = checks {
-        output
-            .as_object_mut()
-            .unwrap()
-            .insert("checks".to_string(), checks);
+        if let Some(obj) = output.as_object_mut() {
+            obj.insert("checks".to_string(), checks);
+        }
     }
 
     Ok((

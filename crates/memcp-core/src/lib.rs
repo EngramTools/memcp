@@ -8,6 +8,11 @@
 //!
 //! Plus top-level modules: config, errors, logging, cli, benchmark.
 
+// Deny unwrap() in production code — forces explicit error handling in transport/handler layers.
+// Pipeline, storage, intelligence, and import modules use module-level allow attributes
+// to scope this to handler code only (fixing all ~128 deep unwraps is deferred).
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
+
 /// Migrator for `#[sqlx::test]` — runs all migrations in `./migrations/` on ephemeral test DBs.
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 

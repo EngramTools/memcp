@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Import pipeline — brings external AI tool history into memcp.
 //!
 //! Three-tier pipeline:

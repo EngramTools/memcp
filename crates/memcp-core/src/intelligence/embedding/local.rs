@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 //! Local embedding provider using fastembed
 //!
 //! Provides offline embedding generation using configurable fastembed models.

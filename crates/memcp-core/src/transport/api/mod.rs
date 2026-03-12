@@ -78,14 +78,12 @@ fn build_rate_limit_layer(
 
         let mut resp = HttpResponse::new(Body::from(body_str));
         *resp.status_mut() = StatusCode::TOO_MANY_REQUESTS;
-        resp.headers_mut().insert(
-            RETRY_AFTER,
-            retry_header
-                .parse()
-                .unwrap_or_else(|_| "1".parse().unwrap()),
-        );
-        resp.headers_mut()
-            .insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        if let Ok(val) = retry_header.parse() {
+            resp.headers_mut().insert(RETRY_AFTER, val);
+        }
+        if let Ok(val) = "application/json".parse() {
+            resp.headers_mut().insert(CONTENT_TYPE, val);
+        }
         resp
     })
 }
