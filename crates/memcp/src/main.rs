@@ -159,6 +159,10 @@ enum Commands {
         /// Project scope — returns memories from this project plus global (null-project) memories.
         #[arg(long, alias = "project")]
         project: Option<String>,
+        /// Content detail level: 0=abstract (concise), 1=overview (structured), 2=full content (default).
+        /// Falls back gracefully if tier unavailable.
+        #[arg(long, default_value = "2")]
+        depth: u8,
     },
     /// List memories with optional filters and pagination
     List {
@@ -286,6 +290,10 @@ enum Commands {
         /// Memories sharing boost tags get a soft ranking bonus. Prefix matching: "channel:" boosts all channel:* tags.
         #[arg(long, value_delimiter = ',')]
         boost_tags: Vec<String>,
+        /// Content detail level: 0=abstract (concise), 1=overview (structured), 2=full content (default).
+        /// Falls back gracefully if tier unavailable.
+        #[arg(long, default_value = "2")]
+        depth: u8,
     },
     /// AI brain curation — merge, flag stale, and strengthen memories
     Curation {
@@ -1031,6 +1039,7 @@ async fn main() -> Result<()> {
             fields,
             min_salience,
             project,
+            depth,
         } => {
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
@@ -1044,6 +1053,7 @@ async fn main() -> Result<()> {
                     "min_salience": min_salience,
                     "fields": fields,
                     "cursor": cursor,
+                    "depth": depth,
                 });
                 let result = cli::dispatch_remote(remote_url, "search", body).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -1068,6 +1078,7 @@ async fn main() -> Result<()> {
                     fields,
                     min_salience,
                     project,
+                    depth,
                 )
                 .await?;
             }
@@ -1180,6 +1191,7 @@ async fn main() -> Result<()> {
             first,
             limit,
             boost_tags,
+            depth,
         } => {
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
@@ -1190,6 +1202,7 @@ async fn main() -> Result<()> {
                     "project": project,
                     "limit": limit,
                     "boost_tags": boost_tags,
+                    "depth": depth,
                 });
                 let result = cli::dispatch_remote(remote_url, "recall", body).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -1207,6 +1220,7 @@ async fn main() -> Result<()> {
                     first,
                     limit,
                     &boost_tags,
+                    depth,
                 )
                 .await?;
             }

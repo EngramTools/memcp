@@ -44,6 +44,12 @@ pub struct RecalledMemory {
     /// Trust level from the stored memory (0.0–1.0). Skipped in JSON when 1.0 (default).
     #[serde(skip_serializing_if = "is_default_trust")]
     pub trust_level: f32,
+    /// Concise abstract of the memory (depth=0 tier). None when abstraction hasn't run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abstract_text: Option<String>,
+    /// Structured overview of the memory (depth=1 tier). None when abstraction hasn't run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overview_text: Option<String>,
 }
 
 fn is_zero_f32(v: &f32) -> bool {
@@ -231,6 +237,8 @@ impl RecallEngine {
                 boost_applied: total_boost > 0.0,
                 boost_score: total_boost as f32,
                 trust_level: candidate.trust_level,
+                abstract_text: None,
+                overview_text: None,
             });
 
             // Collect memory tags for session accumulation.
@@ -342,6 +350,8 @@ impl RecallEngine {
                     boost_applied: false,
                     boost_score: 0.0,
                     trust_level: 1.0, // summaries are always trusted
+                    abstract_text: None,
+                    overview_text: None,
                 })
         } else {
             None
@@ -512,6 +522,8 @@ impl RecallEngine {
                 boost_applied: total_boost > 0.0,
                 boost_score: total_boost as f32,
                 trust_level: hit.memory.trust_level,
+                abstract_text: hit.memory.abstract_text.clone(),
+                overview_text: hit.memory.overview_text.clone(),
             });
 
             accumulated_tags.extend(memory_tags);

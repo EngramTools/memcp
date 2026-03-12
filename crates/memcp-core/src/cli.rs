@@ -658,6 +658,7 @@ pub async fn cmd_search(
     fields: Option<String>,
     min_salience: Option<f64>,
     project: Option<String>,
+    depth: u8,
 ) -> Result<()> {
     // Validate query size
     crate::validation::validate_query(&query, &config.input_limits)
@@ -983,10 +984,19 @@ pub async fn cmd_search(
         let results: Vec<serde_json::Value> = scored_hits
             .iter()
             .map(|h| {
+                let display_content = match depth {
+                    0 => h.memory.abstract_text.as_deref().unwrap_or(&h.memory.content),
+                    1 => h.memory.overview_text.as_deref().unwrap_or(&h.memory.content),
+                    _ => &h.memory.content,
+                };
+                let abstract_available = h.memory.abstract_text.is_some();
                 let mut entry = format_memory_json(&h.memory, true);
                 if let Some(obj) = entry.as_object_mut() {
                     // Ensure id is always top-level (SCF-03)
                     obj.insert("id".to_string(), json!(h.memory.id));
+                    obj.insert("content".to_string(), json!(display_content));
+                    obj.insert("depth".to_string(), json!(depth));
+                    obj.insert("abstract_available".to_string(), json!(abstract_available));
                     obj.insert("salience_score".to_string(), json!(h.salience_score));
                     obj.insert(
                         "composite_score".to_string(),
@@ -1010,19 +1020,25 @@ pub async fn cmd_search(
         // --compact: one line per result: "{id_short} {score:.3} {snippet_80} [{tags}]"
         // When --fields is specified, only the requested fields are included in the output.
         for h in &scored_hits {
+            let compact_content = match depth {
+                0 => h.memory.abstract_text.as_deref().unwrap_or(&h.memory.content),
+                1 => h.memory.overview_text.as_deref().unwrap_or(&h.memory.content),
+                _ => &h.memory.content,
+            };
             if field_list.is_some() {
                 // Projected compact: build full object then project and print as JSON.
                 let mut entry = format_memory_json(&h.memory, true);
                 if let Some(obj) = entry.as_object_mut() {
                     obj.insert("id".to_string(), json!(h.memory.id));
+                    obj.insert("content".to_string(), json!(compact_content));
                     obj.insert("salience_score".to_string(), json!(h.salience_score));
                 }
                 let projected = apply_field_projection(entry, &field_list);
                 println!("{}", serde_json::to_string(&projected)?);
             } else {
                 let id_short = &h.memory.id[..8.min(h.memory.id.len())];
-                let snippet: String = h.memory.content.chars().take(80).collect();
-                let snippet = if h.memory.content.len() > 80 {
+                let snippet: String = compact_content.chars().take(80).collect();
+                let snippet = if compact_content.len() > 80 {
                     format!("{}…", snippet)
                 } else {
                     snippet
@@ -1057,10 +1073,19 @@ pub async fn cmd_search(
         let results: Vec<serde_json::Value> = scored_hits
             .iter()
             .map(|h| {
+                let display_content = match depth {
+                    0 => h.memory.abstract_text.as_deref().unwrap_or(&h.memory.content),
+                    1 => h.memory.overview_text.as_deref().unwrap_or(&h.memory.content),
+                    _ => &h.memory.content,
+                };
+                let abstract_available = h.memory.abstract_text.is_some();
                 let mut entry = format_memory_json(&h.memory, verbose);
                 if let Some(obj) = entry.as_object_mut() {
                     // Ensure id is always top-level (SCF-03)
                     obj.insert("id".to_string(), json!(h.memory.id));
+                    obj.insert("content".to_string(), json!(display_content));
+                    obj.insert("depth".to_string(), json!(depth));
+                    obj.insert("abstract_available".to_string(), json!(abstract_available));
                     obj.insert("salience_score".to_string(), json!(h.salience_score));
                     obj.insert(
                         "composite_score".to_string(),
@@ -1696,6 +1721,7 @@ pub async fn cmd_recall(
     first: bool,
     limit: Option<usize>,
     boost_tags: &[String],
+    depth: u8,
 ) -> Result<()> {
     // Validate query size (recall query can be empty for query-less mode)
     if !query.is_empty() {
@@ -1764,6 +1790,8 @@ pub async fn cmd_recall(
                 boost_applied: false,
                 boost_score: 0.0,
                 trust_level: 1.0,
+                abstract_text: None,
+                overview_text: None,
             }),
             Ok(None) => None,
             Err(e) => {
@@ -1800,8 +1828,14 @@ pub async fn cmd_recall(
         .memories
         .iter()
         .map(|mem| {
+            // Apply depth selection before truncation.
+            let source_content = match depth {
+                0 => mem.abstract_text.as_deref().unwrap_or(&mem.content),
+                1 => mem.overview_text.as_deref().unwrap_or(&mem.content),
+                _ => &mem.content,
+            };
             let (truncated_content, was_truncated) =
-                truncate_content(&mem.content, truncation_chars);
+                truncate_content(source_content, truncation_chars);
 
             let mut obj = json!({
                 "id": mem.memory_id,

@@ -135,6 +135,8 @@ pub async fn recall_handler(
                 boost_applied: false,
                 boost_score: 0.0,
                 trust_level: 1.0,
+                abstract_text: None,
+                overview_text: None,
             }),
             Ok(None) => None,
             Err(e) => {
@@ -168,12 +170,18 @@ pub async fn recall_handler(
     metrics::histogram!("memcp_recall_memories_returned").record(result.memories.len() as f64);
 
     // Build memories array with truncation and related context.
+    let depth = req.depth;
     let memories: Vec<serde_json::Value> = result
         .memories
         .iter()
         .map(|mem| {
+            let source_content = match depth {
+                0 => mem.abstract_text.as_deref().unwrap_or(&mem.content),
+                1 => mem.overview_text.as_deref().unwrap_or(&mem.content),
+                _ => &mem.content,
+            };
             let (truncated_content, was_truncated) =
-                truncate_content(&mem.content, truncation_chars);
+                truncate_content(source_content, truncation_chars);
 
             let mut obj = json!({
                 "id": mem.memory_id,

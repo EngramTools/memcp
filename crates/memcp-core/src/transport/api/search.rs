@@ -277,12 +277,22 @@ pub async fn search_handler(
     };
 
     // Build results array — same shape as CLI --json output.
+    let depth = req.depth;
     let results: Vec<serde_json::Value> = scored_hits
         .iter()
         .map(|h| {
+            let display_content = match depth {
+                0 => h.memory.abstract_text.as_deref().unwrap_or(&h.memory.content),
+                1 => h.memory.overview_text.as_deref().unwrap_or(&h.memory.content),
+                _ => &h.memory.content,
+            };
+            let abstract_available = h.memory.abstract_text.is_some();
             let mut entry = format_memory_json(&h.memory);
             if let Some(obj) = entry.as_object_mut() {
                 obj.insert("id".to_string(), json!(h.memory.id));
+                obj.insert("content".to_string(), json!(display_content));
+                obj.insert("depth".to_string(), json!(depth));
+                obj.insert("abstract_available".to_string(), json!(abstract_available));
                 obj.insert("salience_score".to_string(), json!(h.salience_score));
                 obj.insert(
                     "composite_score".to_string(),

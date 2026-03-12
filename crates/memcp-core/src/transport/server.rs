@@ -434,6 +434,9 @@ pub struct RecallMemoryParams {
     /// Optional boost tags for tag-affinity ranking. Memories sharing these tags get a soft ranking bonus.
     /// Prefix matching: "channel:" boosts all channel:* tags. Multiple tags combine additively.
     pub boost_tags: Option<Vec<String>>,
+    /// Content detail level: 0=abstract (concise), 1=overview (structured), 2=full content (default).
+    /// Falls back gracefully if tier unavailable — if abstract_text is NULL and depth=0, returns full content.
+    pub depth: Option<u8>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -467,6 +470,10 @@ pub struct SearchMemoryParams {
     /// Project scope — returns memories from this project plus global (null-project) memories.
     /// Omitting returns all memories regardless of project (no filtering).
     pub project: Option<String>,
+    /// Content detail level: 0=abstract (concise), 1=overview (structured), 2=full content (default).
+    /// Falls back gracefully if tier unavailable — if abstract_text is NULL and depth=0, returns full content.
+    /// Use depth=0 for scanning/planning (fewer tokens), depth=2 for deep work (full detail).
+    pub depth: Option<u8>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -1902,13 +1909,21 @@ Callable from code_execution_20260120 sandboxes."
         };
 
         // 14. Format results
+        let depth = params.depth.unwrap_or(2);
         let count = scored_hits.len();
         let results: Vec<serde_json::Value> = scored_hits
             .iter()
             .map(|hit| {
+                let display_content = match depth {
+                    0 => hit.memory.abstract_text.as_deref().unwrap_or(&hit.memory.content),
+                    1 => hit.memory.overview_text.as_deref().unwrap_or(&hit.memory.content),
+                    _ => &hit.memory.content,
+                };
+                let abstract_available = hit.memory.abstract_text.is_some();
                 let mut obj = json!({
                     "id": hit.memory.id,
-                    "content": hit.memory.content,
+                    "content": display_content,
+                    "abstract_available": abstract_available,
                     "type_hint": hit.memory.type_hint,
                     "source": hit.memory.source,
                     "tags": hit.memory.tags,
@@ -2202,6 +2217,8 @@ Callable from code_execution_20260120 sandboxes."
                             boost_applied: false,
                             boost_score: 0.0,
                             trust_level: 1.0,
+                            abstract_text: None,
+                            overview_text: None,
                         });
                     }
                     Ok(None) => {}
@@ -2210,6 +2227,7 @@ Callable from code_execution_20260120 sandboxes."
             }
         }
 
+        let recall_depth = params.depth.unwrap_or(2);
         match result {
             Ok(r) => {
                 // Build memories array with ref injected alongside memory_id
@@ -2218,10 +2236,15 @@ Callable from code_execution_20260120 sandboxes."
                     .iter()
                     .map(|m| {
                         let r_num = self.ref_map.assign_ref(&m.memory_id);
+                        let display_content = match recall_depth {
+                            0 => m.abstract_text.as_deref().unwrap_or(&m.content),
+                            1 => m.overview_text.as_deref().unwrap_or(&m.content),
+                            _ => &m.content,
+                        };
                         let mut obj = json!({
                             "memory_id": m.memory_id,
                             "ref": r_num,
-                            "content": m.content,
+                            "content": display_content,
                             "relevance": m.relevance,
                         });
                         if m.boost_applied {

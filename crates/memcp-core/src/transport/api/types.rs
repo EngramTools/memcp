@@ -28,6 +28,10 @@ pub struct RecallRequest {
     /// Prefix matching: "channel:" boosts all "channel:*" tags.
     #[serde(default)]
     pub boost_tags: Vec<String>,
+    /// Content detail level: 0=abstract, 1=overview, 2=full content (default).
+    /// Falls back gracefully if tier unavailable.
+    #[serde(default = "default_depth")]
+    pub depth: u8,
 }
 
 /// Request body for POST /v1/search.
@@ -55,10 +59,18 @@ pub struct SearchRequest {
     pub fields: Option<Vec<String>>,
     /// Pagination cursor from previous page's next_cursor field.
     pub cursor: Option<String>,
+    /// Content detail level: 0=abstract, 1=overview, 2=full content (default).
+    /// Falls back gracefully if tier unavailable.
+    #[serde(default = "default_depth")]
+    pub depth: u8,
 }
 
 fn default_search_limit() -> u32 {
     10
+}
+
+fn default_depth() -> u8 {
+    2
 }
 
 /// Redaction metadata included in store responses when content was redacted.
