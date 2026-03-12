@@ -260,3 +260,76 @@ fn test_injection_flag_is_idempotent() {
         "Calling flag_injection twice must not duplicate the tag"
     );
 }
+
+// ── Path traversal protection ───────────────────────────────────────────────
+
+/// ZIP entry with "../../../etc/passwd" path must be rejected.
+#[test]
+fn test_path_traversal_dot_dot_slash() {
+    use memcp::import::security::is_safe_zip_entry_name;
+
+    assert!(
+        !is_safe_zip_entry_name("../../../etc/passwd"),
+        "Path with ../ must be rejected"
+    );
+}
+
+/// ZIP entry with absolute path "/etc/passwd" must be rejected.
+#[test]
+fn test_path_traversal_absolute_path() {
+    use memcp::import::security::is_safe_zip_entry_name;
+
+    assert!(
+        !is_safe_zip_entry_name("/etc/passwd"),
+        "Absolute path must be rejected"
+    );
+}
+
+/// ZIP entry with backslash traversal "..\\..\\file" must be rejected.
+#[test]
+fn test_path_traversal_backslash() {
+    use memcp::import::security::is_safe_zip_entry_name;
+
+    assert!(
+        !is_safe_zip_entry_name("..\\..\\file.txt"),
+        "Backslash traversal must be rejected"
+    );
+}
+
+/// ZIP entry with embedded /../ must be rejected.
+#[test]
+fn test_path_traversal_embedded() {
+    use memcp::import::security::is_safe_zip_entry_name;
+
+    assert!(
+        !is_safe_zip_entry_name("conversations/../../../etc/shadow"),
+        "Embedded /../ path must be rejected"
+    );
+}
+
+/// Normal ZIP entry names should be accepted.
+#[test]
+fn test_safe_zip_entry_name() {
+    use memcp::import::security::is_safe_zip_entry_name;
+
+    assert!(
+        is_safe_zip_entry_name("conversations.json"),
+        "Normal filename must be accepted"
+    );
+    assert!(
+        is_safe_zip_entry_name("subdir/file.json"),
+        "Relative subdirectory must be accepted"
+    );
+}
+
+/// Per-file size constant must be 50MB.
+#[test]
+fn test_max_single_file_size_constant() {
+    use memcp::import::security::MAX_SINGLE_FILE_SIZE;
+
+    assert_eq!(
+        MAX_SINGLE_FILE_SIZE,
+        50 * 1024 * 1024,
+        "MAX_SINGLE_FILE_SIZE must be 50MB"
+    );
+}

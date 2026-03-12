@@ -134,17 +134,39 @@ impl ImportSource for ChatGptReader {
         }
 
         // Find conversations.json — do not assume it is entry 0.
+        // SEC-05: Validate entry names against path traversal before processing.
         let conversations_json = {
             let mut found = None;
             for i in 0..archive.len() {
                 let entry = archive.by_index(i)?;
-                if entry.name() == "conversations.json"
-                    || entry.name().ends_with("/conversations.json")
+                let entry_name = entry.name().to_string();
+
+                // Path traversal check (SEC-05)
+                if !super::security::is_safe_zip_entry_name(&entry_name) {
+                    tracing::warn!(
+                        entry = %entry_name,
+                        "Skipping ZIP entry with unsafe path (possible path traversal)"
+                    );
+                    continue;
+                }
+
+                // Per-file size check (SEC-05)
+                if entry.size() > super::security::MAX_SINGLE_FILE_SIZE {
+                    tracing::warn!(
+                        entry = %entry_name,
+                        size = entry.size(),
+                        max = super::security::MAX_SINGLE_FILE_SIZE,
+                        "Skipping ZIP entry exceeding per-file size limit"
+                    );
+                    continue;
+                }
+
+                if entry_name == "conversations.json"
+                    || entry_name.ends_with("/conversations.json")
                 {
-                    let name = entry.name().to_string();
                     drop(entry);
                     // Re-open by name to read contents.
-                    let mut entry = archive.by_name(&name)?;
+                    let mut entry = archive.by_name(&entry_name)?;
                     let mut buf = Vec::new();
                     entry.read_to_end(&mut buf)?;
                     found = Some(buf);

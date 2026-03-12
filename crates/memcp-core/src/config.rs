@@ -2236,7 +2236,7 @@ impl Config {
     /// DATABASE_URL is checked first (standard PostgreSQL convention),
     /// then MEMCP_DATABASE_URL, then database_url in memcp.toml.
     pub fn load() -> Result<Config, MemcpError> {
-        Figment::new()
+        let config: Config = Figment::new()
             .merge(Serialized::defaults(Config::default()))
             .merge(Toml::file("memcp.toml"))
             // Standard DATABASE_URL env var (highest priority for database config)
@@ -2249,7 +2249,57 @@ impl Config {
             // Double underscore handles nested: MEMCP_EMBEDDING__PROVIDER=openai
             .merge(Env::prefixed("MEMCP_"))
             .extract()
-            .map_err(|e| MemcpError::Config(format!("Failed to load config: {}", e)))
+            .map_err(|e| MemcpError::Config(format!("Failed to load config: {}", e)))?;
+
+        // SEC-06: Validate all provider URLs against SSRF at config load time
+        config.validate_provider_urls()?;
+
+        Ok(config)
+    }
+
+    /// Validate all configurable provider URLs against SSRF.
+    ///
+    /// SEC-06: Checks extraction, query intelligence, summarization, temporal,
+    /// curation, and embedding base URLs. Rejects dangerous schemes and private IPs.
+    pub fn validate_provider_urls(&self) -> Result<(), MemcpError> {
+        use crate::validation::validate_provider_url;
+        let allow = self.input_limits.allow_localhost_http;
+
+        // Extraction URLs
+        validate_provider_url(&self.extraction.ollama_base_url, allow)
+            .map_err(|e| MemcpError::Config(format!("extraction.ollama_base_url: {}", e)))?;
+
+        // Query intelligence URLs
+        validate_provider_url(&self.query_intelligence.ollama_base_url, allow)
+            .map_err(|e| MemcpError::Config(format!("query_intelligence.ollama_base_url: {}", e)))?;
+        validate_provider_url(&self.query_intelligence.openai_base_url, allow)
+            .map_err(|e| MemcpError::Config(format!("query_intelligence.openai_base_url: {}", e)))?;
+
+        // Summarization URLs
+        validate_provider_url(&self.summarization.ollama_base_url, allow)
+            .map_err(|e| MemcpError::Config(format!("summarization.ollama_base_url: {}", e)))?;
+        validate_provider_url(&self.summarization.openai_base_url, allow)
+            .map_err(|e| MemcpError::Config(format!("summarization.openai_base_url: {}", e)))?;
+
+        // Temporal URLs (optional)
+        if let Some(ref url) = self.temporal.openai_base_url {
+            validate_provider_url(url, allow)
+                .map_err(|e| MemcpError::Config(format!("temporal.openai_base_url: {}", e)))?;
+        }
+
+        // Curation URLs
+        validate_provider_url(&self.curation.ollama_base_url, allow)
+            .map_err(|e| MemcpError::Config(format!("curation.ollama_base_url: {}", e)))?;
+        validate_provider_url(&self.curation.openai_base_url, allow)
+            .map_err(|e| MemcpError::Config(format!("curation.openai_base_url: {}", e)))?;
+
+        // Embedding URL (optional)
+        if let Some(ref url) = self.embedding.openai_base_url {
+            validate_provider_url(url, allow)
+                .map_err(|e| MemcpError::Config(format!("embedding.openai_base_url: {}", e)))?;
+        }
+
+        Ok(())
     }
 }
 

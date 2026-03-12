@@ -111,10 +111,32 @@ impl ImportSource for ClaudeAiReader {
 
         // Collect all JSON entry contents from the archive.
         // Claude.ai may ship a single conversations.json or per-conversation JSON files.
+        // SEC-05: Validate entry names against path traversal before processing.
         let mut json_entries: Vec<(String, Vec<u8>)> = Vec::new();
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i)?;
             let name = entry.name().to_string();
+
+            // Path traversal check (SEC-05)
+            if !super::security::is_safe_zip_entry_name(&name) {
+                tracing::warn!(
+                    entry = %name,
+                    "Skipping ZIP entry with unsafe path (possible path traversal)"
+                );
+                continue;
+            }
+
+            // Per-file size check (SEC-05)
+            if entry.size() > super::security::MAX_SINGLE_FILE_SIZE {
+                tracing::warn!(
+                    entry = %name,
+                    size = entry.size(),
+                    max = super::security::MAX_SINGLE_FILE_SIZE,
+                    "Skipping ZIP entry exceeding per-file size limit"
+                );
+                continue;
+            }
+
             if name.ends_with(".json") && !name.contains("__MACOSX") {
                 let mut buf = Vec::new();
                 entry.read_to_end(&mut buf)?;
