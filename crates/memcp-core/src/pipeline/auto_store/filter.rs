@@ -47,7 +47,11 @@ pub struct LlmFilter {
 impl LlmFilter {
     pub fn new(provider: String, base_url: String, model: String, api_key: Option<String>) -> Self {
         LlmFilter {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .expect("HTTP client build"),
             base_url,
             model,
             provider,
@@ -195,7 +199,11 @@ impl LlmCategoryClassifier {
         category_actions: std::collections::HashMap<String, String>,
     ) -> Self {
         LlmCategoryClassifier {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .expect("HTTP client build"),
             base_url,
             model,
             provider,

@@ -27,7 +27,11 @@ impl OpenAICurationProvider {
 
     /// Call OpenAI-compatible chat API.
     async fn chat(&self, system: &str, user: &str) -> Result<String, CurationError> {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .expect("HTTP client build");
         let url = format!("{}/chat/completions", self.base_url);
 
         let body = serde_json::json!({

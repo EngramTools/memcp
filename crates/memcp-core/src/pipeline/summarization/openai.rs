@@ -46,7 +46,11 @@ impl OpenAISummarizationProvider {
         prompt_template: String,
     ) -> Self {
         OpenAISummarizationProvider {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .expect("HTTP client build"),
             base_url,
             api_key,
             model,

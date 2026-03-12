@@ -51,6 +51,22 @@ pub async fn store_handler(
         );
     }
 
+    // Validate input sizes
+    if let Err(e) = crate::validation::validate_content(&req.content, &state.config.input_limits) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_json(&e.to_string())),
+        );
+    }
+    if let Some(ref tags) = req.tags {
+        if let Err(e) = crate::validation::validate_tags(tags, &state.config.input_limits) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(error_json(&e.to_string())),
+            );
+        }
+    }
+
     // Resource cap check: replicate cmd_store lines 251-266
     if let Some(max) = state.config.resource_caps.max_memories {
         match store.count_live_memories().await {

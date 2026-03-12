@@ -51,7 +51,11 @@ impl ConsolidationWorker {
     ) -> Self {
         let (tx, mut rx) = mpsc::channel::<ConsolidationJob>(capacity);
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .expect("HTTP client build");
 
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {

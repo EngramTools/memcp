@@ -359,6 +359,14 @@ pub async fn cmd_store(
         anyhow::anyhow!("Content is required — provide as argument or use --stdin")
     })?;
 
+    // Validate input sizes
+    crate::validation::validate_content(&content, &config.input_limits)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    if let Some(ref t) = tags {
+        crate::validation::validate_tags(t, &config.input_limits)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+    }
+
     // Redact secrets/PII unless --no-redact is set
     let content = if !no_redact
         && (config.redaction.secrets_enabled || config.redaction.pii_enabled)
@@ -651,6 +659,10 @@ pub async fn cmd_search(
     min_salience: Option<f64>,
     project: Option<String>,
 ) -> Result<()> {
+    // Validate query size
+    crate::validation::validate_query(&query, &config.input_limits)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+
     let ca = created_after.as_deref().map(parse_datetime).transpose()?;
     let cb = created_before.as_deref().map(parse_datetime).transpose()?;
 
@@ -1686,6 +1698,12 @@ pub async fn cmd_recall(
     limit: Option<usize>,
     boost_tags: &[String],
 ) -> Result<()> {
+    // Validate query size (recall query can be empty for query-less mode)
+    if !query.is_empty() {
+        crate::validation::validate_query(query, &config.input_limits)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+    }
+
     // Default preamble text. Tells agents how to use the memory system.
     const DEFAULT_PREAMBLE: &str = "You have access to persistent memory via memcp. \
         Key commands: `memcp store \"content\" --tags tag1,tag2` to save, \

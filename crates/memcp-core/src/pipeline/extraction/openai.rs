@@ -88,7 +88,11 @@ impl OpenAIExtractionProvider {
         }
 
         Ok(OpenAIExtractionProvider {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .expect("HTTP client build"),
             api_key,
             model,
             max_content_chars,

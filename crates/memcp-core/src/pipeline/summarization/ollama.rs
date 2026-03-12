@@ -54,7 +54,11 @@ impl OllamaSummarizationProvider {
         prompt_template: String,
     ) -> Self {
         OllamaSummarizationProvider {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .expect("HTTP client build"),
             base_url,
             model,
             max_input_chars,

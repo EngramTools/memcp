@@ -17,6 +17,7 @@ pub mod update;
 use std::sync::Arc;
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{delete, get, post},
     Router,
 };
@@ -118,7 +119,8 @@ pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
             .route("/v1/memories/{id}", delete(delete::handle_delete))
             .route("/v1/status", get(crate::transport::health::status_handler))
             .route("/v1/export", get(export::export_handler))
-            .route("/v1/discover", post(discover::discover_handler));
+            .route("/v1/discover", post(discover::discover_handler))
+            .layer(DefaultBodyLimit::max(256 * 1024)); // 256KB hard limit on request bodies
     }
 
     let recall_routes = Router::new()
@@ -163,4 +165,5 @@ pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
         .merge(delete_routes)
         .merge(export_routes)
         .route("/v1/status", get(crate::transport::health::status_handler))
+        .layer(DefaultBodyLimit::max(256 * 1024)) // 256KB hard limit on request bodies
 }

@@ -25,6 +25,7 @@ pub mod errors;
 pub mod import;
 pub mod load_test;
 pub mod logging;
+pub mod validation;
 
 // === Backward-compatible re-exports ===
 // These allow existing `use memcp::store::*`, `use memcp::embedding::*`, etc. to continue working.

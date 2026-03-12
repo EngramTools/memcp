@@ -71,7 +71,11 @@ impl OllamaExtractionProvider {
     /// * `max_content_chars` - Maximum content length before truncation (default: 1500)
     pub fn new(base_url: String, model: String, max_content_chars: usize) -> Self {
         OllamaExtractionProvider {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .expect("HTTP client build"),
             base_url,
             model,
             max_content_chars,

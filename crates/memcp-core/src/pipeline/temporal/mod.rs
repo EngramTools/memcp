@@ -368,7 +368,11 @@ pub async fn extract_event_time_llm(
 
 /// Call Ollama /api/chat endpoint for temporal extraction.
 async fn call_ollama_temporal(base_url: &str, model: &str, prompt: &str) -> Result<String, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .expect("HTTP client build");
     let body = serde_json::json!({
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -405,7 +409,11 @@ async fn call_openai_temporal(
     model: &str,
     prompt: &str,
 ) -> Result<String, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .expect("HTTP client build");
     let body = serde_json::json!({
         "model": model,
         "messages": [{"role": "user", "content": prompt}],

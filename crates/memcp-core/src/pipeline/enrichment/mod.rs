@@ -173,7 +173,11 @@ pub struct OllamaEnrichmentProvider {
 impl OllamaEnrichmentProvider {
     pub fn new(base_url: String, model: String) -> Self {
         OllamaEnrichmentProvider {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .expect("HTTP client build"),
             base_url,
             model,
         }

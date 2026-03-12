@@ -2173,6 +2173,12 @@ pub struct Config {
     /// Secrets enabled by default, PII opt-in. Existing configs without [redaction] section still work.
     #[serde(default)]
     pub redaction: RedactionConfig,
+
+    /// Input size limits (content, tags, query, batch).
+    /// Prevents resource exhaustion via oversized inputs at all transport layers.
+    /// Existing configs without [input_limits] section still work (serde default applied).
+    #[serde(default)]
+    pub input_limits: crate::validation::InputLimitsConfig,
 }
 
 fn default_log_level() -> String {
@@ -2218,6 +2224,7 @@ impl Default for Config {
             rate_limit: RateLimitConfig::default(),
             observability: ObservabilityConfig::default(),
             redaction: RedactionConfig::default(),
+            input_limits: crate::validation::InputLimitsConfig::default(),
         }
     }
 }

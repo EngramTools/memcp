@@ -38,13 +38,13 @@ impl UuidRefMap {
 
     /// Assign an integer ref to a UUID. Idempotent — same UUID always gets same ref.
     pub fn assign_ref(&self, uuid: &str) -> u32 {
-        let mut uuid_map = self.uuid_to_ref.lock().unwrap();
+        let mut uuid_map = self.uuid_to_ref.lock().expect("uuid_to_ref mutex poisoned");
         if let Some(&r) = uuid_map.get(uuid) {
             return r;
         }
         let r = self.next_ref.fetch_add(1, Ordering::SeqCst);
         uuid_map.insert(uuid.to_string(), r);
-        self.ref_to_uuid.lock().unwrap().insert(r, uuid.to_string());
+        self.ref_to_uuid.lock().expect("ref_to_uuid mutex poisoned").insert(r, uuid.to_string());
         r
     }
 
@@ -52,7 +52,7 @@ impl UuidRefMap {
     /// Returns None only if an integer ref is not found in the mapping.
     pub fn resolve(&self, input: &str) -> Option<String> {
         if let Ok(n) = input.parse::<u32>() {
-            self.ref_to_uuid.lock().unwrap().get(&n).cloned()
+            self.ref_to_uuid.lock().expect("ref_to_uuid mutex poisoned").get(&n).cloned()
         } else {
             Some(input.to_string()) // UUID passthrough
         }
@@ -120,6 +120,7 @@ pub struct MemoryService {
     gc_config: crate::config::GcConfig,
     last_auto_gc: Arc<std::sync::Mutex<Option<Instant>>>,
     ref_map: UuidRefMap,
+    input_limits: crate::validation::InputLimitsConfig,
 }
 
 impl MemoryService {
@@ -166,7 +167,15 @@ impl MemoryService {
             gc_config: crate::config::GcConfig::default(),
             last_auto_gc: Arc::new(std::sync::Mutex::new(None)),
             ref_map: UuidRefMap::new(),
+            input_limits: crate::validation::InputLimitsConfig::default(),
         }
+    }
+
+    /// Update the input limits configuration.
+    ///
+    /// Call after construction to wire config values from the full Config (e.g., in main.rs).
+    pub fn set_input_limits(&mut self, config: crate::validation::InputLimitsConfig) {
+        self.input_limits = config;
     }
 
     /// Update the recall configuration and extraction flag.
@@ -606,6 +615,24 @@ Callable from code_execution_20260120 sandboxes."
             })));
         }
 
+        // Validate input sizes
+        if let Err(e) = crate::validation::validate_content(&params.content, &self.input_limits) {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": e.to_string(),
+                "field": "content"
+            })));
+        }
+        if let Some(ref tags) = params.tags {
+            if let Err(e) = crate::validation::validate_tags(tags, &self.input_limits) {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": e.to_string(),
+                    "field": "tags"
+                })));
+            }
+        }
+
         // Validate idempotency_key length
         if let Some(ref key) = params.idempotency_key {
             if key.len() > self.idempotency_config.max_key_length {
@@ -814,7 +841,7 @@ Callable from code_execution_20260120 sandboxes."
                                 // Auto-GC trigger (fire-and-forget with cooldown)
                                 if self.resource_limits.auto_gc {
                                     let should_gc = {
-                                        let mut last = self.last_auto_gc.lock().unwrap();
+                                        let mut last = self.last_auto_gc.lock().expect("last_auto_gc mutex poisoned");
                                         let cooldown = Duration::from_secs(
                                             self.resource_limits.auto_gc_cooldown_mins * 60,
                                         );
@@ -1319,6 +1346,15 @@ Callable from code_execution_20260120 sandboxes."
             return Ok(CallToolResult::structured_error(json!({
                 "isError": true,
                 "error": "Field 'query' is required and cannot be empty",
+                "field": "query"
+            })));
+        }
+
+        // 1a. Validate query size
+        if let Err(e) = crate::validation::validate_query(&params.query, &self.input_limits) {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": e.to_string(),
                 "field": "query"
             })));
         }
@@ -2070,6 +2106,17 @@ Callable from code_execution_20260120 sandboxes."
             first = params.first.unwrap_or(false),
             "Tool called"
         );
+
+        // Validate query size (if present)
+        if let Some(ref query) = params.query {
+            if let Err(e) = crate::validation::validate_query(query, &self.input_limits) {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": e.to_string(),
+                    "field": "query"
+                })));
+            }
+        }
 
         // Get pg_store (required for recall session methods).
         let pg_store = match &self.pg_store {

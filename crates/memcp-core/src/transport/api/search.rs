@@ -47,6 +47,14 @@ pub async fn search_handler(
         );
     }
 
+    // Validate query size
+    if let Err(e) = crate::validation::validate_query(&req.query, &state.config.input_limits) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_json(&e.to_string())),
+        );
+    }
+
     // Validate min_salience range
     if let Some(ms) = req.min_salience {
         if !(0.0..=1.0).contains(&ms) {

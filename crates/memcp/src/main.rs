@@ -2155,6 +2155,7 @@ async fn main() -> Result<()> {
             service.set_store_config(config.store.clone());
             service.set_reembed_on_tag_change(config.embedding.reembed_on_tag_change);
             service.set_resource_limits(config.resource_limits.clone(), config.gc.clone());
+            service.set_input_limits(config.input_limits.clone());
 
             // 11. Serve via stdio transport
             let (stdin, stdout) = rmcp::transport::io::stdio();
