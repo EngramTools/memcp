@@ -496,7 +496,7 @@ Plans:
 ### Phase 10.2: Load test trust-weighted retrieval, quarantine, and curation features (INSERTED)
 
 **Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Requirements:** [TCL-01, TCL-02, TCL-03, TCL-04, TCL-05]
 **Depends on:** Phase 10
 **Plans:** 3/3 plans complete
 
@@ -663,6 +663,20 @@ Plans:
 - [ ] 22-01-PLAN.md — Input validation layer (transport-level bounds) + panic audit + CI clippy deny(unwrap_used) [Wave 1]
 - [ ] 22-02-PLAN.md — Error sanitization + import hardening + SSRF prevention + unsafe audit [Wave 2, depends on 01]
 - [ ] 22-03-PLAN.md — cargo audit CI + dependency policy + integration tests for all rejection paths [Wave 2, depends on 01]
+
+### Phase 23: Tiered Context Loading
+
+**Goal:** Tiered memory representation (L0 abstract / L1 overview / L2 full content) inspired by OpenViking. Generate concise abstracts at store time for better embedding quality. Add `--depth` parameter to search/recall for controlling retrieval detail level. Embed against L0 abstracts instead of full content for improved vector search precision.
+**Requirements:** [TCL-01, TCL-02, TCL-03, TCL-04, TCL-05]
+**Depends on:** Phase 22
+**Research:** [OpenViking Tiered Context Loading](../research/openviking-tiered-context-loading.md)
+**Plans:** 4 plans
+
+Plans:
+- [x] 23-00-PLAN.md — Wave 0: test scaffolds for abstraction (Nyquist)
+- [x] 23-01-PLAN.md — Schema, types, config, AbstractionProvider trait
+- [ ] 23-02-PLAN.md — Abstraction worker + embedding pipeline L0 integration
+- [ ] 23-03-PLAN.md — Depth parameter on search/recall + integration tests
 
 ---
 *Open-source fork cutoff: After Phase 22, fork memcp into a public MIT repo containing phases 01–22 (core memory server + test suite + gap closures + PII redaction + security hardening). Phase 12+ (auth, boosting, hosted features) stays in the private memcp repo (or engram repo) — never published to the public fork. See engram Phase 4.5 and /Users/ayoamadi/projects/engram/.planning/ROADMAP.md for strategy.*

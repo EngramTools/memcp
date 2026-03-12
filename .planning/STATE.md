@@ -4,23 +4,24 @@ milestone: v1.0
 milestone_name: milestone
 status: unknown
 stopped_at: Completed 22-02-PLAN.md
-last_updated: "2026-03-12T01:56:10.447Z"
+last_updated: "2026-03-12T21:21:24.264Z"
 progress:
-  total_phases: 59
+  total_phases: 60
   completed_phases: 38
-  total_plans: 138
-  completed_plans: 112
-  percent: 81
+  total_plans: 142
+  completed_plans: 113
+  percent: 82
 ---
 
 # Project State
 
 ## Current Phase
-Phase 22-security-hardening — Plan 2 of 3 complete
+Phase 23-tiered-context-loading — Plan 1 of 4 complete
 
-Progress: [████████████████░░░░] 111/138 plans (81%)
+Progress: [████████████████░░░░] 113/138 plans (82%)
 
 ## Active Context
+- Last completed: Phase 23-01 -- Tiered Content Schema, Types, Config & AbstractionProvider (023 migration, Memory struct tiered fields, AbstractionConfig, AbstractionProvider trait + Ollama/OpenAI impls, 3 tests)
 - Last completed: Phase 22-02 -- Error Sanitization, Import Hardening & SSRF Prevention (sanitized error Display impls, ZIP path traversal protection, SSRF URL validation, unsafe audit clean bill)
 - Last completed: Phase 22-03 -- Dependency Audit CI Enforcement (Dependabot config for cargo + GitHub Actions, CI audit step verified)
 - Last completed: Phase 22-01 -- Input Validation & Panic Safety (validation.rs module, 12 timeout-hardened clients, clippy::unwrap_used deny lint, 10 tests)
@@ -443,6 +444,7 @@ Resume file: None
 - Phase 07.3 (Sidecar Status Indicator) added — daemon health visibility via CLI/skill/status line, inserted before Phase 08
 - Phase 10.2 inserted after Phase 10: Load test trust-weighted retrieval, quarantine, and curation features (URGENT)
 - Phase 16 added: Test Coverage — write tests for P1/P2 gaps identified in AUDIT.md before open-source release. New open-source fork cutoff moved from Phase 11 to Phase 16.
+- Phase 23 added: Tiered Context Loading — L0/L1/L2 memory tiers inspired by OpenViking research, embed against summaries for better search quality, depth parameter for retrieval
 
 ### Key Decisions
 - Phase 11.1-02: MCP source default changed from 'default' to 'mcp' for provenance correctness
