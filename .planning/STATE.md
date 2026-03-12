@@ -3,26 +3,27 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 23-02-PLAN.md
-last_updated: "2026-03-12T22:10:00Z"
+stopped_at: Completed 23-03-PLAN.md
+last_updated: "2026-03-12T23:10:00Z"
 progress:
   total_phases: 60
   completed_phases: 38
   total_plans: 142
-  completed_plans: 114
-  percent: 82
+  completed_plans: 115
+  percent: 83
 ---
 
 # Project State
 
 ## Current Phase
-Phase 23-tiered-context-loading — Plan 2 of 4 complete
+Phase 23-tiered-context-loading — Plan 3 of 4 complete
 
-Progress: [████████████████░░░░] 114/138 plans (82%)
+Progress: [████████████████░░░░] 115/138 plans (83%)
 
 ## Active Context
-- Last completed: Phase 23-00 -- Tiered Context Loading Test Scaffolds (unit abstraction.rs with 8 tests, abstraction_pipeline_test.rs with 3 integration tests, all compiling clean)
+- Last completed: Phase 23-03 -- Depth parameter on MCP, CLI, HTTP (depth=0/1/2 on search_memory, recall_memory, CLI search/recall, HTTP /v1/search, /v1/recall; 5 integration tests + 3 unit tests pass)
 - Last completed: Phase 23-02 -- Abstraction Worker + Embedding Pipeline (background worker with 5s poll loop, build_embedding_text uses abstract_text, race prevention via SQL filter, TCL-02 tests, 116 unit tests pass)
+- Last completed: Phase 23-00 -- Tiered Context Loading Test Scaffolds (unit abstraction.rs with 8 tests, abstraction_pipeline_test.rs with 3 integration tests, all compiling clean)
 - Last completed: Phase 23-01 -- Tiered Content Schema, Types, Config & AbstractionProvider (023 migration, Memory struct tiered fields, AbstractionConfig, AbstractionProvider trait + Ollama/OpenAI impls, 3 tests)
 - Last completed: Phase 22-02 -- Error Sanitization, Import Hardening & SSRF Prevention (sanitized error Display impls, ZIP path traversal protection, SSRF URL validation, unsafe audit clean bill)
 - Last completed: Phase 22-03 -- Dependency Audit CI Enforcement (Dependabot config for cargo + GitHub Actions, CI audit step verified)
