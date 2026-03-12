@@ -561,6 +561,9 @@ mod tests {
             agent_role: None,
             write_path: None,
             metadata: serde_json::json!({}),
+            abstract_text: None,
+            overview_text: None,
+            abstraction_status: "skipped".to_string(),
         }
     }
 

@@ -38,7 +38,11 @@ fn make_memory(created_at: DateTime<Utc>, event_time: Option<DateTime<Utc>>) -> 
         trust_level: 0.5,
         session_id: None,
         agent_role: None,
+        write_path: None,
         metadata: serde_json::json!({}),
+        abstract_text: None,
+        overview_text: None,
+        abstraction_status: "skipped".to_string(),
     }
 }
 
