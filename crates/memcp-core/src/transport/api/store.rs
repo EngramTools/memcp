@@ -180,7 +180,7 @@ pub async fn store_handler(
 
     // Enqueue embedding job
     if let Some(ref sender) = state.embed_sender {
-        let text = build_embedding_text(&memory.content, &memory.tags);
+        let text = build_embedding_text(&memory.content, memory.abstract_text.as_deref(), &memory.tags);
         let _ = sender.try_send(crate::embedding::EmbeddingJob {
             memory_id: memory.id.clone(),
             text,

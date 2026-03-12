@@ -1475,6 +1475,7 @@ impl PostgresMemoryStore {
              trust_level, session_id, agent_role, write_path, metadata, \
              abstract_text, overview_text, abstraction_status \
              FROM memories WHERE embedding_status IN ('pending', 'failed') AND deleted_at IS NULL \
+             AND abstraction_status != 'pending' \
              ORDER BY created_at ASC LIMIT $1",
         )
         .bind(limit)

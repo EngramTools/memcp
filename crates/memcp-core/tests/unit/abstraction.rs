@@ -1,6 +1,7 @@
 // Tests for AbstractionProvider and depth fallback logic
 
 use memcp::config::AbstractionConfig;
+use memcp::embedding::build_embedding_text;
 use memcp::pipeline::abstraction::create_abstraction_provider;
 
 #[test]
@@ -32,17 +33,18 @@ fn test_create_abstraction_provider_openai_missing_key() {
 }
 
 #[test]
-#[ignore = "requires Plan 02: embedding pipeline"]
 fn test_embed_uses_abstract_text() {
     // TCL-02: build_embedding_text prefers abstract_text over content
-    todo!("Plan 02 fills this in")
+    let result = build_embedding_text("full content", Some("abstract"), &None);
+    assert!(result.contains("abstract"), "Expected result to contain 'abstract', got: {result}");
+    assert!(!result.contains("full content"), "Expected result NOT to contain 'full content', got: {result}");
 }
 
 #[test]
-#[ignore = "requires Plan 02: embedding pipeline"]
 fn test_embed_falls_back_to_content() {
     // TCL-02: build_embedding_text uses content when abstract_text is None
-    todo!("Plan 02 fills this in")
+    let result = build_embedding_text("full content", None, &None);
+    assert!(result.contains("full content"), "Expected result to contain 'full content', got: {result}");
 }
 
 #[test]

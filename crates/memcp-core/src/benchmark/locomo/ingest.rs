@@ -77,7 +77,7 @@ async fn ingest_per_turn(
             };
 
             let stored = store.store(memory).await?;
-            let text = build_embedding_text(&stored.content, &stored.tags);
+            let text = build_embedding_text(&stored.content, stored.abstract_text.as_deref(), &stored.tags);
             pipeline.enqueue(EmbeddingJob {
                 memory_id: stored.id,
                 text,
@@ -138,7 +138,7 @@ async fn ingest_per_session(
         };
 
         let stored = store.store(memory).await?;
-        let text = build_embedding_text(&stored.content, &stored.tags);
+        let text = build_embedding_text(&stored.content, stored.abstract_text.as_deref(), &stored.tags);
         pipeline.enqueue(EmbeddingJob {
             memory_id: stored.id,
             text,

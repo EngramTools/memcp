@@ -78,7 +78,7 @@ pub async fn ingest_question(
             let stored = store.store(memory).await?;
 
             // Enqueue embedding job
-            let text = build_embedding_text(&stored.content, &stored.tags);
+            let text = build_embedding_text(&stored.content, stored.abstract_text.as_deref(), &stored.tags);
             pipeline.enqueue(EmbeddingJob {
                 memory_id: stored.id,
                 text,

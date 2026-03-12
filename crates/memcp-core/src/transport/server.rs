@@ -767,7 +767,7 @@ Callable from code_execution_20260120 sandboxes."
                 // Enqueue background embedding job
                 if let Some(ref pipeline) = self.pipeline {
                     let text =
-                        crate::embedding::build_embedding_text(&memory.content, &memory.tags);
+                        crate::embedding::build_embedding_text(&memory.content, memory.abstract_text.as_deref(), &memory.tags);
                     pipeline.enqueue(EmbeddingJob {
                         memory_id: memory.id.clone(),
                         text,
@@ -1025,7 +1025,7 @@ Callable from code_execution_20260120 sandboxes."
                 if should_reembed {
                     if let Some(ref pipeline) = self.pipeline {
                         let text =
-                            crate::embedding::build_embedding_text(&memory.content, &memory.tags);
+                            crate::embedding::build_embedding_text(&memory.content, memory.abstract_text.as_deref(), &memory.tags);
                         pipeline.enqueue(EmbeddingJob {
                             memory_id: memory.id.clone(),
                             text,

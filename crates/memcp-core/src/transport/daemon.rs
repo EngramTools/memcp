@@ -732,6 +732,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
                             for memory in pending {
                                 let text = crate::embedding::build_embedding_text(
                                     &memory.content,
+                                    memory.abstract_text.as_deref(),
                                     &memory.tags,
                                 );
                                 let _ = embedding_sender.try_send(crate::embedding::EmbeddingJob {

@@ -413,7 +413,7 @@ async fn run_worker(
 
                 // Enqueue to embedding pipeline
                 if let Some(ref sender) = embedding_sender {
-                    let text = build_embedding_text(&memory.content, &memory.tags);
+                    let text = build_embedding_text(&memory.content, memory.abstract_text.as_deref(), &memory.tags);
                     let _ = sender.try_send(EmbeddingJob {
                         memory_id: memory.id.clone(),
                         text,
@@ -488,7 +488,7 @@ async fn run_worker(
                                 // Enqueue chunk to embedding pipeline (same tier as parent)
                                 if let Some(ref sender) = embedding_sender {
                                     let text =
-                                        build_embedding_text(&chunk_mem.content, &chunk_mem.tags);
+                                        build_embedding_text(&chunk_mem.content, chunk_mem.abstract_text.as_deref(), &chunk_mem.tags);
                                     let _ = sender.try_send(EmbeddingJob {
                                         memory_id: chunk_mem.id.clone(),
                                         text,

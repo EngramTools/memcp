@@ -94,10 +94,21 @@ pub struct EmbeddingJob {
     pub tier: String,
 }
 
-/// Concatenate memory content and tags into a single string for embedding.
-/// Tags are appended space-separated after the content.
-pub fn build_embedding_text(content: &str, tags: &Option<serde_json::Value>) -> String {
-    let mut text = content.to_string();
+/// Concatenate memory content (or abstract) and tags into a single string for embedding.
+///
+/// When `abstract_text` is Some, uses it as the base text instead of `content`.
+/// This enables semantic search against concise L0 abstracts rather than noisy full content,
+/// improving embedding quality for long memories.
+///
+/// Falls back to `content` when `abstract_text` is None (abstraction disabled or skipped).
+/// Tags are appended space-separated after the base text regardless.
+pub fn build_embedding_text(
+    content: &str,
+    abstract_text: Option<&str>,
+    tags: &Option<serde_json::Value>,
+) -> String {
+    let base = abstract_text.unwrap_or(content);
+    let mut text = base.to_string();
     if let Some(tags_val) = tags {
         if let Some(arr) = tags_val.as_array() {
             let tag_strs: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
