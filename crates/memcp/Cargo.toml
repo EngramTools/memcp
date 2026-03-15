@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Memory server for AI agents"
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "memcp"
 path = "src/main.rs"

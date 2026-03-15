@@ -127,3 +127,16 @@ completed: 2026-03-07
 ---
 *Phase: 10-production-hardening*
 *Completed: 2026-03-07*
+
+## Self-Check: PASSED
+
+- FOUND: crates/memcp-core/src/transport/api/mod.rs
+- FOUND: crates/memcp-core/src/transport/health/mod.rs
+- FOUND: crates/memcp-core/src/logging.rs
+- FOUND: .planning/phases/10-production-hardening/10-02-SUMMARY.md
+- FOUND commit: c5d14f1 (feat(10-02): metrics middleware + per-endpoint rate limiting)
+- FOUND commit: ced71f5 (feat(10-02): enrich /status with pool breakdown)
+- FOUND commit: 9b788bd (feat(10-02): add Redacted<T> wrapper + TraceLayer)
+- FOUND commit: b513828 (docs(10-02): complete plan)
+- Build: cargo build succeeds (Finished dev profile)
+- Tests: 172/173 passing (1 pre-existing failure unrelated to this plan)

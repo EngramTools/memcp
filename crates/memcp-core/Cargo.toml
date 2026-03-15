@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "High-performance MCP memory server — core library"
 
+[lints]
+workspace = true
+
 [lib]
 name = "memcp"
 path = "src/lib.rs"

@@ -99,7 +99,7 @@ struct Cli {
     openai_api_key: String,
 
     /// Database URL (can also be set via DATABASE_URL env var)
-    #[arg(long, env = "DATABASE_URL")]
+    #[arg(long, env = "DATABASE_URL", default_value = "postgres://memcp:memcp@localhost:5433/memcp")]
     database_url: String,
 
     /// QI provider API key (e.g., OpenRouter key). Required when running hybrid+qi config.

@@ -675,8 +675,8 @@ Plans:
 Plans:
 - [x] 23-00-PLAN.md — Wave 0: test scaffolds for abstraction (Nyquist)
 - [x] 23-01-PLAN.md — Schema, types, config, AbstractionProvider trait
-- [ ] 23-02-PLAN.md — Abstraction worker + embedding pipeline L0 integration
-- [ ] 23-03-PLAN.md — Depth parameter on search/recall + integration tests
+- [x] 23-02-PLAN.md — Abstraction worker + embedding pipeline L0 integration
+- [x] 23-03-PLAN.md — Depth parameter on search/recall + integration tests
 
 ---
 *Open-source fork cutoff: After Phase 22, fork memcp into a public MIT repo containing phases 01–22 (core memory server + test suite + gap closures + PII redaction + security hardening). Phase 12+ (auth, boosting, hosted features) stays in the private memcp repo (or engram repo) — never published to the public fork. See engram Phase 4.5 and /Users/ayoamadi/projects/engram/.planning/ROADMAP.md for strategy.*
