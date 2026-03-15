@@ -30,6 +30,10 @@ test-integration:
 test-e2e:
     DATABASE_URL=postgres://memcp:memcp@localhost:5433/memcp cargo test --test journey_test --test auto_store_e2e --test mcp_contract
 
+# Run all tests using cargo-nextest (faster parallel execution)
+test-fast:
+    DATABASE_URL=postgres://memcp:memcp@localhost:5433/memcp cargo nextest run --workspace
+
 # Run golden search quality tests (requires fastembed model via local-embed feature)
 test-golden:
     DATABASE_URL=postgres://memcp:memcp@localhost:5433/memcp cargo test --test search_quality -- --ignored --nocapture
