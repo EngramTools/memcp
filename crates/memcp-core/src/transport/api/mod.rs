@@ -5,6 +5,7 @@
 //! be layered on `/v1/*` in Phase 12 without affecting /health or /status.
 
 pub mod annotate;
+pub mod batch_get;
 pub mod delete;
 pub mod discover;
 pub mod export;
@@ -115,6 +116,7 @@ pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
             .route("/v1/annotate", post(annotate::annotate_handler))
             .route("/v1/update", post(update::update_handler))
             .route("/v1/memories/{id}", delete(delete::handle_delete))
+            .route("/v1/memories/get", post(batch_get::handle_batch_get))
             .route("/v1/status", get(crate::transport::health::status_handler))
             .route("/v1/export", get(export::export_handler))
             .route("/v1/discover", post(discover::discover_handler))
@@ -153,6 +155,10 @@ pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
         .route("/v1/export", get(export::export_handler))
         .layer(build_rate_limit_layer(rl.export_rps, rl.burst_multiplier));
 
+    let batch_get_routes = Router::new()
+        .route("/v1/memories/get", post(batch_get::handle_batch_get))
+        .layer(build_rate_limit_layer(rl.batch_get_rps, rl.burst_multiplier));
+
     Router::new()
         .merge(recall_routes)
         .merge(search_routes)
@@ -162,6 +168,7 @@ pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
         .merge(discover_routes)
         .merge(delete_routes)
         .merge(export_routes)
+        .merge(batch_get_routes)
         .route("/v1/status", get(crate::transport::health::status_handler))
         .layer(DefaultBodyLimit::max(256 * 1024)) // 256KB hard limit on request bodies
 }

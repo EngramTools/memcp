@@ -1959,6 +1959,9 @@ pub struct RateLimitConfig {
     /// Requests per second for export endpoint (default: 10, bulk read)
     #[serde(default = "default_export_rps")]
     pub export_rps: u32,
+    /// Requests per second for batch get endpoint (default: 50)
+    #[serde(default = "default_batch_get_rps")]
+    pub batch_get_rps: u32,
 }
 
 fn default_rate_limit_enabled() -> bool {
@@ -1994,6 +1997,9 @@ fn default_delete_rps() -> u32 {
 fn default_export_rps() -> u32 {
     10
 }
+fn default_batch_get_rps() -> u32 {
+    50
+}
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
@@ -2009,6 +2015,7 @@ impl Default for RateLimitConfig {
             discover_rps: default_discover_rps(),
             delete_rps: default_delete_rps(),
             export_rps: default_export_rps(),
+            batch_get_rps: default_batch_get_rps(),
         }
     }
 }

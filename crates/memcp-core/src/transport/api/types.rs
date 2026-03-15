@@ -182,3 +182,10 @@ pub struct ErrorBody {
 pub fn error_json(msg: &str) -> serde_json::Value {
     serde_json::json!({"error": msg})
 }
+
+/// Request body for POST /v1/memories/get (batch retrieve).
+#[derive(Deserialize)]
+pub struct BatchGetRequest {
+    /// Memory IDs to retrieve (max 50).
+    pub ids: Vec<String>,
+}
