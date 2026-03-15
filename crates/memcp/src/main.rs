@@ -2115,18 +2115,20 @@ async fn main() -> Result<()> {
             // 8c. Spawn auto-store sidecar if enabled
             if config.auto_store.enabled {
                 let _auto_store_handle = memcp::auto_store::AutoStoreWorker::spawn(
-                    config.auto_store.clone(),
-                    config.chunking.clone(),
-                    store.clone(),
-                    Some(&pipeline),
-                    extraction_pipeline.as_ref(),
-                    &config.extraction,
-                    content_filter.clone(),
-                    None, // Summarization only in daemon mode
-                    None, // No router in serve mode (single-tier)
-                    None, // project: None (global auto-store in serve mode)
-                    None, // birth_year: None (no birth year hint in serve mode)
-                    redaction_engine.clone(),
+                    memcp::auto_store::AutoStoreContext {
+                        config: config.auto_store.clone(),
+                        chunking_config: config.chunking.clone(),
+                        extraction_config: &config.extraction,
+                        store: store.clone(),
+                        embedding_pipeline: Some(&pipeline),
+                        extraction_pipeline: extraction_pipeline.as_ref(),
+                        embedding_router: None,
+                        content_filter: content_filter.clone(),
+                        redaction_engine: redaction_engine.clone(),
+                        summarization_provider: None,
+                        project: None,
+                        birth_year: None,
+                    },
                 );
                 tracing::info!("Auto-store sidecar spawned");
             }

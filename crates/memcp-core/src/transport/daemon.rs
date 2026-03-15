@@ -408,18 +408,20 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             .or_else(|| config.project.default_project.clone());
 
         let _auto_store_handle = crate::auto_store::AutoStoreWorker::spawn(
-            config.auto_store.clone(),
-            config.chunking.clone(),
-            store.clone(),
-            Some(&pipeline),
-            extraction_pipeline.as_ref(),
-            &config.extraction,
-            content_filter.clone(),
-            summarization_provider,
-            Some(router.clone()),
-            resolved_project,
-            config.user.birth_year,
-            redaction_engine.clone(),
+            crate::auto_store::AutoStoreContext {
+                config: config.auto_store.clone(),
+                chunking_config: config.chunking.clone(),
+                extraction_config: &config.extraction,
+                store: store.clone(),
+                embedding_pipeline: Some(&pipeline),
+                extraction_pipeline: extraction_pipeline.as_ref(),
+                embedding_router: Some(router.clone()),
+                content_filter: content_filter.clone(),
+                redaction_engine: redaction_engine.clone(),
+                summarization_provider,
+                project: resolved_project,
+                birth_year: config.user.birth_year,
+            },
         );
         tracing::info!("Auto-store sidecar spawned");
     }

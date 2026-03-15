@@ -31,6 +31,28 @@ use self::filter::{create_filter, FilterStrategy};
 use self::parser::{create_parser, LogParser};
 use self::watcher::{spawn_watcher, WatchEvent};
 
+/// Bundled context for spawning the auto-store worker.
+pub struct AutoStoreContext<'a> {
+    // Config
+    pub config: AutoStoreConfig,
+    pub chunking_config: ChunkingConfig,
+    pub extraction_config: &'a crate::config::ExtractionConfig,
+    // Store
+    pub store: Arc<PostgresMemoryStore>,
+    // Pipelines
+    pub embedding_pipeline: Option<&'a EmbeddingPipeline>,
+    pub extraction_pipeline: Option<&'a ExtractionPipeline>,
+    pub embedding_router: Option<Arc<EmbeddingRouter>>,
+    // Filters
+    pub content_filter: Option<Arc<dyn ContentFilter>>,
+    pub redaction_engine: Option<Arc<RedactionEngine>>,
+    // Processing
+    pub summarization_provider: Option<Arc<dyn SummarizationProvider>>,
+    // Context
+    pub project: Option<String>,
+    pub birth_year: Option<u32>,
+}
+
 /// Background worker that watches log files and auto-stores memories.
 pub struct AutoStoreWorker;
 
@@ -45,21 +67,21 @@ impl AutoStoreWorker {
     /// 4. Filters for relevance (LLM, heuristic, or none)
     /// 5. Stores as a memory with type_hint="auto" and source from the parser
     /// 6. Enqueues to embedding and extraction pipelines
-    #[allow(clippy::too_many_arguments)] // Config struct refactor deferred — internal function, not public API
-    pub fn spawn(
-        config: AutoStoreConfig,
-        chunking_config: ChunkingConfig,
-        store: Arc<PostgresMemoryStore>,
-        embedding_pipeline: Option<&EmbeddingPipeline>,
-        extraction_pipeline: Option<&ExtractionPipeline>,
-        extraction_config: &crate::config::ExtractionConfig,
-        content_filter: Option<Arc<dyn ContentFilter>>,
-        summarization_provider: Option<Arc<dyn SummarizationProvider>>,
-        embedding_router: Option<Arc<EmbeddingRouter>>,
-        project: Option<String>,
-        birth_year: Option<u32>,
-        redaction_engine: Option<Arc<RedactionEngine>>,
-    ) -> JoinHandle<()> {
+    pub fn spawn(ctx: AutoStoreContext<'_>) -> JoinHandle<()> {
+        let AutoStoreContext {
+            config,
+            chunking_config,
+            extraction_config,
+            store,
+            embedding_pipeline,
+            extraction_pipeline,
+            embedding_router,
+            content_filter,
+            redaction_engine,
+            summarization_provider,
+            project,
+            birth_year,
+        } = ctx;
         let parser = create_parser(&config.format);
         let filter = create_filter(
             &config.filter_mode,
@@ -133,7 +155,7 @@ pub fn content_hash(content: &str) -> u64 {
 }
 
 /// Main worker loop.
-#[allow(clippy::too_many_arguments)] // Config struct refactor deferred — internal function, not public API
+#[allow(clippy::too_many_arguments)] // Internal function, not public API
 async fn run_worker(
     watch_paths: Vec<String>,
     poll_interval: Duration,
