@@ -731,3 +731,45 @@ impl MemoryStore for PostgresMemoryStore {
         Ok(())
     }
 }
+
+impl PostgresMemoryStore {
+    /// Resolve a short ID prefix to a full memory ID.
+    ///
+    /// Agents using TOON persona blocks see truncated 8-char memory IDs.
+    /// This method resolves a prefix to the full UUID before passing to store operations.
+    ///
+    /// Behavior:
+    /// - 0 matches → Err("memory not found for prefix '{prefix}'")
+    /// - 1 match → Ok(full_id)
+    /// - 2+ matches → Err("ambiguous prefix '{prefix}' — matches multiple memories, use full ID")
+    ///
+    /// LIMIT 2 is sufficient: we only need to detect uniqueness vs. ambiguity.
+    pub async fn resolve_id_prefix(&self, prefix: &str) -> Result<String, MemcpError> {
+        let rows = sqlx::query(
+            "SELECT id FROM memories WHERE id LIKE $1 || '%' AND deleted_at IS NULL LIMIT 2",
+        )
+        .bind(prefix)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("Failed to resolve ID prefix: {}", e)))?;
+
+        match rows.len() {
+            0 => Err(MemcpError::NotFound {
+                id: format!("memory not found for prefix '{}'", prefix),
+            }),
+            1 => {
+                let full_id: String = rows[0]
+                    .try_get("id")
+                    .map_err(|e| MemcpError::Storage(e.to_string()))?;
+                Ok(full_id)
+            }
+            _ => Err(MemcpError::Validation {
+                message: format!(
+                    "ambiguous prefix '{}' — matches multiple memories, use full ID",
+                    prefix
+                ),
+                field: Some("id".to_string()),
+            }),
+        }
+    }
+}
