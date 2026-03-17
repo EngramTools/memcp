@@ -1243,7 +1243,14 @@ pub async fn cmd_list(
 
 /// Retrieve a single memory by ID.
 pub async fn cmd_get(store: &Arc<PostgresMemoryStore>, id: &str) -> Result<()> {
-    let memory = store.get(id).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+    let full_id = store
+        .resolve_id_prefix(id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let memory = store
+        .get(&full_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
     println!(
         "{}",
         serde_json::to_string(&format_memory_json(&memory, true))?
@@ -1253,23 +1260,31 @@ pub async fn cmd_get(store: &Arc<PostgresMemoryStore>, id: &str) -> Result<()> {
 
 /// Delete a memory by ID (permanent).
 pub async fn cmd_delete(store: &Arc<PostgresMemoryStore>, id: &str) -> Result<()> {
-    store
-        .delete(id)
+    let full_id = store
+        .resolve_id_prefix(id)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
-    println!("{}", serde_json::to_string(&json!({ "deleted": id }))?);
+    store
+        .delete(&full_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    println!("{}", serde_json::to_string(&json!({ "deleted": full_id }))?);
     Ok(())
 }
 
 /// Reinforce a memory to boost its salience.
 pub async fn cmd_reinforce(store: &Arc<PostgresMemoryStore>, id: &str, rating: &str) -> Result<()> {
+    let full_id = store
+        .resolve_id_prefix(id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
     let row = store
-        .reinforce_salience(id, rating)
+        .reinforce_salience(&full_id, rating)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let output = json!({
-        "memory_id": id,
+        "memory_id": full_id,
         "rating": rating,
         "stability": row.stability,
         "difficulty": row.difficulty,
@@ -1616,14 +1631,18 @@ pub async fn cmd_status(
 /// Fire-and-forget: outputs `{"ok": true, "id": "...", "signal": "..."}` on success.
 /// Error handling is done by the caller in main.rs.
 pub async fn cmd_feedback(store: &Arc<PostgresMemoryStore>, id: &str, signal: &str) -> Result<()> {
+    let full_id = store
+        .resolve_id_prefix(id)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
     store
-        .apply_feedback(id, signal)
+        .apply_feedback(&full_id, signal)
         .await
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     println!(
         "{}",
-        serde_json::to_string(&json!({ "ok": true, "id": id, "signal": signal }))?
+        serde_json::to_string(&json!({ "ok": true, "id": full_id, "signal": signal }))?
     );
     Ok(())
 }
