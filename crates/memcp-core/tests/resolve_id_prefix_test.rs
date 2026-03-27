@@ -86,7 +86,11 @@ async fn test_resolve_id_prefix_full_uuid(pool: PgPool) {
     let store = PostgresMemoryStore::from_pool(pool).await.unwrap();
 
     let memory = store
-        .store(MemoryBuilder::new().content("full uuid passthrough").build())
+        .store(
+            MemoryBuilder::new()
+                .content("full uuid passthrough")
+                .build(),
+        )
         .await
         .unwrap();
 

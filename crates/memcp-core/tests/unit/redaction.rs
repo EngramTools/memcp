@@ -38,10 +38,14 @@ fn pii_only_config() -> RedactionConfig {
 #[test]
 fn test_anthropic_key_redacted() {
     let engine = RedactionEngine::from_config(&secrets_only_config()).unwrap();
-    let result = engine.redact("my key is sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv").unwrap();
+    let result = engine
+        .redact("my key is sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv")
+        .unwrap();
     assert!(result.was_redacted);
     assert!(
-        result.content.contains("sk-ant-api03-[REDACTED:anthropic_key]"),
+        result
+            .content
+            .contains("sk-ant-api03-[REDACTED:anthropic_key]"),
         "expected partial mask with prefix, got: {}",
         result.content
     );
@@ -78,9 +82,7 @@ fn test_github_pat_redacted() {
 #[test]
 fn test_openai_key_redacted() {
     let engine = RedactionEngine::from_config(&secrets_only_config()).unwrap();
-    let result = engine
-        .redact("key sk-proj1234567890abcdefghij")
-        .unwrap();
+    let result = engine.redact("key sk-proj1234567890abcdefghij").unwrap();
     assert!(result.was_redacted);
     assert!(
         result.content.contains("sk-[REDACTED:openai_key]"),
@@ -109,7 +111,10 @@ fn test_stripe_key_redacted() {
 fn test_pii_disabled_no_ssn_redaction() {
     let engine = RedactionEngine::from_config(&secrets_only_config()).unwrap();
     let result = engine.redact("my SSN is 123-45-6789").unwrap();
-    assert!(!result.was_redacted, "PII should not be redacted when pii_enabled=false");
+    assert!(
+        !result.was_redacted,
+        "PII should not be redacted when pii_enabled=false"
+    );
     assert!(result.content.contains("123-45-6789"));
 }
 
@@ -140,7 +145,9 @@ fn test_pii_enabled_credit_card_redacted() {
 #[test]
 fn test_email_never_redacted() {
     let engine = RedactionEngine::from_config(&secrets_and_pii_config()).unwrap();
-    let result = engine.redact("contact user@example.com for details").unwrap();
+    let result = engine
+        .redact("contact user@example.com for details")
+        .unwrap();
     assert!(
         result.content.contains("user@example.com"),
         "email should never be redacted, got: {}",
@@ -153,7 +160,9 @@ fn test_email_never_redacted() {
 #[test]
 fn test_clean_content_no_redaction() {
     let engine = RedactionEngine::from_config(&secrets_only_config()).unwrap();
-    let result = engine.redact("This is perfectly clean content with no secrets").unwrap();
+    let result = engine
+        .redact("This is perfectly clean content with no secrets")
+        .unwrap();
     assert!(!result.was_redacted);
     assert_eq!(result.redaction_count, 0);
     assert!(result.categories.is_empty());
@@ -240,7 +249,11 @@ fn test_multiple_secrets_all_redacted() {
     let content = "AWS AKIAIOSFODNN7EXAMPLE and token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef1234";
     let result = engine.redact(content).unwrap();
     assert!(result.was_redacted);
-    assert!(result.redaction_count >= 2, "expected at least 2 redactions, got {}", result.redaction_count);
+    assert!(
+        result.redaction_count >= 2,
+        "expected at least 2 redactions, got {}",
+        result.redaction_count
+    );
     assert!(result.categories.contains(&"aws_key".to_string()));
     assert!(result.categories.contains(&"github_pat".to_string()));
 }
@@ -300,7 +313,10 @@ fn test_invalid_custom_rule_fails_closed() {
         }],
     };
     let result = RedactionEngine::from_config(&config);
-    assert!(result.is_err(), "invalid regex should cause construction failure (fail-closed)");
+    assert!(
+        result.is_err(),
+        "invalid regex should cause construction failure (fail-closed)"
+    );
 }
 
 // --- Disabled engine ---
@@ -315,6 +331,11 @@ fn test_both_disabled_clean_passthrough() {
         custom_rules: Vec::new(),
     };
     let engine = RedactionEngine::from_config(&config).unwrap();
-    let result = engine.redact("AKIAIOSFODNN7EXAMPLE and SSN 123-45-6789").unwrap();
-    assert!(!result.was_redacted, "disabled engine should not redact anything");
+    let result = engine
+        .redact("AKIAIOSFODNN7EXAMPLE and SSN 123-45-6789")
+        .unwrap();
+    assert!(
+        !result.was_redacted,
+        "disabled engine should not redact anything"
+    );
 }

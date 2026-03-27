@@ -36,15 +36,24 @@ fn test_create_abstraction_provider_openai_missing_key() {
 fn test_embed_uses_abstract_text() {
     // TCL-02: build_embedding_text prefers abstract_text over content
     let result = build_embedding_text("full content", Some("abstract"), &None);
-    assert!(result.contains("abstract"), "Expected result to contain 'abstract', got: {result}");
-    assert!(!result.contains("full content"), "Expected result NOT to contain 'full content', got: {result}");
+    assert!(
+        result.contains("abstract"),
+        "Expected result to contain 'abstract', got: {result}"
+    );
+    assert!(
+        !result.contains("full content"),
+        "Expected result NOT to contain 'full content', got: {result}"
+    );
 }
 
 #[test]
 fn test_embed_falls_back_to_content() {
     // TCL-02: build_embedding_text uses content when abstract_text is None
     let result = build_embedding_text("full content", None, &None);
-    assert!(result.contains("full content"), "Expected result to contain 'full content', got: {result}");
+    assert!(
+        result.contains("full content"),
+        "Expected result to contain 'full content', got: {result}"
+    );
 }
 
 /// Helper that mirrors the depth selection logic in transport/server.rs.
@@ -66,20 +75,32 @@ fn select_depth<'a>(
 fn test_depth_fallback_returns_content_when_abstract_null() {
     // TCL-05: depth=0 with no abstract_text returns content (graceful fallback)
     let result = select_depth(0, "full content", None, None);
-    assert_eq!(result, "full content", "depth=0 with no abstract should fall back to content");
+    assert_eq!(
+        result, "full content",
+        "depth=0 with no abstract should fall back to content"
+    );
 }
 
 #[test]
 fn test_depth_zero_returns_abstract() {
     // TCL-05: depth=0 returns abstract_text when present
     let result = select_depth(0, "full content", Some("short abstract"), None);
-    assert_eq!(result, "short abstract", "depth=0 should return abstract_text");
-    assert_ne!(result, "full content", "depth=0 should NOT return full content when abstract is present");
+    assert_eq!(
+        result, "short abstract",
+        "depth=0 should return abstract_text"
+    );
+    assert_ne!(
+        result, "full content",
+        "depth=0 should NOT return full content when abstract is present"
+    );
 }
 
 #[test]
 fn test_depth_default_returns_full_content() {
     // TCL-05: depth=2 (default) returns full content regardless of abstract presence
     let result = select_depth(2, "full content", Some("abstract"), Some("overview"));
-    assert_eq!(result, "full content", "depth=2 should always return full content");
+    assert_eq!(
+        result, "full content",
+        "depth=2 should always return full content"
+    );
 }

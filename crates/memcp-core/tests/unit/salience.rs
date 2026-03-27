@@ -197,8 +197,14 @@ fn test_rank_populates_scores() {
     scorer.rank(&mut hits, &inputs);
     // The first (best) hit must have a positive score; the worst may be 0.0
     // after min-max normalization when it has the minimum in every dimension.
-    assert!(hits[0].salience_score > 0.0, "best hit salience_score should be > 0");
-    assert!(hits[1].salience_score >= 0.0, "salience_score should be >= 0");
+    assert!(
+        hits[0].salience_score > 0.0,
+        "best hit salience_score should be > 0"
+    );
+    assert!(
+        hits[1].salience_score >= 0.0,
+        "salience_score should be >= 0"
+    );
 }
 
 #[test]

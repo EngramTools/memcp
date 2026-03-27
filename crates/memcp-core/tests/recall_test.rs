@@ -520,8 +520,16 @@ async fn test_recall_trust_weight_query_based(pool: PgPool) {
 
     assert!(result.count >= 2, "should recall both memories");
 
-    let high_mem = result.memories.iter().find(|m| m.memory_id == high_trust.id).unwrap();
-    let low_mem = result.memories.iter().find(|m| m.memory_id == low_trust.id).unwrap();
+    let high_mem = result
+        .memories
+        .iter()
+        .find(|m| m.memory_id == high_trust.id)
+        .unwrap();
+    let low_mem = result
+        .memories
+        .iter()
+        .find(|m| m.memory_id == low_trust.id)
+        .unwrap();
 
     assert!(
         high_mem.relevance > low_mem.relevance,
@@ -530,8 +538,14 @@ async fn test_recall_trust_weight_query_based(pool: PgPool) {
         low_mem.relevance
     );
     // Verify trust_level is exposed on RecalledMemory
-    assert!((high_mem.trust_level - 1.0).abs() < 0.01, "trust_level should be exposed");
-    assert!((low_mem.trust_level - 0.2).abs() < 0.01, "trust_level should be exposed");
+    assert!(
+        (high_mem.trust_level - 1.0).abs() < 0.01,
+        "trust_level should be exposed"
+    );
+    assert!(
+        (low_mem.trust_level - 0.2).abs() < 0.01,
+        "trust_level should be exposed"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -583,7 +597,7 @@ async fn test_recall_trust_weight_queryless(pool: PgPool) {
     // Make salience signals identical (same stability)
     sqlx::query(
         "INSERT INTO memory_salience (memory_id, stability, difficulty, reinforcement_count)
-         VALUES ($1, 5.0, 5.0, 0) ON CONFLICT (memory_id) DO UPDATE SET stability = 5.0"
+         VALUES ($1, 5.0, 5.0, 0) ON CONFLICT (memory_id) DO UPDATE SET stability = 5.0",
     )
     .bind(&high_trust.id)
     .execute(&pool)
@@ -591,7 +605,7 @@ async fn test_recall_trust_weight_queryless(pool: PgPool) {
     .unwrap();
     sqlx::query(
         "INSERT INTO memory_salience (memory_id, stability, difficulty, reinforcement_count)
-         VALUES ($1, 5.0, 5.0, 0) ON CONFLICT (memory_id) DO UPDATE SET stability = 5.0"
+         VALUES ($1, 5.0, 5.0, 0) ON CONFLICT (memory_id) DO UPDATE SET stability = 5.0",
     )
     .bind(&low_trust.id)
     .execute(&pool)
@@ -618,8 +632,16 @@ async fn test_recall_trust_weight_queryless(pool: PgPool) {
 
     assert!(result.count >= 2, "should recall both memories");
 
-    let high_mem = result.memories.iter().find(|m| m.memory_id == high_trust.id).unwrap();
-    let low_mem = result.memories.iter().find(|m| m.memory_id == low_trust.id).unwrap();
+    let high_mem = result
+        .memories
+        .iter()
+        .find(|m| m.memory_id == high_trust.id)
+        .unwrap();
+    let low_mem = result
+        .memories
+        .iter()
+        .find(|m| m.memory_id == low_trust.id)
+        .unwrap();
 
     assert!(
         high_mem.relevance > low_mem.relevance,
@@ -704,8 +726,16 @@ async fn test_recall_trust_demotion_changes_ranking(pool: PgPool) {
 
     // B (trust=1.0, moderate similarity) should outrank A (trust=0.1, high similarity)
     // because A's relevance gets multiplied by 0.1 while B keeps full relevance
-    let pos_a = result.memories.iter().position(|m| m.memory_id == mem_a.id).unwrap();
-    let pos_b = result.memories.iter().position(|m| m.memory_id == mem_b.id).unwrap();
+    let pos_a = result
+        .memories
+        .iter()
+        .position(|m| m.memory_id == mem_a.id)
+        .unwrap();
+    let pos_b = result
+        .memories
+        .iter()
+        .position(|m| m.memory_id == mem_b.id)
+        .unwrap();
 
     assert!(
         pos_b < pos_a,
@@ -760,9 +790,16 @@ async fn test_recall_trust_floor_prevents_zero(pool: PgPool) {
         .await
         .unwrap();
 
-    assert!(result.count >= 1, "zero-trust memory should still appear in results");
+    assert!(
+        result.count >= 1,
+        "zero-trust memory should still appear in results"
+    );
 
-    let mem = result.memories.iter().find(|m| m.memory_id == zero_trust.id).unwrap();
+    let mem = result
+        .memories
+        .iter()
+        .find(|m| m.memory_id == zero_trust.id)
+        .unwrap();
     assert!(
         mem.relevance > 0.0,
         "zero-trust memory should have relevance > 0.0 due to floor clamping (got {})",

@@ -100,7 +100,12 @@ async fn test_depth_fallback_returns_content_when_abstract_null(pool: PgPool) {
     );
 
     // Depth selection with NULL abstract should fall back to content
-    let display = select_depth(0, &retrieved.content, retrieved.abstract_text.as_deref(), None);
+    let display = select_depth(
+        0,
+        &retrieved.content,
+        retrieved.abstract_text.as_deref(),
+        None,
+    );
     assert_eq!(
         display, "Full memory content without abstraction",
         "depth=0 with NULL abstract must fall back to full content"
@@ -129,8 +134,13 @@ async fn test_depth_default_returns_full_content(pool: PgPool) {
     insert_mock_embedding(&pool, &memory.id).await;
 
     // Set abstract and overview texts — they should NOT be returned with depth=2
-    set_abstraction_texts(&pool, &memory.id, Some("short abstract"), Some("medium overview"))
-        .await;
+    set_abstraction_texts(
+        &pool,
+        &memory.id,
+        Some("short abstract"),
+        Some("medium overview"),
+    )
+    .await;
 
     let retrieved = store.get(&memory.id).await.unwrap();
 
@@ -266,13 +276,7 @@ async fn test_depth_one_returns_overview(pool: PgPool) {
     let abstract_text = "Short abstract of comprehensive memory";
     let overview_text =
         "## Comprehensive Memory\n- Background: extensive topic\n- Status: ongoing\n- Key decisions made\n- Open questions remain";
-    set_abstraction_texts(
-        &pool,
-        &memory.id,
-        Some(abstract_text),
-        Some(overview_text),
-    )
-    .await;
+    set_abstraction_texts(&pool, &memory.id, Some(abstract_text), Some(overview_text)).await;
 
     let retrieved = store.get(&memory.id).await.unwrap();
     assert!(

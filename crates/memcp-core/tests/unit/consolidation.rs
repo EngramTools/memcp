@@ -35,5 +35,8 @@ fn test_concatenate_memories_single() {
     let contents = vec!["solo"];
     let result = concatenate_memories(&contents);
     assert!(result.contains("solo"));
-    assert!(!result.contains("---"), "single item should have no separator");
+    assert!(
+        !result.contains("---"),
+        "single item should have no separator"
+    );
 }

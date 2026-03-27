@@ -62,7 +62,11 @@ fn test_multiple_secrets_all_redacted() {
     let result = engine.redact(content).unwrap();
 
     assert!(result.was_redacted);
-    assert!(result.redaction_count >= 2, "Expected at least 2 redactions, got {}", result.redaction_count);
+    assert!(
+        result.redaction_count >= 2,
+        "Expected at least 2 redactions, got {}",
+        result.redaction_count
+    );
     assert!(!result.content.contains("AKIAIOSFODNN7EXAMPLE"));
     assert!(!result.content.contains("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ"));
 }
@@ -122,9 +126,13 @@ fn test_auto_store_always_redacts() {
     // This test simulates the auto-store calling pattern: engine.redact() is always called.
     let engine = RedactionEngine::from_config(&default_config()).unwrap();
 
-    let content_with_secret = "Remember: the API key is sk-proj-abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMN";
+    let content_with_secret =
+        "Remember: the API key is sk-proj-abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMN";
     let result = engine.redact(content_with_secret).unwrap();
-    assert!(result.was_redacted, "Auto-store path must always redact secrets");
+    assert!(
+        result.was_redacted,
+        "Auto-store path must always redact secrets"
+    );
     assert!(!result.content.contains("abcdefghijklmnopqrstuvwxyz"));
 }
 

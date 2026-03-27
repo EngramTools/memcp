@@ -6,12 +6,12 @@
 mod common;
 use common::builders::MemoryBuilder;
 
+use chrono;
 use memcp::consolidation::similarity::find_similar_memories;
 use memcp::store::postgres::PostgresMemoryStore;
 use memcp::store::MemoryStore;
 use sqlx::PgPool;
 use uuid;
-use chrono;
 
 /// Create a 384-dimensional base vector with a recognizable pattern.
 fn make_base_vector() -> Vec<f32> {
@@ -164,7 +164,11 @@ async fn test_find_similar_excludes_consolidated_originals(pool: PgPool) {
         .await
         .unwrap();
     let mem_b = store
-        .store(MemoryBuilder::new().content("Memory B consolidated").build())
+        .store(
+            MemoryBuilder::new()
+                .content("Memory B consolidated")
+                .build(),
+        )
         .await
         .unwrap();
 

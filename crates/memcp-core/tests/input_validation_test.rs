@@ -30,7 +30,10 @@ fn test_content_exactly_100kb_accepted() {
     let config = InputLimitsConfig::default();
     let exact = "x".repeat(102_400); // Exactly 100KB
     let result = validate_content(&exact, &config);
-    assert!(result.is_ok(), "Content exactly at limit should be accepted");
+    assert!(
+        result.is_ok(),
+        "Content exactly at limit should be accepted"
+    );
 }
 
 #[test]
@@ -81,7 +84,10 @@ fn test_tag_exactly_256_chars_accepted() {
     let tag = "a".repeat(256);
     let tags = vec![tag];
     let result = validate_tags(&tags, &config);
-    assert!(result.is_ok(), "Tag exactly at 256 chars should be accepted");
+    assert!(
+        result.is_ok(),
+        "Tag exactly at 256 chars should be accepted"
+    );
 }
 
 #[test]
@@ -118,7 +124,11 @@ fn test_validation_errors_include_field_and_limit() {
     // Content error mentions field and limit
     let err = validate_content(&"x".repeat(200_000), &config).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("102400"), "Content error missing limit: {}", msg);
+    assert!(
+        msg.contains("102400"),
+        "Content error missing limit: {}",
+        msg
+    );
 
     // Tag count error mentions field and limit
     let tags: Vec<String> = (0..50).map(|i| format!("t{}", i)).collect();

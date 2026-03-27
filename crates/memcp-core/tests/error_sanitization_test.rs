@@ -87,9 +87,7 @@ fn test_internal_error_hides_file_paths() {
 /// Config error does not leak file paths.
 #[test]
 fn test_config_error_hides_paths() {
-    let err = MemcpError::Config(
-        "Failed to parse /etc/memcp/memcp.toml: invalid TOML".to_string(),
-    );
+    let err = MemcpError::Config("Failed to parse /etc/memcp/memcp.toml: invalid TOML".to_string());
     let display = format!("{}", err);
 
     assert!(
