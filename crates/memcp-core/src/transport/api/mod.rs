@@ -8,7 +8,10 @@ pub mod annotate;
 pub mod batch_get;
 pub mod delete;
 pub mod discover;
+pub mod entities;
 pub mod export;
+pub mod graph;
+pub mod pipeline;
 pub mod recall;
 pub mod search;
 pub mod store;
@@ -92,15 +95,21 @@ fn build_rate_limit_layer(
 /// Build the /v1/* API router with per-endpoint rate limits.
 ///
 /// Routes:
-///   POST   /v1/recall           — recall memories with optional query embedding
-///   POST   /v1/search           — hybrid search with salience re-ranking
-///   POST   /v1/store            — store a memory (with optional wait=true sync embedding)
-///   POST   /v1/annotate         — modify tags and/or salience on an existing memory
-///   POST   /v1/update           — replace memory content or metadata in place
-///   DELETE /v1/memories/{id}    — hard delete a memory by ID
-///   GET    /v1/status           — alias for /status (convenience for plugin callers)
-///   GET    /v1/export           — export memories (jsonl, csv, markdown)
-///   POST   /v1/discover         — cosine sweet-spot discovery (creative association)
+///   POST   /v1/recall                       — recall memories with optional query embedding
+///   POST   /v1/search                       — hybrid search with salience re-ranking
+///   POST   /v1/store                        — store a memory (with optional wait=true sync embedding)
+///   POST   /v1/annotate                     — modify tags and/or salience on an existing memory
+///   POST   /v1/update                       — replace memory content or metadata in place
+///   DELETE /v1/memories/{id}               — hard delete a memory by ID
+///   GET    /v1/status                       — alias for /status (convenience for plugin callers)
+///   GET    /v1/export                       — export memories (jsonl, csv, markdown)
+///   POST   /v1/discover                     — cosine sweet-spot discovery (creative association)
+///   GET    /v1/entities                     — list knowledge graph entities
+///   GET    /v1/entities/:id                 — single entity with facts + mention count
+///   GET    /v1/entities/:id/relationships   — entity neighbor graph with traversal depth
+///   GET    /v1/entities/:id/contradictions  — contradiction scan for an entity
+///   GET    /v1/graph                        — full subgraph for dashboard visualization
+///   GET    /v1/pipeline/health              — extraction + normalization pipeline status counts
 ///
 /// Phase 12 pattern:
 /// ```rust
@@ -120,6 +129,18 @@ pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
             .route("/v1/status", get(crate::transport::health::status_handler))
             .route("/v1/export", get(export::export_handler))
             .route("/v1/discover", post(discover::discover_handler))
+            .route("/v1/entities", get(entities::list_entities_handler))
+            .route("/v1/entities/{id}", get(entities::get_entity_handler))
+            .route(
+                "/v1/entities/{id}/relationships",
+                get(entities::get_entity_relationships_handler),
+            )
+            .route(
+                "/v1/entities/{id}/contradictions",
+                get(entities::get_entity_contradictions_handler),
+            )
+            .route("/v1/graph", get(graph::graph_handler))
+            .route("/v1/pipeline/health", get(pipeline::pipeline_health_handler))
             .layer(DefaultBodyLimit::max(256 * 1024)); // 256KB hard limit on request bodies
     }
 
@@ -157,7 +178,33 @@ pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
 
     let batch_get_routes = Router::new()
         .route("/v1/memories/get", post(batch_get::handle_batch_get))
-        .layer(build_rate_limit_layer(rl.batch_get_rps, rl.burst_multiplier));
+        .layer(build_rate_limit_layer(
+            rl.batch_get_rps,
+            rl.burst_multiplier,
+        ));
+
+    // Entity graph routes share the search rate limit — read-only queries
+    // with similar cost profile to hybrid search.
+    let entity_routes = Router::new()
+        .route("/v1/entities", get(entities::list_entities_handler))
+        .route("/v1/entities/{id}", get(entities::get_entity_handler))
+        .route(
+            "/v1/entities/{id}/relationships",
+            get(entities::get_entity_relationships_handler),
+        )
+        .route(
+            "/v1/entities/{id}/contradictions",
+            get(entities::get_entity_contradictions_handler),
+        )
+        .layer(build_rate_limit_layer(rl.search_rps, rl.burst_multiplier));
+
+    let graph_routes = Router::new()
+        .route("/v1/graph", get(graph::graph_handler))
+        .layer(build_rate_limit_layer(rl.search_rps, rl.burst_multiplier));
+
+    let pipeline_routes = Router::new()
+        .route("/v1/pipeline/health", get(pipeline::pipeline_health_handler))
+        .layer(build_rate_limit_layer(rl.search_rps, rl.burst_multiplier));
 
     Router::new()
         .merge(recall_routes)
@@ -169,6 +216,9 @@ pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
         .merge(delete_routes)
         .merge(export_routes)
         .merge(batch_get_routes)
+        .merge(entity_routes)
+        .merge(graph_routes)
+        .merge(pipeline_routes)
         .route("/v1/status", get(crate::transport::health::status_handler))
         .layer(DefaultBodyLimit::max(256 * 1024)) // 256KB hard limit on request bodies
 }
