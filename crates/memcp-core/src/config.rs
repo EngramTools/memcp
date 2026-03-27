@@ -2396,10 +2396,12 @@ impl Config {
             .map_err(|e| MemcpError::Config(format!("extraction.ollama_base_url: {}", e)))?;
 
         // Query intelligence URLs
-        validate_provider_url(&self.query_intelligence.ollama_base_url, allow)
-            .map_err(|e| MemcpError::Config(format!("query_intelligence.ollama_base_url: {}", e)))?;
-        validate_provider_url(&self.query_intelligence.openai_base_url, allow)
-            .map_err(|e| MemcpError::Config(format!("query_intelligence.openai_base_url: {}", e)))?;
+        validate_provider_url(&self.query_intelligence.ollama_base_url, allow).map_err(|e| {
+            MemcpError::Config(format!("query_intelligence.ollama_base_url: {}", e))
+        })?;
+        validate_provider_url(&self.query_intelligence.openai_base_url, allow).map_err(|e| {
+            MemcpError::Config(format!("query_intelligence.openai_base_url: {}", e))
+        })?;
 
         // Summarization URLs
         validate_provider_url(&self.summarization.ollama_base_url, allow)

@@ -70,7 +70,9 @@ fn sanitize_message(msg: &str) -> String {
 /// Check if a string contains what looks like an absolute file path.
 fn contains_file_path(msg: &str) -> bool {
     // Unix absolute paths
-    for prefix in &["/home/", "/etc/", "/var/", "/tmp/", "/opt/", "/usr/", "/root/"] {
+    for prefix in &[
+        "/home/", "/etc/", "/var/", "/tmp/", "/opt/", "/usr/", "/root/",
+    ] {
         if msg.contains(prefix) {
             return true;
         }

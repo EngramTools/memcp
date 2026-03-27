@@ -53,17 +53,11 @@ pub async fn store_handler(
 
     // Validate input sizes
     if let Err(e) = crate::validation::validate_content(&req.content, &state.config.input_limits) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(error_json(&e.to_string())),
-        );
+        return (StatusCode::BAD_REQUEST, Json(error_json(&e.to_string())));
     }
     if let Some(ref tags) = req.tags {
         if let Err(e) = crate::validation::validate_tags(tags, &state.config.input_limits) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(error_json(&e.to_string())),
-            );
+            return (StatusCode::BAD_REQUEST, Json(error_json(&e.to_string())));
         }
     }
 
@@ -133,8 +127,7 @@ pub async fn store_handler(
     };
 
     // Extract temporal event time from content.
-    let temporal_result =
-        extract_event_time(&content, state.config.user.birth_year, Utc::now());
+    let temporal_result = extract_event_time(&content, state.config.user.birth_year, Utc::now());
     let (event_time, event_time_precision) = match temporal_result {
         Some((dt, precision)) => (Some(dt), Some(precision.as_str().to_string())),
         None => (None, None),
@@ -180,7 +173,11 @@ pub async fn store_handler(
 
     // Enqueue embedding job
     if let Some(ref sender) = state.embed_sender {
-        let text = build_embedding_text(&memory.content, memory.abstract_text.as_deref(), &memory.tags);
+        let text = build_embedding_text(
+            &memory.content,
+            memory.abstract_text.as_deref(),
+            &memory.tags,
+        );
         let _ = sender.try_send(crate::embedding::EmbeddingJob {
             memory_id: memory.id.clone(),
             text,

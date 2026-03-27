@@ -5,11 +5,7 @@
 
 use std::sync::atomic::Ordering;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use serde::Serialize;
 use serde_json::json;
 

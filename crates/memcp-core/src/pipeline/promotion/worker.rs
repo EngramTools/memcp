@@ -68,7 +68,11 @@ pub async fn run_promotion_sweep(
         };
 
         // Build embedding text (abstract or content + tags)
-        let text = build_embedding_text(&memory.content, memory.abstract_text.as_deref(), &memory.tags);
+        let text = build_embedding_text(
+            &memory.content,
+            memory.abstract_text.as_deref(),
+            &memory.tags,
+        );
 
         // Embed with quality provider
         match quality_provider.embed(&text).await {

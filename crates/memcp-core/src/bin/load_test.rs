@@ -138,7 +138,9 @@ async fn main() -> Result<()> {
     if memcp::benchmark::check_database_url_safety(&cli.database_url) {
         eprintln!("WARNING: Database URL looks like a production database!");
         eprintln!("  URL: {}", cli.database_url);
-        eprintln!("  The load test TRUNCATES tables on the PUBLIC schema -- this WILL destroy data.");
+        eprintln!(
+            "  The load test TRUNCATES tables on the PUBLIC schema -- this WILL destroy data."
+        );
         eprintln!("  Ensure this is intentional.");
         eprintln!();
     }

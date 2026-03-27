@@ -286,7 +286,11 @@ pub async fn backfill(store: &PostgresMemoryStore, sender: &mpsc::Sender<Embeddi
 
         let batch_size = pending.len() as u64;
         for memory in pending {
-            let text = build_embedding_text(&memory.content, memory.abstract_text.as_deref(), &memory.tags);
+            let text = build_embedding_text(
+                &memory.content,
+                memory.abstract_text.as_deref(),
+                &memory.tags,
+            );
             let job = EmbeddingJob {
                 memory_id: memory.id,
                 text,

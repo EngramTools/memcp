@@ -55,7 +55,10 @@ pub async fn run_abstraction_worker(
             continue;
         }
 
-        tracing::debug!(count = pending.len(), "Abstraction worker: processing batch");
+        tracing::debug!(
+            count = pending.len(),
+            "Abstraction worker: processing batch"
+        );
 
         for memory in pending {
             // Skip short content — abstraction adds no value for short snippets

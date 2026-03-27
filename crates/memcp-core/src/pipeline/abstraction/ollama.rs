@@ -69,7 +69,11 @@ impl OllamaAbstractionProvider {
         }
     }
 
-    async fn call_ollama(&self, system_prompt: &str, user_content: &str) -> Result<String, AbstractionError> {
+    async fn call_ollama(
+        &self,
+        system_prompt: &str,
+        user_content: &str,
+    ) -> Result<String, AbstractionError> {
         let request = OllamaChatRequest {
             model: self.model.clone(),
             messages: vec![

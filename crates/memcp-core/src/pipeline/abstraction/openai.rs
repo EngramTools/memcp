@@ -62,7 +62,12 @@ impl OpenAIAbstractionProvider {
         }
     }
 
-    async fn call_openai(&self, system_prompt: &str, user_content: &str, max_tokens: u32) -> Result<String, AbstractionError> {
+    async fn call_openai(
+        &self,
+        system_prompt: &str,
+        user_content: &str,
+        max_tokens: u32,
+    ) -> Result<String, AbstractionError> {
         let body = serde_json::json!({
             "model": self.model,
             "messages": [

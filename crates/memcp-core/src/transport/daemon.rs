@@ -199,7 +199,12 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
                 let abstraction_store = store.clone();
                 let abstraction_config = config.abstraction.clone();
                 tokio::spawn(async move {
-                    run_abstraction_worker(abstraction_store, abstraction_provider, abstraction_config).await;
+                    run_abstraction_worker(
+                        abstraction_store,
+                        abstraction_provider,
+                        abstraction_config,
+                    )
+                    .await;
                 });
                 tracing::info!(
                     provider = %config.abstraction.provider,
@@ -230,31 +235,34 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     );
 
     // 2.6. Construct redaction engine if enabled (secrets_enabled or pii_enabled)
-    let redaction_engine: Option<Arc<crate::pipeline::redaction::RedactionEngine>> =
-        if config.redaction.secrets_enabled || config.redaction.pii_enabled {
-            match crate::pipeline::redaction::RedactionEngine::from_config(&config.redaction) {
-                Ok(engine) => {
-                    tracing::info!(
-                        secrets_enabled = config.redaction.secrets_enabled,
-                        pii_enabled = config.redaction.pii_enabled,
-                        "Redaction engine initialized"
-                    );
-                    Some(Arc::new(engine))
-                }
-                Err(e) => {
-                    // Fail-closed: if secrets_enabled is true (default), redaction MUST work
-                    if config.redaction.secrets_enabled {
-                        tracing::error!(error = %e, "Failed to initialize redaction engine — exiting (fail-closed)");
-                        std::process::exit(1);
-                    }
-                    tracing::warn!(error = %e, "Failed to initialize redaction engine — redaction disabled");
-                    None
-                }
+    let redaction_engine: Option<Arc<crate::pipeline::redaction::RedactionEngine>> = if config
+        .redaction
+        .secrets_enabled
+        || config.redaction.pii_enabled
+    {
+        match crate::pipeline::redaction::RedactionEngine::from_config(&config.redaction) {
+            Ok(engine) => {
+                tracing::info!(
+                    secrets_enabled = config.redaction.secrets_enabled,
+                    pii_enabled = config.redaction.pii_enabled,
+                    "Redaction engine initialized"
+                );
+                Some(Arc::new(engine))
             }
-        } else {
-            tracing::info!("Redaction disabled (secrets_enabled=false, pii_enabled=false)");
-            None
-        };
+            Err(e) => {
+                // Fail-closed: if secrets_enabled is true (default), redaction MUST work
+                if config.redaction.secrets_enabled {
+                    tracing::error!(error = %e, "Failed to initialize redaction engine — exiting (fail-closed)");
+                    std::process::exit(1);
+                }
+                tracing::warn!(error = %e, "Failed to initialize redaction engine — redaction disabled");
+                None
+            }
+        }
+    } else {
+        tracing::info!("Redaction disabled (secrets_enabled=false, pii_enabled=false)");
+        None
+    };
 
     // 2.7. Spawn health HTTP server if enabled
     // AppState carries config, embed_provider, and embed_sender for /v1/* API handlers.
@@ -407,8 +415,8 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             .or_else(|| std::env::var("MEMCP_WORKSPACE").ok())
             .or_else(|| config.project.default_project.clone());
 
-        let _auto_store_handle = crate::auto_store::AutoStoreWorker::spawn(
-            crate::auto_store::AutoStoreContext {
+        let _auto_store_handle =
+            crate::auto_store::AutoStoreWorker::spawn(crate::auto_store::AutoStoreContext {
                 config: config.auto_store.clone(),
                 chunking_config: config.chunking.clone(),
                 extraction_config: &config.extraction,
@@ -421,8 +429,7 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
                 summarization_provider,
                 project: resolved_project,
                 birth_year: config.user.birth_year,
-            },
-        );
+            });
         tracing::info!("Auto-store sidecar spawned");
     }
 
@@ -1097,7 +1104,11 @@ async fn build_embedding_router(config: &Config) -> Result<EmbeddingRouter> {
         let default = if tiers.contains_key("fast") {
             "fast".to_string()
         } else {
-            tiers.keys().next().expect("at least one embedding tier must be configured").clone()
+            tiers
+                .keys()
+                .next()
+                .expect("at least one embedding tier must be configured")
+                .clone()
         };
         tracing::info!(
             tiers = ?tiers.keys().collect::<Vec<_>>(),

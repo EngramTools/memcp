@@ -401,7 +401,13 @@ impl PostgresMemoryStore {
                         .unwrap_or(0.0);
                     let tags: Option<serde_json::Value> = row.try_get("tags").ok().flatten();
                     let trust_level: f32 = row.try_get::<f32, _>("trust_level").unwrap_or(0.5);
-                    RecallCandidate { memory_id, content, relevance, tags, trust_level }
+                    RecallCandidate {
+                        memory_id,
+                        content,
+                        relevance,
+                        tags,
+                        trust_level,
+                    }
                 })
                 .collect();
             Ok(results)
@@ -452,7 +458,13 @@ impl PostgresMemoryStore {
                         .unwrap_or(0.0);
                     let tags: Option<serde_json::Value> = row.try_get("tags").ok().flatten();
                     let trust_level: f32 = row.try_get::<f32, _>("trust_level").unwrap_or(0.5);
-                    RecallCandidate { memory_id, content, relevance, tags, trust_level }
+                    RecallCandidate {
+                        memory_id,
+                        content,
+                        relevance,
+                        tags,
+                        trust_level,
+                    }
                 })
                 .collect();
             Ok(results)

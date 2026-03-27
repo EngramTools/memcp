@@ -164,13 +164,9 @@ pub fn validate_batch_size(size: usize, config: &InputLimitsConfig) -> Result<()
 /// - `file://`, `ftp://`, `gopher://` and all non-HTTP(S) schemes
 /// - HTTP to private IP ranges: 10.x, 172.16-31.x, 192.168.x, 169.254.x (link-local/AWS metadata)
 /// - HTTP to any non-localhost host when `allow_localhost_http` is false
-pub fn validate_provider_url(
-    url_str: &str,
-    allow_localhost_http: bool,
-) -> Result<(), MemcpError> {
-    let parsed = url::Url::parse(url_str).map_err(|e| {
-        MemcpError::validation("url", &format!("Invalid URL '{}': {}", url_str, e))
-    })?;
+pub fn validate_provider_url(url_str: &str, allow_localhost_http: bool) -> Result<(), MemcpError> {
+    let parsed = url::Url::parse(url_str)
+        .map_err(|e| MemcpError::validation("url", &format!("Invalid URL '{}': {}", url_str, e)))?;
 
     let scheme = parsed.scheme();
 
@@ -194,10 +190,8 @@ pub fn validate_provider_url(
     let host = parsed.host_str().unwrap_or("");
 
     // Check if host is localhost
-    let is_localhost = host == "localhost"
-        || host == "127.0.0.1"
-        || host == "::1"
-        || host == "[::1]";
+    let is_localhost =
+        host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]";
 
     if is_localhost {
         if allow_localhost_http {

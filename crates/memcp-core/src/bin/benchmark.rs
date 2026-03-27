@@ -99,7 +99,11 @@ struct Cli {
     openai_api_key: String,
 
     /// Database URL (can also be set via DATABASE_URL env var)
-    #[arg(long, env = "DATABASE_URL", default_value = "postgres://memcp:memcp@localhost:5433/memcp")]
+    #[arg(
+        long,
+        env = "DATABASE_URL",
+        default_value = "postgres://memcp:memcp@localhost:5433/memcp"
+    )]
     database_url: String,
 
     /// QI provider API key (e.g., OpenRouter key). Required when running hybrid+qi config.
@@ -219,7 +223,9 @@ async fn run() -> Result<(), anyhow::Error> {
     if check_database_url_safety(&cli.database_url) {
         eprintln!("WARNING: Database URL looks like a production database!");
         eprintln!("  URL: {}", cli.database_url);
-        eprintln!("  The benchmark creates an isolated 'benchmark' schema but shares the database.");
+        eprintln!(
+            "  The benchmark creates an isolated 'benchmark' schema but shares the database."
+        );
         eprintln!("  Ensure this is intentional.");
         eprintln!();
     }

@@ -139,9 +139,7 @@ mod tests {
 
     #[test]
     fn test_url_safety_fly() {
-        assert!(check_database_url_safety(
-            "postgres://user@db.fly.dev/mydb"
-        ));
+        assert!(check_database_url_safety("postgres://user@db.fly.dev/mydb"));
     }
 
     #[test]

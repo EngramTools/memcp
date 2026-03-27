@@ -175,11 +175,7 @@ pub fn default_secret_rules() -> Vec<RedactionRule> {
 pub fn default_pii_rules() -> Vec<RedactionRule> {
     vec![
         // US Social Security Number: XXX-XX-XXXX
-        RedactionRule::pii(
-            "ssn",
-            r"\b(\d{3}-\d{2}-\d{4})\b",
-            MaskStyle::Full,
-        ),
+        RedactionRule::pii("ssn", r"\b(\d{3}-\d{2}-\d{4})\b", MaskStyle::Full),
         // Credit card number: 4 groups of 4 digits separated by dashes or spaces
         RedactionRule::pii(
             "credit_card",

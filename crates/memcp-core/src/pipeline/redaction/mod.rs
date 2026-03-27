@@ -98,22 +98,24 @@ impl RedactionEngine {
             });
         }
 
-        let screening_patterns: Vec<&str> =
-            all_rules.iter().map(|r| r.screening_pattern.as_str()).collect();
+        let screening_patterns: Vec<&str> = all_rules
+            .iter()
+            .map(|r| r.screening_pattern.as_str())
+            .collect();
 
         let screening_set = RegexSet::new(&screening_patterns).map_err(|e| {
             MemcpError::Config(format!("Failed to compile redaction screening set: {}", e))
         })?;
 
-        let allowlist_values: HashSet<String> =
-            config.allowlist.values.iter().cloned().collect();
+        let allowlist_values: HashSet<String> = config.allowlist.values.iter().cloned().collect();
 
         let allowlist_patterns = if config.allowlist.patterns.is_empty() {
             None
         } else {
-            Some(RegexSet::new(&config.allowlist.patterns).map_err(|e| {
-                MemcpError::Config(format!("Invalid allowlist pattern: {}", e))
-            })?)
+            Some(
+                RegexSet::new(&config.allowlist.patterns)
+                    .map_err(|e| MemcpError::Config(format!("Invalid allowlist pattern: {}", e)))?,
+            )
         };
 
         Ok(RedactionEngine {

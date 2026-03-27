@@ -368,34 +368,33 @@ pub async fn cmd_store(
     }
 
     // Redact secrets/PII unless --no-redact is set
-    let content = if !no_redact
-        && (config.redaction.secrets_enabled || config.redaction.pii_enabled)
-    {
-        match crate::pipeline::redaction::RedactionEngine::from_config(&config.redaction) {
-            Ok(engine) => match engine.redact(&content) {
-                Ok(result) => {
-                    if result.was_redacted {
-                        eprintln!(
-                            "Warning: {} items redacted (categories: {})",
-                            result.redaction_count,
-                            result.categories.join(", ")
-                        );
+    let content =
+        if !no_redact && (config.redaction.secrets_enabled || config.redaction.pii_enabled) {
+            match crate::pipeline::redaction::RedactionEngine::from_config(&config.redaction) {
+                Ok(engine) => match engine.redact(&content) {
+                    Ok(result) => {
+                        if result.was_redacted {
+                            eprintln!(
+                                "Warning: {} items redacted (categories: {})",
+                                result.redaction_count,
+                                result.categories.join(", ")
+                            );
+                        }
+                        result.content
                     }
-                    result.content
-                }
+                    Err(e) => {
+                        eprintln!("Error: redaction failed — {}", e);
+                        std::process::exit(1);
+                    }
+                },
                 Err(e) => {
-                    eprintln!("Error: redaction failed — {}", e);
+                    eprintln!("Error: failed to initialize redaction engine — {}", e);
                     std::process::exit(1);
                 }
-            },
-            Err(e) => {
-                eprintln!("Error: failed to initialize redaction engine — {}", e);
-                std::process::exit(1);
             }
-        }
-    } else {
-        content
-    };
+        } else {
+            content
+        };
 
     // Resource cap: max_memories — hard reject at hard_cap_percent
     if let Some(max) = config.resource_caps.max_memories {
@@ -985,8 +984,16 @@ pub async fn cmd_search(
             .iter()
             .map(|h| {
                 let display_content = match depth {
-                    0 => h.memory.abstract_text.as_deref().unwrap_or(&h.memory.content),
-                    1 => h.memory.overview_text.as_deref().unwrap_or(&h.memory.content),
+                    0 => h
+                        .memory
+                        .abstract_text
+                        .as_deref()
+                        .unwrap_or(&h.memory.content),
+                    1 => h
+                        .memory
+                        .overview_text
+                        .as_deref()
+                        .unwrap_or(&h.memory.content),
                     _ => &h.memory.content,
                 };
                 let abstract_available = h.memory.abstract_text.is_some();
@@ -1021,8 +1028,16 @@ pub async fn cmd_search(
         // When --fields is specified, only the requested fields are included in the output.
         for h in &scored_hits {
             let compact_content = match depth {
-                0 => h.memory.abstract_text.as_deref().unwrap_or(&h.memory.content),
-                1 => h.memory.overview_text.as_deref().unwrap_or(&h.memory.content),
+                0 => h
+                    .memory
+                    .abstract_text
+                    .as_deref()
+                    .unwrap_or(&h.memory.content),
+                1 => h
+                    .memory
+                    .overview_text
+                    .as_deref()
+                    .unwrap_or(&h.memory.content),
                 _ => &h.memory.content,
             };
             if field_list.is_some() {
@@ -1074,8 +1089,16 @@ pub async fn cmd_search(
             .iter()
             .map(|h| {
                 let display_content = match depth {
-                    0 => h.memory.abstract_text.as_deref().unwrap_or(&h.memory.content),
-                    1 => h.memory.overview_text.as_deref().unwrap_or(&h.memory.content),
+                    0 => h
+                        .memory
+                        .abstract_text
+                        .as_deref()
+                        .unwrap_or(&h.memory.content),
+                    1 => h
+                        .memory
+                        .overview_text
+                        .as_deref()
+                        .unwrap_or(&h.memory.content),
                     _ => &h.memory.content,
                 };
                 let abstract_available = h.memory.abstract_text.is_some();
