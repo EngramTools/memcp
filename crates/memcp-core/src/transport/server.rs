@@ -44,7 +44,10 @@ impl UuidRefMap {
         }
         let r = self.next_ref.fetch_add(1, Ordering::SeqCst);
         uuid_map.insert(uuid.to_string(), r);
-        self.ref_to_uuid.lock().expect("ref_to_uuid mutex poisoned").insert(r, uuid.to_string());
+        self.ref_to_uuid
+            .lock()
+            .expect("ref_to_uuid mutex poisoned")
+            .insert(r, uuid.to_string());
         r
     }
 
@@ -52,7 +55,11 @@ impl UuidRefMap {
     /// Returns None only if an integer ref is not found in the mapping.
     pub fn resolve(&self, input: &str) -> Option<String> {
         if let Ok(n) = input.parse::<u32>() {
-            self.ref_to_uuid.lock().expect("ref_to_uuid mutex poisoned").get(&n).cloned()
+            self.ref_to_uuid
+                .lock()
+                .expect("ref_to_uuid mutex poisoned")
+                .get(&n)
+                .cloned()
         } else {
             Some(input.to_string()) // UUID passthrough
         }
@@ -85,8 +92,8 @@ use crate::config::{
 use crate::content_filter::{ContentFilter, FilterVerdict};
 use crate::embedding::{EmbeddingJob, EmbeddingProvider};
 use crate::errors::MemcpError;
-use crate::pipeline::redaction::RedactionEngine;
 use crate::extraction::ExtractionJob;
+use crate::pipeline::redaction::RedactionEngine;
 use crate::search::salience::{dedup_parent_chunks, SalienceInput};
 use crate::search::{SalienceScorer, ScoredHit};
 use crate::store::{
@@ -490,6 +497,44 @@ pub struct DiscoverMemoriesParams {
     pub project: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MemoryLinkParams {
+    /// Name of the subject entity (e.g., "Alice", "Project X")
+    pub subject_entity_name: String,
+    /// Name of the object entity (e.g., "Acme Corp", "Rust")
+    pub object_entity_name: String,
+    /// Predicate label (e.g., "works_at", "knows", "uses", "depends_on")
+    pub predicate: String,
+    /// Relationship class: "temporal", "entity", "semantic", or "causal"
+    pub relationship_type: String,
+    /// Edge weight (default 1.0)
+    pub weight: Option<f64>,
+    /// Memory ID that is the source of this relationship
+    pub source_memory_id: Option<String>,
+    /// Entity type for the subject (e.g. "person", "project", "concept"). Defaults to "concept".
+    pub subject_entity_type: Option<String>,
+    /// Entity type for the object (e.g. "person", "project", "concept"). Defaults to "concept".
+    pub object_entity_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MemoryInvalidateFactParams {
+    /// Name of the entity whose fact or relationship to invalidate
+    pub entity_name: String,
+    /// Attribute name — if provided, invalidates all current facts with this attribute
+    pub attribute: Option<String>,
+    /// Relationship ID — if provided, invalidates this specific relationship
+    pub relationship_id: Option<String>,
+    /// ID of the record that supersedes the invalidated one (informational)
+    pub superseded_by: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MemoryDetectContradictionsParams {
+    /// Name of the entity to check for contradictions (e.g. "Alice", "Project X")
+    pub entity_name: String,
+}
+
 // Helper: convert MemcpError to CallToolResult with isError: true
 fn store_error_to_result(err: MemcpError) -> CallToolResult {
     match err {
@@ -773,8 +818,11 @@ Callable from code_execution_20260120 sandboxes."
 
                 // Enqueue background embedding job
                 if let Some(ref pipeline) = self.pipeline {
-                    let text =
-                        crate::embedding::build_embedding_text(&memory.content, memory.abstract_text.as_deref(), &memory.tags);
+                    let text = crate::embedding::build_embedding_text(
+                        &memory.content,
+                        memory.abstract_text.as_deref(),
+                        &memory.tags,
+                    );
                     pipeline.enqueue(EmbeddingJob {
                         memory_id: memory.id.clone(),
                         text,
@@ -848,7 +896,10 @@ Callable from code_execution_20260120 sandboxes."
                                 // Auto-GC trigger (fire-and-forget with cooldown)
                                 if self.resource_limits.auto_gc {
                                     let should_gc = {
-                                        let mut last = self.last_auto_gc.lock().expect("last_auto_gc mutex poisoned");
+                                        let mut last = self
+                                            .last_auto_gc
+                                            .lock()
+                                            .expect("last_auto_gc mutex poisoned");
                                         let cooldown = Duration::from_secs(
                                             self.resource_limits.auto_gc_cooldown_mins * 60,
                                         );
@@ -1031,8 +1082,11 @@ Callable from code_execution_20260120 sandboxes."
                     content_changed || (tags_changed && self.reembed_on_tag_change);
                 if should_reembed {
                     if let Some(ref pipeline) = self.pipeline {
-                        let text =
-                            crate::embedding::build_embedding_text(&memory.content, memory.abstract_text.as_deref(), &memory.tags);
+                        let text = crate::embedding::build_embedding_text(
+                            &memory.content,
+                            memory.abstract_text.as_deref(),
+                            &memory.tags,
+                        );
                         pipeline.enqueue(EmbeddingJob {
                             memory_id: memory.id.clone(),
                             text,
@@ -1915,8 +1969,16 @@ Callable from code_execution_20260120 sandboxes."
             .iter()
             .map(|hit| {
                 let display_content = match depth {
-                    0 => hit.memory.abstract_text.as_deref().unwrap_or(&hit.memory.content),
-                    1 => hit.memory.overview_text.as_deref().unwrap_or(&hit.memory.content),
+                    0 => hit
+                        .memory
+                        .abstract_text
+                        .as_deref()
+                        .unwrap_or(&hit.memory.content),
+                    1 => hit
+                        .memory
+                        .overview_text
+                        .as_deref()
+                        .unwrap_or(&hit.memory.content),
                     _ => &hit.memory.content,
                 };
                 let abstract_available = hit.memory.abstract_text.is_some();
@@ -2170,7 +2232,10 @@ Callable from code_execution_20260120 sandboxes."
             };
 
             // SAFETY: has_query is true only when params.query is Some(non-empty)
-            let query = params.query.as_ref().expect("query is Some when has_query is true");
+            let query = params
+                .query
+                .as_ref()
+                .expect("query is Some when has_query is true");
             let query_embedding = match embedding_provider.embed(query).await {
                 Ok(emb) => emb,
                 Err(e) => {
@@ -2490,6 +2555,301 @@ Returns results with similarity scores and optional LLM-generated connection exp
             "similarity_range": [min_sim, max_sim],
             "count": discoveries.len(),
         })))
+    }
+
+    #[tool(
+        description = "Create a typed relationship between two entities in the knowledge graph. \
+Use this to explicitly link concepts, people, projects, or any entities that are related. \
+Both entities are created if they do not yet exist. \
+Returns {\"relationship_id\": \"...\", \"subject\": \"...\", \"object\": \"...\", \"predicate\": \"...\"}."
+    )]
+    async fn memory_link(
+        &self,
+        Parameters(params): Parameters<MemoryLinkParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tracing::info!(
+            tool = "memory_link",
+            subject = %params.subject_entity_name,
+            object = %params.object_entity_name,
+            predicate = %params.predicate,
+            "Tool called"
+        );
+
+        if params.subject_entity_name.trim().is_empty() {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": "Field 'subject_entity_name' is required and cannot be empty",
+                "field": "subject_entity_name"
+            })));
+        }
+        if params.object_entity_name.trim().is_empty() {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": "Field 'object_entity_name' is required and cannot be empty",
+                "field": "object_entity_name"
+            })));
+        }
+        if params.predicate.trim().is_empty() {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": "Field 'predicate' is required and cannot be empty",
+                "field": "predicate"
+            })));
+        }
+
+        let valid_rel_types = ["temporal", "entity", "semantic", "causal"];
+        if !valid_rel_types.contains(&params.relationship_type.as_str()) {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": format!(
+                    "Field 'relationship_type' must be one of: {}",
+                    valid_rel_types.join(", ")
+                ),
+                "field": "relationship_type"
+            })));
+        }
+
+        let pg_store = match &self.pg_store {
+            Some(s) => s,
+            None => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": "memory_link requires PostgreSQL backend"
+                })));
+            }
+        };
+
+        let subject_type = params
+            .subject_entity_type
+            .as_deref()
+            .unwrap_or("concept");
+        let object_type = params
+            .object_entity_type
+            .as_deref()
+            .unwrap_or("concept");
+
+        let subject = match pg_store
+            .upsert_entity(&params.subject_entity_name, subject_type, &[])
+            .await
+        {
+            Ok(e) => e,
+            Err(e) => return Ok(store_error_to_result(e)),
+        };
+
+        let object = match pg_store
+            .upsert_entity(&params.object_entity_name, object_type, &[])
+            .await
+        {
+            Ok(e) => e,
+            Err(e) => return Ok(store_error_to_result(e)),
+        };
+
+        let weight = params.weight.unwrap_or(1.0);
+
+        let relationship = match pg_store
+            .create_relationship(
+                subject.id,
+                object.id,
+                &params.predicate,
+                &params.relationship_type,
+                weight,
+                params.source_memory_id.as_deref(),
+                1.0,
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(store_error_to_result(e)),
+        };
+
+        Ok(CallToolResult::structured(json!({
+            "relationship_id": relationship.id.to_string(),
+            "subject": params.subject_entity_name,
+            "object": params.object_entity_name,
+            "predicate": relationship.predicate,
+            "relationship_type": relationship.relationship_type,
+            "weight": relationship.weight,
+        })))
+    }
+
+    #[tool(
+        description = "Invalidate a fact or relationship in the knowledge graph. \
+Use when information has changed or was incorrect. \
+The old record is preserved with an invalidation timestamp for audit. \
+Provide 'attribute' to invalidate all current facts with that attribute name, \
+or 'relationship_id' to invalidate a specific relationship. \
+Returns {\"invalidated\": [{\"type\": \"fact\"|\"relationship\", \"id\": \"...\"}]}."
+    )]
+    async fn memory_invalidate_fact(
+        &self,
+        Parameters(params): Parameters<MemoryInvalidateFactParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tracing::info!(
+            tool = "memory_invalidate_fact",
+            entity = %params.entity_name,
+            attribute = ?params.attribute,
+            relationship_id = ?params.relationship_id,
+            "Tool called"
+        );
+
+        if params.entity_name.trim().is_empty() {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": "Field 'entity_name' is required and cannot be empty",
+                "field": "entity_name"
+            })));
+        }
+
+        if params.attribute.is_none() && params.relationship_id.is_none() {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": "At least one of 'attribute' or 'relationship_id' must be provided"
+            })));
+        }
+
+        let pg_store = match &self.pg_store {
+            Some(s) => s,
+            None => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": "memory_invalidate_fact requires PostgreSQL backend"
+                })));
+            }
+        };
+
+        let mut invalidated: Vec<serde_json::Value> = Vec::new();
+
+        if let Some(ref attribute) = params.attribute {
+            let entity = match pg_store.find_entity_by_name(&params.entity_name).await {
+                Ok(Some(e)) => e,
+                Ok(None) => {
+                    return Ok(CallToolResult::structured_error(json!({
+                        "isError": true,
+                        "error": format!("Entity not found: {}", params.entity_name)
+                    })));
+                }
+                Err(e) => return Ok(store_error_to_result(e)),
+            };
+
+            let facts = match pg_store.get_entity_facts(entity.id, true).await {
+                Ok(f) => f,
+                Err(e) => return Ok(store_error_to_result(e)),
+            };
+
+            for fact in facts.iter().filter(|f| &f.attribute == attribute) {
+                match pg_store.invalidate_fact(fact.id).await {
+                    Ok(()) => {
+                        invalidated.push(json!({
+                            "type": "fact",
+                            "id": fact.id.to_string(),
+                            "attribute": fact.attribute,
+                            "entity": params.entity_name,
+                        }));
+                    }
+                    Err(e) => return Ok(store_error_to_result(e)),
+                }
+            }
+        }
+
+        if let Some(ref rel_id_str) = params.relationship_id {
+            let rel_uuid = match rel_id_str.parse::<uuid::Uuid>() {
+                Ok(u) => u,
+                Err(_) => {
+                    return Ok(CallToolResult::structured_error(json!({
+                        "isError": true,
+                        "error": format!(
+                            "Invalid relationship_id: '{}' is not a valid UUID",
+                            rel_id_str
+                        ),
+                        "field": "relationship_id"
+                    })));
+                }
+            };
+
+            let superseded_by_uuid = match params
+                .superseded_by
+                .as_deref()
+                .map(|s| s.parse::<uuid::Uuid>())
+                .transpose()
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    return Ok(CallToolResult::structured_error(json!({
+                        "isError": true,
+                        "error": format!("Invalid superseded_by UUID: {}", e),
+                        "field": "superseded_by"
+                    })));
+                }
+            };
+
+            match pg_store
+                .invalidate_relationship(rel_uuid, superseded_by_uuid)
+                .await
+            {
+                Ok(()) => {
+                    invalidated.push(json!({
+                        "type": "relationship",
+                        "id": rel_id_str,
+                    }));
+                }
+                Err(e) => return Ok(store_error_to_result(e)),
+            }
+        }
+
+        Ok(CallToolResult::structured(json!({
+            "invalidated": invalidated,
+            "count": invalidated.len(),
+        })))
+    }
+
+    #[tool(description = "Check for contradictory facts or relationships on an entity. \
+Returns conflicting facts and relationships that need resolution.")]
+    async fn memory_detect_contradictions(
+        &self,
+        Parameters(params): Parameters<MemoryDetectContradictionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tracing::info!(
+            tool = "memory_detect_contradictions",
+            entity = %params.entity_name,
+            "Tool called"
+        );
+
+        if params.entity_name.trim().is_empty() {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": "Field 'entity_name' is required and cannot be empty",
+                "field": "entity_name"
+            })));
+        }
+
+        let pg_store = match &self.pg_store {
+            Some(s) => s,
+            None => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": "memory_detect_contradictions requires PostgreSQL backend"
+                })));
+            }
+        };
+
+        let entity = match pg_store.find_entity_by_name(&params.entity_name).await {
+            Ok(Some(e)) => e,
+            Ok(None) => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": format!("Entity not found: {}", params.entity_name)
+                })));
+            }
+            Err(e) => return Ok(store_error_to_result(e)),
+        };
+
+        match pg_store
+            .detect_all_contradictions(&entity.id, &entity.name)
+            .await
+        {
+            Ok(report) => Ok(CallToolResult::structured(json!(report))),
+            Err(e) => Ok(store_error_to_result(e)),
+        }
     }
 
     #[tool(description = "Health check.")]
