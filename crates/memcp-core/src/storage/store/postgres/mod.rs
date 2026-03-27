@@ -12,6 +12,7 @@
 
 mod embedding;
 mod extraction;
+mod graph;
 mod queries;
 mod salience;
 
