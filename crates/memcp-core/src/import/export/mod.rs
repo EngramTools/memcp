@@ -67,6 +67,9 @@ pub struct ExportOpts {
     pub include_embeddings: bool,
     /// Include FSRS/salience state in output.
     pub include_state: bool,
+    /// Include knowledge graph entities, relationships, and facts in JSONL output.
+    /// Only affects JSONL format; ignored for CSV and Markdown.
+    pub include_graph: bool,
 }
 
 impl Default for ExportOpts {
@@ -79,6 +82,7 @@ impl Default for ExportOpts {
             since: None,
             include_embeddings: false,
             include_state: false,
+            include_graph: false,
         }
     }
 }
@@ -115,6 +119,48 @@ pub struct ExportableMemory {
     pub embedding_model: Option<String>,
 }
 
+/// A knowledge-graph entity record for export.
+#[derive(Debug, Clone)]
+pub struct ExportableEntity {
+    pub name: String,
+    pub entity_type: String,
+    pub aliases: Value,
+    pub metadata: Value,
+}
+
+/// A knowledge-graph relationship record for export.
+/// Subject and object are referenced by (name, type) rather than UUID so the
+/// export is portable across deployments.
+#[derive(Debug, Clone)]
+pub struct ExportableRelationship {
+    pub subject_name: String,
+    pub subject_type: String,
+    pub object_name: String,
+    pub object_type: String,
+    pub predicate: String,
+    pub relationship_type: String,
+    pub weight: f64,
+    pub confidence: f64,
+}
+
+/// A knowledge-graph fact record for export.
+#[derive(Debug, Clone)]
+pub struct ExportableFact {
+    pub entity_name: String,
+    pub entity_type: String,
+    pub attribute: String,
+    pub value: Value,
+    pub confidence: f64,
+}
+
+/// Bundled graph records produced by `ExportEngine::fetch_graph`.
+#[derive(Debug, Default)]
+pub struct ExportableGraph {
+    pub entities: Vec<ExportableEntity>,
+    pub relationships: Vec<ExportableRelationship>,
+    pub facts: Vec<ExportableFact>,
+}
+
 /// Export engine — queries memories from Postgres and dispatches to formatters.
 pub struct ExportEngine {
     store: Arc<PostgresMemoryStore>,
@@ -129,17 +175,22 @@ impl ExportEngine {
     /// Run the export pipeline:
     /// 1. Query memories from DB with optional filters.
     /// 2. Optionally join salience state and embedding vectors.
-    /// 3. Open output writer (file or stdout).
-    /// 4. Dispatch to format-specific formatter.
+    /// 3. Optionally fetch graph entities, relationships, and facts.
+    /// 4. Open output writer (file or stdout).
+    /// 5. Dispatch to format-specific formatter.
     ///
     /// Returns the number of memories exported.
     pub async fn run(&self, opts: &ExportOpts) -> Result<usize> {
         let pool = self.store.pool();
 
-        // Build the query dynamically based on filters.
-        // Base query: all non-deleted memories with optional salience state.
         let memories = self.fetch_memories(pool, opts).await?;
         let count = memories.len();
+
+        let graph = if opts.include_graph && opts.format == ExportFormat::Jsonl {
+            self.fetch_graph(pool).await?
+        } else {
+            ExportableGraph::default()
+        };
 
         info!(count = count, format = ?opts.format, "Exporting memories");
 
@@ -149,7 +200,7 @@ impl ExportEngine {
                 .map_err(|e| anyhow::anyhow!("Failed to create output file {:?}: {}", path, e))?;
             let mut writer = BufWriter::new(file);
             match opts.format {
-                ExportFormat::Jsonl => jsonl::write_jsonl(&mut writer, &memories, opts)?,
+                ExportFormat::Jsonl => jsonl::write_jsonl(&mut writer, &memories, &graph, opts)?,
                 ExportFormat::Csv => csv::write_csv(&mut writer, &memories, opts)?,
                 ExportFormat::Markdown => markdown::write_markdown(&mut writer, &memories, opts)?,
             }
@@ -158,7 +209,7 @@ impl ExportEngine {
             let stdout = io::stdout();
             let mut writer = BufWriter::new(stdout.lock());
             match opts.format {
-                ExportFormat::Jsonl => jsonl::write_jsonl(&mut writer, &memories, opts)?,
+                ExportFormat::Jsonl => jsonl::write_jsonl(&mut writer, &memories, &graph, opts)?,
                 ExportFormat::Csv => csv::write_csv(&mut writer, &memories, opts)?,
                 ExportFormat::Markdown => markdown::write_markdown(&mut writer, &memories, opts)?,
             }
@@ -181,10 +232,16 @@ impl ExportEngine {
         let memories = self.fetch_memories(pool, opts).await?;
         let count = memories.len();
 
+        let graph = if opts.include_graph && opts.format == ExportFormat::Jsonl {
+            self.fetch_graph(pool).await?
+        } else {
+            ExportableGraph::default()
+        };
+
         info!(count = count, format = ?opts.format, "Exporting memories to writer");
 
         match opts.format {
-            ExportFormat::Jsonl => jsonl::write_jsonl(writer, &memories, opts)?,
+            ExportFormat::Jsonl => jsonl::write_jsonl(writer, &memories, &graph, opts)?,
             ExportFormat::Csv => csv::write_csv(writer, &memories, opts)?,
             ExportFormat::Markdown => markdown::write_markdown(writer, &memories, opts)?,
         }
@@ -213,17 +270,19 @@ impl ExportEngine {
         if opts.since.is_some() {
             conditions.push(format!("m.created_at >= ${}", param_idx));
             params_since = opts.since;
-            let _ = param_idx; // consumed above
+            param_idx += 1;
         }
 
         // Tags filter: each tag must appear in the JSONB tags array.
-        let mut tag_conditions: Vec<String> = Vec::new();
+        // Each tag gets its own $N parameter to avoid SQL injection.
+        let mut tag_params: Vec<serde_json::Value> = Vec::new();
         if let Some(ref tags) = opts.tags {
             for tag in tags {
-                tag_conditions.push(format!("m.tags @> '{}':jsonb", serde_json::json!([tag])));
+                conditions.push(format!("m.tags @> ${}::jsonb", param_idx));
+                tag_params.push(serde_json::json!([tag]));
+                param_idx += 1;
             }
         }
-        conditions.extend(tag_conditions);
 
         let where_clause = conditions.join(" AND ");
 
@@ -264,14 +323,97 @@ impl ExportEngine {
 
         // Execute query with dynamic parameters.
         let memories = if opts.include_embeddings {
-            self.execute_query_with_embeddings(pool, &sql, params_project, params_since)
+            self.execute_query_with_embeddings(pool, &sql, params_project, params_since, tag_params)
                 .await?
         } else {
-            self.execute_query_no_embeddings(pool, &sql, params_project, params_since)
+            self.execute_query_no_embeddings(pool, &sql, params_project, params_since, tag_params)
                 .await?
         };
 
         Ok(memories)
+    }
+
+    /// Fetch all active graph records (entities, relationships, facts) for export.
+    ///
+    /// Relationships and facts reference entities by (name, entity_type) rather than
+    /// UUID so the output is portable. Rows are joined to the entities table to resolve
+    /// names for subject/object/entity columns.
+    async fn fetch_graph(&self, pool: &sqlx::PgPool) -> Result<ExportableGraph> {
+        use sqlx::Row;
+
+        // Entities — all rows (no soft-delete on entities).
+        let entity_rows = sqlx::query(
+            "SELECT name, entity_type, aliases, metadata FROM entities ORDER BY name",
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let mut entities = Vec::with_capacity(entity_rows.len());
+        for row in entity_rows {
+            entities.push(ExportableEntity {
+                name: row.try_get("name")?,
+                entity_type: row.try_get("entity_type")?,
+                aliases: row.try_get("aliases")?,
+                metadata: row.try_get("metadata")?,
+            });
+        }
+
+        // Active relationships — join subject/object entities to resolve names.
+        let rel_rows = sqlx::query(
+            "SELECT s.name AS subject_name, s.entity_type AS subject_type, \
+                    o.name AS object_name, o.entity_type AS object_type, \
+                    r.predicate, r.relationship_type, r.weight, r.confidence \
+             FROM entity_relationships r \
+             JOIN entities s ON r.subject_id = s.id \
+             JOIN entities o ON r.object_id = o.id \
+             WHERE r.invalid_at IS NULL \
+             ORDER BY r.created_at",
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let mut relationships = Vec::with_capacity(rel_rows.len());
+        for row in rel_rows {
+            relationships.push(ExportableRelationship {
+                subject_name: row.try_get("subject_name")?,
+                subject_type: row.try_get("subject_type")?,
+                object_name: row.try_get("object_name")?,
+                object_type: row.try_get("object_type")?,
+                predicate: row.try_get("predicate")?,
+                relationship_type: row.try_get("relationship_type")?,
+                weight: row.try_get("weight")?,
+                confidence: row.try_get("confidence")?,
+            });
+        }
+
+        // Active facts — join to entities to resolve name.
+        let fact_rows = sqlx::query(
+            "SELECT e.name AS entity_name, e.entity_type, \
+                    f.attribute, f.value, f.confidence \
+             FROM entity_facts f \
+             JOIN entities e ON f.entity_id = e.id \
+             WHERE f.invalid_at IS NULL \
+             ORDER BY f.created_at",
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let mut facts = Vec::with_capacity(fact_rows.len());
+        for row in fact_rows {
+            facts.push(ExportableFact {
+                entity_name: row.try_get("entity_name")?,
+                entity_type: row.try_get("entity_type")?,
+                attribute: row.try_get("attribute")?,
+                value: row.try_get("value")?,
+                confidence: row.try_get("confidence")?,
+            });
+        }
+
+        Ok(ExportableGraph {
+            entities,
+            relationships,
+            facts,
+        })
     }
 
     /// Execute query without embedding join.
@@ -281,19 +423,22 @@ impl ExportEngine {
         sql: &str,
         project: Option<String>,
         since: Option<DateTime<Utc>>,
+        tag_params: Vec<serde_json::Value>,
     ) -> Result<Vec<ExportableMemory>> {
-        // We build a query dynamically; use raw sqlx::query to bind params.
-        // Build with sqlx::QueryBuilder for clean parameter binding.
         use sqlx::Row;
 
-        // For simplicity, construct a concrete query by building it with sqlx::query.
-        // We pipe through project and since as positional params.
-        let rows = match (project, since) {
-            (Some(p), Some(s)) => sqlx::query(sql).bind(p).bind(s).fetch_all(pool).await?,
-            (Some(p), None) => sqlx::query(sql).bind(p).fetch_all(pool).await?,
-            (None, Some(s)) => sqlx::query(sql).bind(s).fetch_all(pool).await?,
-            (None, None) => sqlx::query(sql).fetch_all(pool).await?,
-        };
+        // Bind positional params: project ($1), since ($2), then tag jsonb values.
+        let mut q = sqlx::query(sql);
+        if let Some(p) = project {
+            q = q.bind(p);
+        }
+        if let Some(s) = since {
+            q = q.bind(s);
+        }
+        for tag_val in tag_params {
+            q = q.bind(tag_val);
+        }
+        let rows = q.fetch_all(pool).await?;
 
         let mut memories = Vec::with_capacity(rows.len());
         for row in rows {
@@ -346,15 +491,21 @@ impl ExportEngine {
         sql: &str,
         project: Option<String>,
         since: Option<DateTime<Utc>>,
+        tag_params: Vec<serde_json::Value>,
     ) -> Result<Vec<ExportableMemory>> {
         use sqlx::Row;
 
-        let rows = match (project, since) {
-            (Some(p), Some(s)) => sqlx::query(sql).bind(p).bind(s).fetch_all(pool).await?,
-            (Some(p), None) => sqlx::query(sql).bind(p).fetch_all(pool).await?,
-            (None, Some(s)) => sqlx::query(sql).bind(s).fetch_all(pool).await?,
-            (None, None) => sqlx::query(sql).fetch_all(pool).await?,
-        };
+        let mut q = sqlx::query(sql);
+        if let Some(p) = project {
+            q = q.bind(p);
+        }
+        if let Some(s) = since {
+            q = q.bind(s);
+        }
+        for tag_val in tag_params {
+            q = q.bind(tag_val);
+        }
+        let rows = q.fetch_all(pool).await?;
 
         let mut memories = Vec::with_capacity(rows.len());
         for row in rows {
@@ -475,6 +626,7 @@ mod tests {
         assert_eq!(opts.format, ExportFormat::Jsonl);
         assert!(!opts.include_embeddings);
         assert!(!opts.include_state);
+        assert!(!opts.include_graph);
         assert!(opts.project.is_none());
         assert!(opts.output.is_none());
     }

@@ -365,6 +365,9 @@ enum Commands {
         /// Include FSRS/salience state in output
         #[arg(long)]
         include_state: bool,
+        /// Include knowledge-graph entities, relationships, and facts in JSONL output
+        #[arg(long)]
+        include_graph: bool,
     },
     /// Discover unexpected memory connections via cosine sweet-spot search.
     /// Finds memories related-but-different (0.3-0.7 similarity) — for creative
@@ -1856,6 +1859,7 @@ async fn main() -> Result<()> {
             since,
             include_embeddings,
             include_state,
+            include_graph,
         } => {
             // Parse --since into DateTime if provided.
             let since_dt = if let Some(ref s) = since {
@@ -1888,6 +1892,9 @@ async fn main() -> Result<()> {
                 if include_state {
                     params.push(("include_state", "true".to_string()));
                 }
+                if include_graph {
+                    params.push(("include_graph", "true".to_string()));
+                }
 
                 let response = cli::dispatch_remote_get(remote_url, "export", &params).await?;
 
@@ -1910,6 +1917,7 @@ async fn main() -> Result<()> {
                     since: since_dt,
                     include_embeddings,
                     include_state,
+                    include_graph,
                 };
 
                 let store = Arc::new(

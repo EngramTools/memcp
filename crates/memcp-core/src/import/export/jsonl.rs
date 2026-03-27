@@ -12,15 +12,17 @@ use std::io::Write;
 use anyhow::Result;
 use serde_json::json;
 
-use super::{ExportOpts, ExportableMemory};
+use super::{ExportOpts, ExportableGraph, ExportableMemory};
 
-/// Write memories as JSONL — one JSON object per line.
+/// Write memories and optional graph records as JSONL — one JSON object per line.
 ///
-/// Each line is a valid JSON object. Lines are separated by `\n`.
+/// Memory records have no `record_type` field (backward compatible).
+/// Graph records carry `"record_type": "entity" | "relationship" | "fact"`.
 /// The output is compatible with `memcp import jsonl` for full round-trip fidelity.
 pub fn write_jsonl(
     writer: &mut dyn Write,
     memories: &[ExportableMemory],
+    graph: &ExportableGraph,
     opts: &ExportOpts,
 ) -> Result<()> {
     for mem in memories {
@@ -52,7 +54,7 @@ pub fn write_jsonl(
         });
 
         if opts.include_state {
-            let map = obj.as_object_mut().unwrap();
+            let map = obj.as_object_mut().expect("json object");
             map.insert("stability".to_string(), json!(mem.stability));
             map.insert("difficulty".to_string(), json!(mem.difficulty));
             map.insert(
@@ -66,15 +68,53 @@ pub fn write_jsonl(
 
         if opts.include_embeddings {
             if let Some(ref embedding) = mem.embedding {
-                let map = obj.as_object_mut().unwrap();
+                let map = obj.as_object_mut().expect("json object");
                 map.insert("embedding".to_string(), json!(embedding));
                 map.insert("embedding_model".to_string(), json!(mem.embedding_model));
             }
         }
 
-        let line = serde_json::to_string(&obj)?;
-        writeln!(writer, "{}", line)?;
+        writeln!(writer, "{}", serde_json::to_string(&obj)?)?;
     }
+
+    // Write graph records after all memory records.
+    if opts.include_graph {
+        for entity in &graph.entities {
+            let line = serde_json::to_string(&json!({
+                "record_type": "entity",
+                "name": entity.name,
+                "entity_type": entity.entity_type,
+                "aliases": entity.aliases,
+                "metadata": entity.metadata,
+            }))?;
+            writeln!(writer, "{}", line)?;
+        }
+
+        for rel in &graph.relationships {
+            let line = serde_json::to_string(&json!({
+                "record_type": "relationship",
+                "subject": {"name": rel.subject_name, "type": rel.subject_type},
+                "object": {"name": rel.object_name, "type": rel.object_type},
+                "predicate": rel.predicate,
+                "relationship_type": rel.relationship_type,
+                "weight": rel.weight,
+                "confidence": rel.confidence,
+            }))?;
+            writeln!(writer, "{}", line)?;
+        }
+
+        for fact in &graph.facts {
+            let line = serde_json::to_string(&json!({
+                "record_type": "fact",
+                "entity": {"name": fact.entity_name, "type": fact.entity_type},
+                "attribute": fact.attribute,
+                "value": fact.value,
+                "confidence": fact.confidence,
+            }))?;
+            writeln!(writer, "{}", line)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -123,7 +163,7 @@ mod tests {
         let opts = ExportOpts::default();
 
         let mut buf = Vec::new();
-        write_jsonl(&mut buf, &memories, &opts).unwrap();
+        write_jsonl(&mut buf, &memories, &ExportableGraph::default(), &opts).unwrap();
 
         let output = String::from_utf8(buf).unwrap();
         let lines: Vec<&str> = output.trim_end().split('\n').collect();
@@ -163,7 +203,7 @@ mod tests {
         };
 
         let mut buf = Vec::new();
-        write_jsonl(&mut buf, &memories, &opts).unwrap();
+        write_jsonl(&mut buf, &memories, &ExportableGraph::default(), &opts).unwrap();
 
         let line = String::from_utf8(buf).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
@@ -193,7 +233,7 @@ mod tests {
         };
 
         let mut buf = Vec::new();
-        write_jsonl(&mut buf, &[mem], &opts).unwrap();
+        write_jsonl(&mut buf, &[mem], &ExportableGraph::default(), &opts).unwrap();
 
         let line = String::from_utf8(buf).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
@@ -209,7 +249,7 @@ mod tests {
     fn test_jsonl_empty_memories() {
         let opts = ExportOpts::default();
         let mut buf = Vec::new();
-        write_jsonl(&mut buf, &[], &opts).unwrap();
+        write_jsonl(&mut buf, &[], &ExportableGraph::default(), &opts).unwrap();
         assert_eq!(buf.len(), 0);
     }
 }

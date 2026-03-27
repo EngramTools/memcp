@@ -161,8 +161,7 @@ impl ImportSource for ChatGptReader {
                     continue;
                 }
 
-                if entry_name == "conversations.json"
-                    || entry_name.ends_with("/conversations.json")
+                if entry_name == "conversations.json" || entry_name.ends_with("/conversations.json")
                 {
                     drop(entry);
                     // Re-open by name to read contents.

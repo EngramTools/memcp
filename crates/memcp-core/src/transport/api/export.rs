@@ -7,6 +7,7 @@
 //!   since            — ISO 8601 timestamp filter
 //!   include_embeddings — "true" to include embedding vectors
 //!   include_state    — "true" to include FSRS state
+//!   include_graph    — "true" to include knowledge-graph records (JSONL only)
 //!
 //! Returns raw export data with appropriate Content-Type.
 
@@ -30,6 +31,7 @@ pub struct ExportQuery {
     pub since: Option<String>,
     pub include_embeddings: Option<String>,
     pub include_state: Option<String>,
+    pub include_graph: Option<String>,
 }
 
 /// GET /v1/export — export memories to the requested format.
@@ -80,6 +82,7 @@ pub async fn export_handler(
 
     let include_embeddings = params.include_embeddings.as_deref() == Some("true");
     let include_state = params.include_state.as_deref() == Some("true");
+    let include_graph = params.include_graph.as_deref() == Some("true");
 
     let content_type = match format {
         ExportFormat::Jsonl => "application/x-ndjson",
@@ -95,6 +98,7 @@ pub async fn export_handler(
         since: since_dt,
         include_embeddings,
         include_state,
+        include_graph,
     };
 
     let engine = ExportEngine::new(store);
