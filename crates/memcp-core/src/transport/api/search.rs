@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 use axum::{extract::State, http::StatusCode, Json};
 use chrono::Utc;
 use serde_json::json;
+use tokio::time::{timeout, Duration};
 
 use super::types::{error_json, SearchRequest};
 use crate::search::salience::{dedup_parent_chunks, SalienceInput, SalienceScorer, ScoredHit};
@@ -49,10 +50,7 @@ pub async fn search_handler(
 
     // Validate query size
     if let Err(e) = crate::validation::validate_query(&req.query, &state.config.input_limits) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(error_json(&e.to_string())),
-        );
+        return (StatusCode::BAD_REQUEST, Json(error_json(&e.to_string())));
     }
 
     // Validate min_salience range
@@ -282,8 +280,16 @@ pub async fn search_handler(
         .iter()
         .map(|h| {
             let display_content = match depth {
-                0 => h.memory.abstract_text.as_deref().unwrap_or(&h.memory.content),
-                1 => h.memory.overview_text.as_deref().unwrap_or(&h.memory.content),
+                0 => h
+                    .memory
+                    .abstract_text
+                    .as_deref()
+                    .unwrap_or(&h.memory.content),
+                1 => h
+                    .memory
+                    .overview_text
+                    .as_deref()
+                    .unwrap_or(&h.memory.content),
                 _ => &h.memory.content,
             };
             let abstract_available = h.memory.abstract_text.is_some();
@@ -310,12 +316,85 @@ pub async fn search_handler(
     // Record histogram of search results returned per request.
     metrics::histogram!("memcp_search_results_returned").record(total as f64);
 
-    let output = json!({
+    // Non-blocking contradiction surfacing: resolve query to an entity, collect the seed
+    // and its neighbors (same traversal as graph_expand_memory_ids), then scan for
+    // contradictions on up to 10 entity IDs. Failures are logged and silently skipped —
+    // contradictions are advisory and must not block search results.
+    // Hard budget: 100 ms. If it fires, we skip contradictions and return results normally.
+    let contradiction_reports: Vec<serde_json::Value> = {
+        let store_ref = &store;
+        let query_ref = &req.query;
+        let contradiction_fut = async move {
+            let mut reports: Vec<serde_json::Value> = Vec::new();
+            match store_ref.find_entity_by_name(query_ref).await {
+                Ok(Some(seed)) => {
+                    let neighbors = store_ref
+                        .get_entity_neighbors(seed.id, 2, 20)
+                        .await
+                        .unwrap_or_default();
+                    let mut entity_pairs: Vec<(uuid::Uuid, String)> =
+                        Vec::with_capacity(neighbors.len() + 1);
+                    entity_pairs.push((seed.id, seed.name.clone()));
+                    for (neighbor, _rel) in &neighbors {
+                        entity_pairs.push((neighbor.id, neighbor.name.clone()));
+                    }
+                    for (eid, ename) in entity_pairs.into_iter().take(10) {
+                        match store_ref.detect_all_contradictions(&eid, &ename).await {
+                            Ok(report) if report.has_contradictions => {
+                                match serde_json::to_value(&report) {
+                                    Ok(v) => reports.push(v),
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            error = %e,
+                                            entity_id = %eid,
+                                            "Failed to serialize contradiction report"
+                                        );
+                                    }
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    entity_id = %eid,
+                                    "detect_all_contradictions failed during search — skipping"
+                                );
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        query = %query_ref,
+                        "Entity lookup failed during search contradiction surfacing — skipping"
+                    );
+                }
+            }
+            reports
+        };
+        let contradiction_result = timeout(Duration::from_millis(100), contradiction_fut).await;
+
+        match contradiction_result {
+            Ok(reports) => reports,
+            Err(_) => {
+                tracing::debug!("Contradiction detection timed out (100ms budget)");
+                vec![]
+            }
+        }
+    };
+
+    let mut output = json!({
         "results": results,
         "next_cursor": next_cursor,
         "has_more": has_more,
         "total": total,
     });
+
+    if !contradiction_reports.is_empty() {
+        output["contradictions"] = json!(contradiction_reports);
+    }
 
     (StatusCode::OK, Json(output))
 }
