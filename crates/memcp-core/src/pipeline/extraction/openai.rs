@@ -6,7 +6,9 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::{build_extraction_prompt, ExtractionError, ExtractionProvider, ExtractionResult};
+use super::{
+    build_extraction_prompt, ExtractionError, ExtractionProvider, ExtractionResult, StructuredFact,
+};
 
 /// Request body for OpenAI Chat Completions API
 #[derive(Serialize)]
@@ -51,6 +53,8 @@ struct ExtractionOutput {
     entities: Vec<String>,
     #[serde(default)]
     facts: Vec<String>,
+    #[serde(default)]
+    structured_facts: Vec<StructuredFact>,
 }
 
 /// OpenAI-backed extraction provider.
@@ -172,6 +176,7 @@ impl ExtractionProvider for OpenAIExtractionProvider {
         Ok(ExtractionResult {
             entities: output.entities,
             facts: output.facts,
+            structured_facts: output.structured_facts,
         })
     }
 

@@ -41,6 +41,7 @@ impl ExtractionPipeline {
                                 &job.memory_id,
                                 &result.entities,
                                 &result.facts,
+                                &result.structured_facts,
                             )
                             .await
                         {
@@ -60,6 +61,7 @@ impl ExtractionPipeline {
                                 memory_id = %job.memory_id,
                                 entities = result.entities.len(),
                                 facts = result.facts.len(),
+                                structured_facts = result.structured_facts.len(),
                                 "Extraction complete"
                             );
                         }

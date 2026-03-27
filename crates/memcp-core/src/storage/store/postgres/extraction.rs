@@ -6,7 +6,10 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::{row_to_memory, CurationActionRow, CurationRunRow, PostgresMemoryStore, RelatedContext, SalienceRow};
+use super::{
+    row_to_memory, CurationActionRow, CurationRunRow, PostgresMemoryStore, RelatedContext,
+    SalienceRow,
+};
 use crate::errors::MemcpError;
 
 impl PostgresMemoryStore {
@@ -17,15 +20,24 @@ impl PostgresMemoryStore {
     /// Store extraction results (entities and facts) for a memory.
     ///
     /// Updates the extracted_entities and extracted_facts JSONB columns.
+    /// When `structured_facts` is non-empty, `extracted_facts` is written as an array
+    /// of structured-fact objects so the normalization worker can link facts to entities.
+    /// When `structured_facts` is empty, `extracted_facts` is written as the flat
+    /// `Vec<String>` for backward compatibility.
     /// Called by the extraction pipeline after successful entity/fact extraction.
     pub async fn update_extraction_results(
         &self,
         memory_id: &str,
         entities: &[String],
         facts: &[String],
+        structured_facts: &[crate::pipeline::extraction::StructuredFact],
     ) -> Result<(), MemcpError> {
         let entities_json = serde_json::json!(entities);
-        let facts_json = serde_json::json!(facts);
+        let facts_json = if structured_facts.is_empty() {
+            serde_json::json!(facts)
+        } else {
+            serde_json::json!(structured_facts)
+        };
 
         sqlx::query(
             "UPDATE memories SET extracted_entities = $2, extracted_facts = $3 WHERE id = $1",
@@ -1240,7 +1252,8 @@ impl PostgresMemoryStore {
                     MemcpError::Storage(format!("get_related_context tag fetch failed: {}", e))
                 })?;
 
-        let mut result: std::collections::HashMap<String, RelatedContext> = std::collections::HashMap::new();
+        let mut result: std::collections::HashMap<String, RelatedContext> =
+            std::collections::HashMap::new();
 
         for row in &rows {
             let memory_id: String = row.get("id");

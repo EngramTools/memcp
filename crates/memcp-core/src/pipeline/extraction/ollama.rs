@@ -8,7 +8,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::{build_extraction_prompt, ExtractionError, ExtractionProvider, ExtractionResult};
+use super::{
+    build_extraction_prompt, ExtractionError, ExtractionProvider, ExtractionResult, StructuredFact,
+};
 
 /// Request body for Ollama /api/chat with structured output
 #[derive(Serialize)]
@@ -49,6 +51,8 @@ struct ExtractionOutput {
     entities: Vec<String>,
     #[serde(default)]
     facts: Vec<String>,
+    #[serde(default)]
+    structured_facts: Vec<StructuredFact>,
 }
 
 /// Ollama-backed extraction provider.
@@ -95,6 +99,18 @@ fn extraction_schema() -> serde_json::Value {
             "facts": {
                 "type": "array",
                 "items": {"type": "string"}
+            },
+            "structured_facts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "entity":    {"type": "string"},
+                        "attribute": {"type": "string"},
+                        "value":     {"type": "string"}
+                    },
+                    "required": ["entity", "attribute", "value"]
+                }
             }
         },
         "required": ["entities", "facts"]
@@ -167,6 +183,7 @@ impl ExtractionProvider for OllamaExtractionProvider {
         Ok(ExtractionResult {
             entities: output.entities,
             facts: output.facts,
+            structured_facts: output.structured_facts,
         })
     }
 

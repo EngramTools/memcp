@@ -9,6 +9,7 @@ pub mod openai;
 pub mod pipeline;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::errors::MemcpError;
@@ -39,13 +40,27 @@ impl From<ExtractionError> for MemcpError {
     }
 }
 
+/// A fact linked to a specific entity, produced by structured extraction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuredFact {
+    /// The entity this fact describes (matches an entry in `ExtractionResult::entities`)
+    pub entity: String,
+    /// The aspect or attribute being described (e.g. "role", "location", "preference")
+    pub attribute: String,
+    /// The fact's value
+    pub value: String,
+}
+
 /// Result of extracting entities and facts from memory content.
 #[derive(Debug, Clone)]
 pub struct ExtractionResult {
     /// Named entities found: people, places, dates, tools, projects, concepts, preferences
     pub entities: Vec<String>,
-    /// Key facts: specific assertions, preferences, relationships, or instructions
+    /// Key facts: specific assertions, preferences, relationships, or instructions.
+    /// Kept for backward compatibility — prefer `structured_facts` when present.
     pub facts: Vec<String>,
+    /// Structured facts with entity linkage. Empty vec when LLM did not produce this format.
+    pub structured_facts: Vec<StructuredFact>,
 }
 
 /// A pending extraction job for a memory.
@@ -66,6 +81,9 @@ pub fn build_extraction_prompt(content: &str) -> String {
          Entities: people, places, dates, tools, projects, concepts, preferences.\n\
          Facts: specific assertions, preferences, relationships, or instructions stated.\n\
          Be comprehensive. Output only JSON matching the provided schema.\n\n\
+         For `structured_facts`, link each fact to the entity it describes. Example:\n\
+         {{\"entity\": \"Alice\", \"attribute\": \"role\", \"value\": \"CTO\"}}\n\
+         Valid attributes include: role, location, preference, version, status, relation, note.\n\n\
          Text:\n{}",
         content
     )
