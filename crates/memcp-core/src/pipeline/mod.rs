@@ -18,6 +18,7 @@ pub mod curation;
 pub mod enrichment;
 pub mod extraction;
 pub mod gc;
+pub mod normalization;
 pub mod promotion;
 pub mod redaction;
 pub mod summarization;
