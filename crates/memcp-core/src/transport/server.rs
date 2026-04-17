@@ -1920,8 +1920,9 @@ Callable from code_execution_20260120 sandboxes."
                 let norm_rrf = (hit.rrf_score - min_rrf) / rrf_range;
                 let norm_sal = (hit.salience_score - min_sal) / sal_range;
                 let trust = hit.memory.trust_level as f64;
-                // 50% RRF (retrieval relevance) + 50% trust-weighted salience (memory importance)
-                hit.composite_score = 0.5 * norm_rrf + 0.5 * (norm_sal * trust);
+                let ts = crate::config::tier_score_for(&hit.memory.knowledge_tier);
+                let w = &self.search_config.tier_weights;
+                hit.composite_score = w.w_rrf * norm_rrf + w.w_sal * (norm_sal * trust) + w.w_tier * ts;
             }
         }
 

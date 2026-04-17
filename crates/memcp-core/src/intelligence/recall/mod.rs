@@ -191,6 +191,7 @@ impl RecallEngine {
 
         // e. Execute tiered recall query with session dedup exclusion.
         //    recall_candidates now returns (memory_id, content, relevance, tags).
+        // D-10: query-based recall excludes raw tier by default
         let candidates = self
             .store
             .recall_candidates(
@@ -200,6 +201,7 @@ impl RecallEngine {
                 self.config.max_memories,
                 self.extraction_enabled,
                 project,
+                None, // tier_filter: None = exclude raw by default (D-10)
             )
             .await?;
 

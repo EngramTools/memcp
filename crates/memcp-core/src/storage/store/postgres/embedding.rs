@@ -303,7 +303,8 @@ impl PostgresMemoryStore {
         // Determine if any optional filters are present
         let has_filters = filter.created_after.is_some()
             || filter.created_before.is_some()
-            || filter.tags.is_some();
+            || filter.tags.is_some()
+            || filter.tier_filter.is_some();
 
         // Enable iterative scan when filters are present to prevent over-filtering.
         // Iterative scan requires pgvector 0.8.0+ — gracefully skip if SET fails.
@@ -349,6 +350,23 @@ impl PostgresMemoryStore {
             param_idx += 1;
         }
 
+        // Tier filter (D-10): None = exclude raw by default; Some(["all"]) = no filter;
+        // Some(["raw","explicit",...]) = exact list.
+        match &filter.tier_filter {
+            None => {
+                // Default: exclude raw tier from query-based search
+                conditions.push("m.knowledge_tier != 'raw'".to_string());
+            }
+            Some(tiers) if tiers.iter().any(|t| t == "all") => {
+                // "all" means no tier filter — return all tiers
+            }
+            Some(tiers) => {
+                conditions.push(format!("m.knowledge_tier = ANY(${})", param_idx));
+                param_idx += 1;
+                let _ = tiers; // used below when binding
+            }
+        }
+
         let where_clause = format!("WHERE {}", conditions.join(" AND "));
 
         // Main search query: JOIN memories with embeddings, compute cosine similarity,
@@ -365,6 +383,7 @@ impl PostgresMemoryStore {
                     m.event_time, m.event_time_precision, m.project, \
                     m.trust_level, m.session_id, m.agent_role, m.write_path, m.metadata, \
                     m.abstract_text, m.overview_text, m.abstraction_status, \
+                    m.knowledge_tier, m.source_ids, \
                     (1 - (me.embedding <=> $1)) AS similarity \
              FROM memories m \
              JOIN memory_embeddings me ON me.memory_id = m.id \
@@ -399,6 +418,12 @@ impl PostgresMemoryStore {
         if let Some(ref audience) = filter.audience {
             q = q.bind(audience);
         }
+        // Bind tier filter — only when it's an explicit list (not None/all)
+        if let Some(ref tiers) = filter.tier_filter {
+            if !tiers.iter().any(|t| t == "all") {
+                q = q.bind(tiers);
+            }
+        }
         q = q.bind(filter.limit).bind(filter.offset);
 
         let rows = q
@@ -419,6 +444,12 @@ impl PostgresMemoryStore {
         }
         if let Some(ref audience) = filter.audience {
             count_q = count_q.bind(audience);
+        }
+        // Bind tier filter — only when it's an explicit list (not None/all)
+        if let Some(ref tiers) = filter.tier_filter {
+            if !tiers.iter().any(|t| t == "all") {
+                count_q = count_q.bind(tiers);
+            }
         }
 
         let count_row = count_q
@@ -1069,6 +1100,7 @@ impl PostgresMemoryStore {
                     m.event_time, m.event_time_precision, m.project, \
                     m.trust_level, m.session_id, m.agent_role, m.write_path, m.metadata, \
                     m.abstract_text, m.overview_text, m.abstraction_status, \
+                    m.knowledge_tier, m.source_ids, \
                     (1.0 - (me.embedding <=> $1)) AS similarity \
              FROM memories m \
              JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = TRUE \
@@ -1089,6 +1121,7 @@ impl PostgresMemoryStore {
                     m.event_time, m.event_time_precision, m.project, \
                     m.trust_level, m.session_id, m.agent_role, m.write_path, m.metadata, \
                     m.abstract_text, m.overview_text, m.abstraction_status, \
+                    m.knowledge_tier, m.source_ids, \
                     (1.0 - (me.embedding <=> $1)) AS similarity \
              FROM memories m \
              JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = TRUE \

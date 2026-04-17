@@ -331,6 +331,7 @@ impl PostgresMemoryStore {
         max_memories: usize,
         extraction_enabled: bool,
         project: Option<&str>,
+        tier_filter: Option<&[String]>,
     ) -> Result<Vec<RecallCandidate>, MemcpError> {
         // Serialize embedding to pgvector literal format: '[0.1,0.2,...]'
         let emb_str = format!(
@@ -347,6 +348,17 @@ impl PostgresMemoryStore {
             " AND (m.project = $5 OR m.project IS NULL)"
         } else {
             ""
+        };
+
+        // Tier filter (D-10): None = exclude raw by default; Some(["all"]) = no filter;
+        // Some(["raw","explicit",...]) = exact list.
+        let tier_clause = match &tier_filter {
+            None => " AND m.knowledge_tier != 'raw'".to_string(),
+            Some(tiers) if tiers.iter().any(|t| t == "all") => String::new(),
+            Some(_tiers) => {
+                let next_param = if project.is_some() { 6 } else { 5 };
+                format!(" AND m.knowledge_tier = ANY(${})", next_param)
+            }
         };
 
         if extraction_enabled {
@@ -370,7 +382,7 @@ impl PostgresMemoryStore {
                       AND sr.memory_id IS NULL
                       AND m.extracted_facts IS NOT NULL
                       AND jsonb_array_length(m.extracted_facts) > 0
-                      AND (1.0 - (me.embedding <=> $1::vector)) >= $3{project_clause}
+                      AND (1.0 - (me.embedding <=> $1::vector)) >= $3{project_clause}{tier_clause}
                     ORDER BY m.id, (1.0 - (me.embedding <=> $1::vector)) DESC
                 ) sub
                 ORDER BY relevance DESC, stability DESC
@@ -384,6 +396,12 @@ impl PostgresMemoryStore {
                 .bind(limit);
             if let Some(ws) = project {
                 q = q.bind(ws);
+            }
+            if let Some(tiers) = &tier_filter {
+                if !tiers.iter().any(|t| t == "all") {
+                    let tier_vec: Vec<String> = tiers.iter().map(|s| s.to_string()).collect();
+                    q = q.bind(tier_vec);
+                }
             }
             let rows = q.fetch_all(&self.pool).await.map_err(|e| {
                 MemcpError::Storage(format!("recall_candidates (extraction) failed: {}", e))
@@ -429,7 +447,7 @@ impl PostgresMemoryStore {
                   AND m.embedding_status = 'complete'
                   AND sr.memory_id IS NULL
                   AND (m.type_hint IN ('fact', 'summary') OR m.source = 'assistant')
-                  AND (1.0 - (me.embedding <=> $1::vector)) >= $3{project_clause}
+                  AND (1.0 - (me.embedding <=> $1::vector)) >= $3{project_clause}{tier_clause}
                 ORDER BY relevance DESC, stability DESC
                 LIMIT $4
             "
@@ -441,6 +459,12 @@ impl PostgresMemoryStore {
                 .bind(limit);
             if let Some(ws) = project {
                 q = q.bind(ws);
+            }
+            if let Some(tiers) = &tier_filter {
+                if !tiers.iter().any(|t| t == "all") {
+                    let tier_vec: Vec<String> = tiers.iter().map(|s| s.to_string()).collect();
+                    q = q.bind(tier_vec);
+                }
             }
             let rows = q.fetch_all(&self.pool).await.map_err(|e| {
                 MemcpError::Storage(format!("recall_candidates (no-extraction) failed: {}", e))
@@ -481,6 +505,7 @@ impl PostgresMemoryStore {
         max_memories: usize,
         extraction_enabled: bool,
         project: Option<&str>,
+        tier_filter: Option<&[String]>,
     ) -> Result<Vec<RecallCandidate>, MemcpError> {
         if tier_embeddings.is_empty() {
             return Ok(vec![]);
@@ -496,6 +521,7 @@ impl PostgresMemoryStore {
                     max_memories,
                     extraction_enabled,
                     project,
+                    tier_filter,
                 )
                 .await;
         }
@@ -513,6 +539,7 @@ impl PostgresMemoryStore {
                     max_memories,
                     extraction_enabled,
                     project,
+                    tier_filter,
                 )
                 .await?;
 

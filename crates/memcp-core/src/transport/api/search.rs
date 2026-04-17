@@ -235,7 +235,9 @@ pub async fn search_handler(
             let norm_rrf = (hit.rrf_score - min_rrf) / rrf_range;
             let norm_sal = (hit.salience_score - min_sal) / sal_range;
             let trust = hit.memory.trust_level as f64;
-            hit.composite_score = 0.5 * norm_rrf + 0.5 * (norm_sal * trust);
+            let ts = crate::config::tier_score_for(&hit.memory.knowledge_tier);
+            let w = &state.config.search.tier_weights;
+            hit.composite_score = w.w_rrf * norm_rrf + w.w_sal * (norm_sal * trust) + w.w_tier * ts;
         }
     }
 

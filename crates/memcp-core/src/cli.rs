@@ -935,7 +935,8 @@ pub async fn cmd_search(
         for hit in &mut scored_hits {
             let norm_rrf = (hit.rrf_score - min_rrf) / rrf_range;
             let norm_sal = (hit.salience_score - min_sal) / sal_range;
-            hit.composite_score = 0.5 * norm_rrf + 0.5 * norm_sal;
+            let ts = crate::config::tier_score_for(&hit.memory.knowledge_tier);
+            hit.composite_score = 0.4 * norm_rrf + 0.4 * norm_sal + 0.2 * ts;
         }
     }
 
