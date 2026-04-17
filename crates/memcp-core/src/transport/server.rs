@@ -311,6 +311,10 @@ pub struct StoreMemoryParams {
     /// When true, bypasses secret/PII redaction. Default: false (redaction enabled).
     #[serde(default)]
     pub skip_redaction: Option<bool>,
+    /// Knowledge tier override. Default: inferred from write_path. Values: raw, imported, explicit, derived, pattern.
+    pub knowledge_tier: Option<String>,
+    /// Source memory IDs for provenance. Required when knowledge_tier = "derived".
+    pub source_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -444,6 +448,11 @@ pub struct RecallMemoryParams {
     /// Content detail level: 0=abstract (concise), 1=overview (structured), 2=full content (default).
     /// Falls back gracefully if tier unavailable — if abstract_text is NULL and depth=0, returns full content.
     pub depth: Option<u8>,
+    /// Tier filter. Default: excludes raw. "all" includes everything. Comma-separated list for specific tiers.
+    pub tier: Option<String>,
+    /// When true, attach source memories to recall results that have source_ids (single-hop provenance).
+    #[serde(default)]
+    pub show_sources: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -481,6 +490,11 @@ pub struct SearchMemoryParams {
     /// Falls back gracefully if tier unavailable — if abstract_text is NULL and depth=0, returns full content.
     /// Use depth=0 for scanning/planning (fewer tokens), depth=2 for deep work (full detail).
     pub depth: Option<u8>,
+    /// Tier filter. Default: excludes raw. "all" includes everything. Comma-separated list for specific tiers (e.g. "explicit,derived").
+    pub tier: Option<String>,
+    /// When true, attach source memories to results that have source_ids (single-hop provenance).
+    #[serde(default)]
+    pub show_sources: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -588,6 +602,119 @@ fn parse_datetime(s: &str, field: &str) -> Result<chrono::DateTime<chrono::Utc>,
 /// Supports one-level dot-notation (e.g., "metadata.source" extracts
 /// `{ "metadata": { "source": ... } }`). Deeper paths (more than one dot)
 /// are silently ignored. Non-object parents are silently skipped.
+/// Fetch source memories for a single hop (direct source_ids).
+/// Returns a vec of (id, Memory) pairs for each source that exists.
+pub async fn fetch_source_chain_single_hop(
+    store: &crate::store::postgres::PostgresMemoryStore,
+    memory: &Memory,
+) -> Vec<(String, Memory)> {
+    let source_ids: Vec<String> = memory
+        .source_ids
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| e.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    if source_ids.is_empty() {
+        return vec![];
+    }
+    match store.get_memories_by_ids(&source_ids).await {
+        Ok(map) => {
+            // Preserve order of source_ids
+            source_ids
+                .iter()
+                .filter_map(|id| map.get(id).map(|m| (id.clone(), m.clone())))
+                .collect()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to fetch source chain — skipping");
+            vec![]
+        }
+    }
+}
+
+/// Fetch deep source chain via BFS traversal (max 10 hops to prevent infinite loops).
+/// Returns all discovered source memories in traversal order.
+#[allow(dead_code)]
+pub async fn fetch_source_chain_deep(
+    store: &crate::store::postgres::PostgresMemoryStore,
+    memory: &Memory,
+) -> Vec<(String, Memory)> {
+    let mut visited = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+
+    // Seed with initial source_ids
+    let initial_ids: Vec<String> = memory
+        .source_ids
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|e| e.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    for id in initial_ids {
+        if visited.insert(id.clone()) {
+            queue.push_back(id);
+        }
+    }
+
+    let mut hops = 0;
+    const MAX_HOPS: usize = 10;
+
+    while !queue.is_empty() && hops < MAX_HOPS {
+        hops += 1;
+        let batch: Vec<String> = queue.drain(..).collect();
+        match store.get_memories_by_ids(&batch).await {
+            Ok(map) => {
+                for id in &batch {
+                    if let Some(mem) = map.get(id) {
+                        result.push((id.clone(), mem.clone()));
+                        // Enqueue this memory's source_ids for the next hop
+                        let next_ids: Vec<String> = mem
+                            .source_ids
+                            .as_ref()
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|e| e.as_str().map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        for nid in next_ids {
+                            if visited.insert(nid.clone()) {
+                                queue.push_back(nid);
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, hop = hops, "Deep source chain fetch failed at hop — stopping");
+                break;
+            }
+        }
+    }
+
+    result
+}
+
+/// Truncate source content for show_sources display.
+pub fn truncate_source_content(content: &str, max_chars: usize) -> String {
+    if content.chars().count() <= max_chars {
+        content.to_string()
+    } else {
+        let truncated: String = content.chars().take(max_chars).collect();
+        format!("{}...", truncated)
+    }
+}
+
 fn apply_field_projection(
     obj: serde_json::Value,
     fields: &Option<Vec<String>>,
@@ -794,8 +921,8 @@ Callable from code_execution_20260120 sandboxes."
             session_id: params.session_id,
             agent_role: params.agent_role,
             write_path: params.write_path,
-            knowledge_tier: None,
-            source_ids: None,
+            knowledge_tier: params.knowledge_tier,
+            source_ids: params.source_ids,
         };
 
         // Determine if sync store is requested
@@ -2012,12 +2139,39 @@ Callable from code_execution_20260120 sandboxes."
                         "reinforcement": (bd.reinforcement * 1000.0).round() / 1000.0,
                     });
                 }
+                // Include knowledge_tier in output
+                obj["knowledge_tier"] = json!(hit.memory.knowledge_tier);
                 // Inject integer ref alongside UUID id (always present, even when field projection is used)
                 self.inject_ref(&mut obj);
                 // Apply field projection (no-op when fields is None or empty).
                 apply_field_projection(obj, &params.fields)
             })
             .collect();
+
+        // 14.5. Attach source chain if show_sources is requested (D-08: opt-in).
+        let mut results = results;
+        if params.show_sources.unwrap_or(false) {
+            if let Some(ref pg) = self.pg_store {
+                for (i, hit) in scored_hits.iter().enumerate() {
+                    let sources = fetch_source_chain_single_hop(pg, &hit.memory).await;
+                    if !sources.is_empty() {
+                        let source_entries: Vec<serde_json::Value> = sources
+                            .iter()
+                            .map(|(id, mem)| {
+                                json!({
+                                    "id": id,
+                                    "content": truncate_source_content(&mem.content, 200),
+                                    "knowledge_tier": mem.knowledge_tier,
+                                })
+                            })
+                            .collect();
+                        if let Some(obj) = results.get_mut(i).and_then(|v| v.as_object_mut()) {
+                            obj.insert("sources".to_string(), json!(source_entries));
+                        }
+                    }
+                }
+            }
+        }
 
         // 15. Build final response JSON
         let mut response = json!({
@@ -2296,6 +2450,7 @@ Callable from code_execution_20260120 sandboxes."
         }
 
         let recall_depth = params.depth.unwrap_or(2);
+        let show_sources_recall = params.show_sources.unwrap_or(false);
         match result {
             Ok(r) => {
                 // Build memories array with ref injected alongside memory_id
@@ -2324,6 +2479,35 @@ Callable from code_execution_20260120 sandboxes."
                         obj
                     })
                     .collect();
+
+                // Attach source chain to recall results if show_sources is requested.
+                let mut memories = memories;
+                if show_sources_recall {
+                    let mem_ids: Vec<String> = r.memories.iter().map(|m| m.memory_id.clone()).collect();
+                    // Fetch full Memory objects to get source_ids
+                    if let Ok(full_memories) = pg_store.get_memories_by_ids(&mem_ids).await {
+                        for (i, recalled) in r.memories.iter().enumerate() {
+                            if let Some(full_mem) = full_memories.get(&recalled.memory_id) {
+                                let sources = fetch_source_chain_single_hop(&pg_store, full_mem).await;
+                                if !sources.is_empty() {
+                                    let source_entries: Vec<serde_json::Value> = sources
+                                        .iter()
+                                        .map(|(id, mem)| {
+                                            json!({
+                                                "id": id,
+                                                "content": truncate_source_content(&mem.content, 200),
+                                                "knowledge_tier": mem.knowledge_tier,
+                                            })
+                                        })
+                                        .collect();
+                                    if let Some(obj) = memories.get_mut(i).and_then(|v| v.as_object_mut()) {
+                                        obj.insert("sources".to_string(), json!(source_entries));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 let mut response = json!({
                     "session_id": r.session_id,

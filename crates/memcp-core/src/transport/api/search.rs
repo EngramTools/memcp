@@ -278,6 +278,8 @@ pub async fn search_handler(
 
     // Build results array — same shape as CLI --json output.
     let depth = req.depth;
+    let show_sources = req.show_sources;
+    let show_sources_deep = req.show_sources_deep;
     let results: Vec<serde_json::Value> = scored_hits
         .iter()
         .map(|h| {
@@ -308,10 +310,38 @@ pub async fn search_handler(
                 );
                 obj.insert("rrf_score".to_string(), json!(h.rrf_score));
                 obj.insert("match_source".to_string(), json!(h.match_source));
+                obj.insert("knowledge_tier".to_string(), json!(h.memory.knowledge_tier));
             }
             apply_field_projection(entry, &req.fields)
         })
         .collect();
+
+    // Attach source chain if show_sources is requested (D-08: opt-in).
+    let mut results = results;
+    if show_sources {
+        for (i, hit) in scored_hits.iter().enumerate() {
+            let sources = if show_sources_deep {
+                crate::transport::server::fetch_source_chain_deep(&store, &hit.memory).await
+            } else {
+                crate::transport::server::fetch_source_chain_single_hop(&store, &hit.memory).await
+            };
+            if !sources.is_empty() {
+                let source_entries: Vec<serde_json::Value> = sources
+                    .iter()
+                    .map(|(id, mem)| {
+                        json!({
+                            "id": id,
+                            "content": crate::transport::server::truncate_source_content(&mem.content, 200),
+                            "knowledge_tier": mem.knowledge_tier,
+                        })
+                    })
+                    .collect();
+                if let Some(obj) = results.get_mut(i).and_then(|v| v.as_object_mut()) {
+                    obj.insert("sources".to_string(), json!(source_entries));
+                }
+            }
+        }
+    }
 
     let total = results.len();
 

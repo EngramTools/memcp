@@ -218,6 +218,38 @@ pub async fn recall_handler(
         })
         .collect();
 
+    // Attach source chain if show_sources is requested (D-08: opt-in).
+    let mut memories = memories;
+    if req.show_sources {
+        let mem_ids: Vec<String> = result.memories.iter().map(|m| m.memory_id.clone()).collect();
+        if let Ok(full_memories) = store.get_memories_by_ids(&mem_ids).await {
+            for (i, recalled) in result.memories.iter().enumerate() {
+                if let Some(full_mem) = full_memories.get(&recalled.memory_id) {
+                    let sources = if req.show_sources_deep {
+                        crate::transport::server::fetch_source_chain_deep(&store, full_mem).await
+                    } else {
+                        crate::transport::server::fetch_source_chain_single_hop(&store, full_mem).await
+                    };
+                    if !sources.is_empty() {
+                        let source_entries: Vec<serde_json::Value> = sources
+                            .iter()
+                            .map(|(id, mem)| {
+                                json!({
+                                    "id": id,
+                                    "content": crate::transport::server::truncate_source_content(&mem.content, 200),
+                                    "knowledge_tier": mem.knowledge_tier,
+                                })
+                            })
+                            .collect();
+                        if let Some(obj) = memories.get_mut(i).and_then(|v| v.as_object_mut()) {
+                            obj.insert("sources".to_string(), json!(source_entries));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Assemble final output — same shape as CLI --json output.
     let mut output = json!({
         "session_id": result.session_id,

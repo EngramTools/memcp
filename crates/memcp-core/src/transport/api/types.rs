@@ -32,6 +32,15 @@ pub struct RecallRequest {
     /// Falls back gracefully if tier unavailable.
     #[serde(default = "default_depth")]
     pub depth: u8,
+    /// Tier filter. None = exclude raw (default). "all" = include all. Comma-separated list allowed.
+    #[serde(default)]
+    pub tier: Option<String>,
+    /// When true, attach source memories to derived/pattern results (single-hop by default).
+    #[serde(default)]
+    pub show_sources: bool,
+    /// When true, recursively walk full source chain (deep traversal). Only used if show_sources=true.
+    #[serde(default)]
+    pub show_sources_deep: bool,
 }
 
 /// Request body for POST /v1/search.
@@ -63,6 +72,15 @@ pub struct SearchRequest {
     /// Falls back gracefully if tier unavailable.
     #[serde(default = "default_depth")]
     pub depth: u8,
+    /// Tier filter. None = exclude raw (default). "all" = include all. Comma-separated list allowed.
+    #[serde(default)]
+    pub tier: Option<String>,
+    /// When true, attach source memories to results that have source_ids (single-hop).
+    #[serde(default)]
+    pub show_sources: bool,
+    /// When true, recursively walk full source chain. Only effective if show_sources=true.
+    #[serde(default)]
+    pub show_sources_deep: bool,
 }
 
 fn default_search_limit() -> u32 {
@@ -127,6 +145,12 @@ pub struct StoreRequest {
     /// When true, bypasses secret/PII redaction. Default: false (redaction enabled).
     #[serde(default)]
     pub skip_redaction: bool,
+    /// Knowledge tier override. Default: inferred from write_path. Values: raw, imported, explicit, derived, pattern.
+    #[serde(default)]
+    pub knowledge_tier: Option<String>,
+    /// Source memory IDs for provenance. Required when knowledge_tier = "derived".
+    #[serde(default)]
+    pub source_ids: Option<Vec<String>>,
 }
 
 fn default_type_hint() -> String {
