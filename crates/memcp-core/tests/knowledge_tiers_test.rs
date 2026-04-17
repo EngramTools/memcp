@@ -234,18 +234,40 @@ async fn test_tier_backfill(pool: PgPool) {
 
 /// Verify tier_score_for() returns correct normalized scores:
 /// - pattern=1.0, derived=0.75, explicit=0.5, imported=0.25, raw=0.0
-#[ignore = "Wave 2: 24-02-PLAN"]
 #[test]
 fn test_composite_score_tier_boost() {
-    todo!("tier_score_for('pattern')=1.0, 'raw'=0.0, 'explicit'=0.5")
+    use memcp::config::tier_score_for;
+    assert!((tier_score_for("raw") - 0.0).abs() < f64::EPSILON);
+    assert!((tier_score_for("imported") - 0.25).abs() < f64::EPSILON);
+    assert!((tier_score_for("explicit") - 0.5).abs() < f64::EPSILON);
+    assert!((tier_score_for("derived") - 0.75).abs() < f64::EPSILON);
+    assert!((tier_score_for("pattern") - 1.0).abs() < f64::EPSILON);
+    // Unknown tier defaults to 0.5 (neutral)
+    assert!((tier_score_for("unknown") - 0.5).abs() < f64::EPSILON);
 }
 
-/// Two memories with identical content — one with 'pattern' tier and one with 'explicit'.
-/// The pattern-tier memory should rank higher in search results due to tier boost.
-#[sqlx::test(migrator = "memcp::MIGRATOR")]
-#[ignore = "Wave 2: 24-02-PLAN"]
-async fn test_tier_search_ranking(pool: PgPool) {
-    todo!("Two memories with same content, one pattern one explicit, pattern ranks higher")
+/// Verify tier scoring math directly: given identical RRF and salience,
+/// a pattern-tier memory should score higher than an explicit-tier memory.
+#[test]
+fn test_tier_search_ranking() {
+    use memcp::config::{tier_score_for, TierWeightsConfig};
+    let w = TierWeightsConfig::default();
+
+    // Simulate identical RRF and salience for both memories
+    let norm_rrf = 0.8;
+    let norm_sal = 0.7;
+    let trust = 1.0_f64;
+
+    let pattern_score = w.w_rrf * norm_rrf + w.w_sal * (norm_sal * trust) + w.w_tier * tier_score_for("pattern");
+    let explicit_score = w.w_rrf * norm_rrf + w.w_sal * (norm_sal * trust) + w.w_tier * tier_score_for("explicit");
+
+    assert!(
+        pattern_score > explicit_score,
+        "pattern ({}) should score higher than explicit ({})",
+        pattern_score, explicit_score
+    );
+    // pattern gets +0.2*1.0=0.2, explicit gets +0.2*0.5=0.1
+    assert!((pattern_score - explicit_score - 0.1).abs() < 1e-9);
 }
 
 // ---------------------------------------------------------------------------
@@ -264,12 +286,62 @@ async fn test_source_ids_roundtrip(pool: PgPool) {
 // TIER-06: Tier filtering and source chain traversal
 // ---------------------------------------------------------------------------
 
-/// Store memories with raw and explicit tiers. Search without explicit tier filter.
-/// Raw memories should be excluded from results by default (D-10).
+/// Store memories with raw and explicit tiers. Query recall_candidates without
+/// explicit tier filter — raw memories should be excluded by default (D-10).
+/// Then query with tier_filter=Some(["all"]) and verify raw IS included.
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
-#[ignore = "Wave 2: 24-02-PLAN"]
 async fn test_tier_filter_excludes_raw(pool: PgPool) {
-    todo!("Store raw + explicit memories, search without tier filter, raw excluded from results")
+    let store = PostgresMemoryStore::from_pool(pool.clone()).await.unwrap();
+
+    // Store a raw memory (via write_path inference)
+    let raw_mem = store.store(
+        MemoryBuilder::new()
+            .content("Auto-captured raw content about cats")
+            .write_path("auto_store")
+            .build()
+    ).await.unwrap();
+    assert_eq!(raw_mem.knowledge_tier, "raw");
+
+    // Store an explicit memory
+    let explicit_mem = store.store(
+        MemoryBuilder::new()
+            .content("Explicitly stored content about cats")
+            .write_path("explicit_store")
+            .build()
+    ).await.unwrap();
+    assert_eq!(explicit_mem.knowledge_tier, "explicit");
+
+    // Generate embeddings for both memories so they appear in recall
+    let emb = vec![0.1_f32; 384];
+    let emb_vec = pgvector::Vector::from(emb.clone());
+    store.insert_embedding(
+        &uuid::Uuid::new_v4().to_string(), &raw_mem.id,
+        "test-model", "1.0", 384, &emb_vec, true, "fast"
+    ).await.unwrap();
+    store.update_embedding_status(&raw_mem.id, "complete").await.unwrap();
+
+    store.insert_embedding(
+        &uuid::Uuid::new_v4().to_string(), &explicit_mem.id,
+        "test-model", "1.0", 384, &emb_vec, true, "fast"
+    ).await.unwrap();
+    store.update_embedding_status(&explicit_mem.id, "complete").await.unwrap();
+
+    // Default tier_filter (None) should exclude raw
+    let candidates = store.recall_candidates(
+        &emb, "session-tier-filter", 0.0, 10, false, None, None,
+    ).await.unwrap();
+    let ids: Vec<&str> = candidates.iter().map(|c| c.memory_id.as_str()).collect();
+    assert!(!ids.contains(&raw_mem.id.as_str()), "raw memory should be excluded by default (D-10)");
+    assert!(ids.contains(&explicit_mem.id.as_str()), "explicit memory should be included");
+
+    // tier_filter=Some(["all"]) should include raw
+    let all_tiers = vec!["all".to_string()];
+    let candidates_all = store.recall_candidates(
+        &emb, "session-tier-filter-all", 0.0, 10, false, None, Some(&all_tiers),
+    ).await.unwrap();
+    let ids_all: Vec<&str> = candidates_all.iter().map(|c| c.memory_id.as_str()).collect();
+    assert!(ids_all.contains(&raw_mem.id.as_str()), "raw memory should be included with tier=all");
+    assert!(ids_all.contains(&explicit_mem.id.as_str()), "explicit memory should be included with tier=all");
 }
 
 /// Store source memories, then store a derived memory with source_ids pointing
@@ -283,9 +355,75 @@ async fn test_show_sources_single_hop(pool: PgPool) {
 /// Queryless recall (--first, no query) should return all tiers including raw (D-11).
 /// Store memories across raw, explicit, and derived tiers, verify all returned.
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
-#[ignore = "Wave 2: 24-02-PLAN"]
 async fn test_queryless_recall_all_tiers(pool: PgPool) {
-    todo!("Store raw + explicit + derived, queryless recall returns all of them")
+    use std::sync::Arc;
+    use memcp::config::RecallConfig;
+    use memcp::intelligence::recall::RecallEngine;
+
+    let store = Arc::new(PostgresMemoryStore::from_pool(pool.clone()).await.unwrap());
+
+    // Store a raw memory
+    let raw_mem = store.store(
+        MemoryBuilder::new()
+            .content("Raw auto-captured memory")
+            .write_path("auto_store")
+            .build()
+    ).await.unwrap();
+    assert_eq!(raw_mem.knowledge_tier, "raw");
+
+    // Store an explicit memory
+    let explicit_mem = store.store(
+        MemoryBuilder::new()
+            .content("Explicitly stored memory")
+            .write_path("explicit_store")
+            .build()
+    ).await.unwrap();
+    assert_eq!(explicit_mem.knowledge_tier, "explicit");
+
+    // Store a derived memory
+    let derived_mem = store.store(
+        MemoryBuilder::new()
+            .content("Derived conclusion memory")
+            .knowledge_tier("derived")
+            .source_ids(vec!["00000000-0000-0000-0000-000000000001"])
+            .build()
+    ).await.unwrap();
+    assert_eq!(derived_mem.knowledge_tier, "derived");
+
+    // Generate embeddings for all so they pass embedding_status='complete'
+    let emb = vec![0.1_f32; 384];
+    let emb_vec = pgvector::Vector::from(emb.clone());
+    for mem_id in [&raw_mem.id, &explicit_mem.id, &derived_mem.id] {
+        store.insert_embedding(
+            &uuid::Uuid::new_v4().to_string(), mem_id,
+            "test-model", "1.0", 384, &emb_vec, true, "fast"
+        ).await.unwrap();
+        store.update_embedding_status(mem_id, "complete").await.unwrap();
+    }
+
+    // D-11: queryless recall should return ALL tiers
+    let config = RecallConfig {
+        max_memories: 10,
+        min_relevance: 0.0,
+        ..Default::default()
+    };
+    let engine = RecallEngine::new(Arc::clone(&store), config, false);
+    let result = engine
+        .recall_queryless(
+            Some("session-queryless-all-tiers".to_string()),
+            false,
+            None,
+            false,
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+
+    let ids: Vec<&str> = result.memories.iter().map(|m| m.memory_id.as_str()).collect();
+    assert!(ids.contains(&raw_mem.id.as_str()), "queryless recall should include raw tier (D-11)");
+    assert!(ids.contains(&explicit_mem.id.as_str()), "queryless recall should include explicit tier");
+    assert!(ids.contains(&derived_mem.id.as_str()), "queryless recall should include derived tier");
 }
 
 // ---------------------------------------------------------------------------
