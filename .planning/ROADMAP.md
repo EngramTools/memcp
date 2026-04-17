@@ -695,7 +695,7 @@ Plans:
 
 Plans:
 - [x] 24-00-PLAN.md — Wave 0: test scaffolds + MemoryBuilder extensions (Nyquist)
-- [ ] 24-01-PLAN.md — Migration 026, Memory/CreateMemory structs, TierWeightsConfig, tier inference at store, backfill
+- [x] 24-01-PLAN.md — Migration 026, Memory/CreateMemory structs, TierWeightsConfig, tier inference at store, backfill
 - [ ] 24-02-PLAN.md — Composite scoring with tier dimension + tier filter in search/recall SQL + D-10/D-11 split
 - [ ] 24-03-PLAN.md — Transport threading (MCP/CLI/HTTP) + source chain traversal + GC orphan tagging
 
