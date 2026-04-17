@@ -16,6 +16,9 @@ pub struct MemoryBuilder {
     idempotency_key: Option<String>,
     project: Option<String>,
     trust_level: Option<f32>,
+    write_path: Option<String>,
+    knowledge_tier: Option<String>,
+    source_ids: Option<Vec<String>>,
 }
 
 impl MemoryBuilder {
@@ -33,6 +36,9 @@ impl MemoryBuilder {
             idempotency_key: None,
             project: None,
             trust_level: None,
+            write_path: None,
+            knowledge_tier: None,
+            source_ids: None,
         }
     }
 
@@ -90,6 +96,24 @@ impl MemoryBuilder {
         self
     }
 
+    /// Set the write path (e.g., "auto_store", "explicit_store", "import").
+    pub fn write_path(mut self, wp: &str) -> Self {
+        self.write_path = Some(wp.to_string());
+        self
+    }
+
+    /// Set the knowledge tier (e.g., "raw", "explicit", "derived", "pattern").
+    pub fn knowledge_tier(mut self, tier: &str) -> Self {
+        self.knowledge_tier = Some(tier.to_string());
+        self
+    }
+
+    /// Set the source IDs for provenance tracking.
+    pub fn source_ids(mut self, ids: Vec<&str>) -> Self {
+        self.source_ids = Some(ids.iter().map(|s| s.to_string()).collect());
+        self
+    }
+
     /// Consume the builder and produce a `CreateMemory`.
     pub fn build(self) -> CreateMemory {
         CreateMemory {
@@ -111,7 +135,10 @@ impl MemoryBuilder {
             trust_level: self.trust_level,
             session_id: None,
             agent_role: None,
-            write_path: None,
+            write_path: self.write_path,
+            // Phase 24: will be wired when CreateMemory gains these fields
+            // knowledge_tier: self.knowledge_tier,
+            // source_ids: self.source_ids,
         }
     }
 
