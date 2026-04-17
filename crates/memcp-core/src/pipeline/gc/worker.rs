@@ -81,7 +81,36 @@ pub async fn run_gc(
         }
     }
 
-    // Step 6d: Update GC metrics in daemon_status
+    // Step 6d: Tag derived/pattern memories that reference deleted sources as "orphaned_sources" (D-06).
+    // No cascade delete — derived conclusions are often more valuable than their sources.
+    if !all_deleted_parents.is_empty() {
+        let orphan_result = sqlx::query(
+            "UPDATE memories
+             SET tags = COALESCE(tags, '[]'::jsonb) || '[\"orphaned_sources\"]'::jsonb
+             WHERE source_ids IS NOT NULL
+               AND deleted_at IS NULL
+               AND EXISTS (
+                   SELECT 1 FROM jsonb_array_elements_text(source_ids) AS sid
+                   WHERE sid = ANY($1)
+               )
+               AND NOT (COALESCE(tags, '[]'::jsonb) @> '[\"orphaned_sources\"]'::jsonb)"
+        )
+        .bind(&all_deleted_parents)
+        .execute(&store.pool)
+        .await;
+
+        match orphan_result {
+            Ok(result) if result.rows_affected() > 0 => {
+                tracing::info!(count = result.rows_affected(), "GC: tagged orphaned_sources on derived memories");
+            }
+            Ok(_) => {} // no orphans found
+            Err(e) => {
+                tracing::warn!(error = %e, "GC: orphan tagging failed (non-fatal)");
+            }
+        }
+    }
+
+    // Step 6e: Update GC metrics in daemon_status
     let total_pruned = (pruned_count + expired_count) as i64;
     if total_pruned > 0 {
         if let Err(e) = store.update_gc_metrics(total_pruned).await {

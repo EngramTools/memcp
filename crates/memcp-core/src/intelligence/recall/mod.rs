@@ -50,6 +50,12 @@ pub struct RecalledMemory {
     /// Structured overview of the memory (depth=1 tier). None when abstraction hasn't run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overview_text: Option<String>,
+    /// Knowledge tier of this memory (raw, imported, explicit, derived, pattern).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub knowledge_tier: Option<String>,
+    /// Source memory IDs for provenance (JSONB array). Present for derived/pattern tiers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_ids: Option<serde_json::Value>,
 }
 
 fn is_zero_f32(v: &f32) -> bool {
@@ -241,6 +247,8 @@ impl RecallEngine {
                 trust_level: candidate.trust_level,
                 abstract_text: None,
                 overview_text: None,
+                knowledge_tier: Some(candidate.knowledge_tier.clone()),
+                source_ids: candidate.source_ids.clone(),
             });
 
             // Collect memory tags for session accumulation.
@@ -354,6 +362,8 @@ impl RecallEngine {
                     trust_level: 1.0, // summaries are always trusted
                     abstract_text: None,
                     overview_text: None,
+                    knowledge_tier: Some("explicit".to_string()),
+                    source_ids: None,
                 })
         } else {
             None
@@ -528,6 +538,8 @@ impl RecallEngine {
                 trust_level: hit.memory.trust_level,
                 abstract_text: hit.memory.abstract_text.clone(),
                 overview_text: hit.memory.overview_text.clone(),
+                knowledge_tier: Some(hit.memory.knowledge_tier.clone()),
+                source_ids: hit.memory.source_ids.clone(),
             });
 
             accumulated_tags.extend(memory_tags);

@@ -364,14 +364,16 @@ impl PostgresMemoryStore {
         if extraction_enabled {
             let sql = format!(
                 "
-                SELECT memory_id, content, relevance, tags, trust_level FROM (
+                SELECT memory_id, content, relevance, tags, trust_level, knowledge_tier, source_ids FROM (
                     SELECT DISTINCT ON (m.id)
                         m.id AS memory_id,
                         ef.fact AS content,
                         (1.0 - (me.embedding <=> $1::vector)) AS relevance,
                         COALESCE(ms.stability, 1.0) AS stability,
                         m.tags AS tags,
-                        m.trust_level
+                        m.trust_level,
+                        m.knowledge_tier,
+                        m.source_ids
                     FROM memories m
                     JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = true
                     LEFT JOIN memory_salience ms ON ms.memory_id = m.id
@@ -419,12 +421,16 @@ impl PostgresMemoryStore {
                         .unwrap_or(0.0);
                     let tags: Option<serde_json::Value> = row.try_get("tags").ok().flatten();
                     let trust_level: f32 = row.try_get::<f32, _>("trust_level").unwrap_or(0.5);
+                    let knowledge_tier: String = row.try_get("knowledge_tier").unwrap_or_else(|_| "explicit".to_string());
+                    let source_ids: Option<serde_json::Value> = row.try_get("source_ids").unwrap_or(None);
                     RecallCandidate {
                         memory_id,
                         content,
                         relevance,
                         tags,
                         trust_level,
+                        knowledge_tier,
+                        source_ids,
                     }
                 })
                 .collect();
@@ -438,7 +444,9 @@ impl PostgresMemoryStore {
                     (1.0 - (me.embedding <=> $1::vector)) AS relevance,
                     COALESCE(ms.stability, 1.0) AS stability,
                     m.tags AS tags,
-                    m.trust_level
+                    m.trust_level,
+                    m.knowledge_tier,
+                    m.source_ids
                 FROM memories m
                 JOIN memory_embeddings me ON me.memory_id = m.id AND me.is_current = true
                 LEFT JOIN memory_salience ms ON ms.memory_id = m.id
@@ -482,12 +490,16 @@ impl PostgresMemoryStore {
                         .unwrap_or(0.0);
                     let tags: Option<serde_json::Value> = row.try_get("tags").ok().flatten();
                     let trust_level: f32 = row.try_get::<f32, _>("trust_level").unwrap_or(0.5);
+                    let knowledge_tier: String = row.try_get("knowledge_tier").unwrap_or_else(|_| "explicit".to_string());
+                    let source_ids: Option<serde_json::Value> = row.try_get("source_ids").unwrap_or(None);
                     RecallCandidate {
                         memory_id,
                         content,
                         relevance,
                         tags,
                         trust_level,
+                        knowledge_tier,
+                        source_ids,
                     }
                 })
                 .collect();
@@ -527,7 +539,7 @@ impl PostgresMemoryStore {
         }
 
         // Multi-tier: query each tier separately and merge by best relevance.
-        let mut merged: HashMap<String, (String, f32, Option<serde_json::Value>, f32)> =
+        let mut merged: HashMap<String, (String, f32, Option<serde_json::Value>, f32, String, Option<serde_json::Value>)> =
             HashMap::new();
 
         for embedding in tier_embeddings.values() {
@@ -546,7 +558,7 @@ impl PostgresMemoryStore {
             for candidate in tier_results {
                 merged
                     .entry(candidate.memory_id)
-                    .and_modify(|(_, best_rel, _, _)| {
+                    .and_modify(|(_, best_rel, _, _, _, _)| {
                         if candidate.relevance > *best_rel {
                             *best_rel = candidate.relevance;
                         }
@@ -556,6 +568,8 @@ impl PostgresMemoryStore {
                         candidate.relevance,
                         candidate.tags,
                         candidate.trust_level,
+                        candidate.knowledge_tier,
+                        candidate.source_ids,
                     ));
             }
         }
@@ -563,12 +577,14 @@ impl PostgresMemoryStore {
         // Sort by relevance descending and cap at max_memories
         let mut results: Vec<RecallCandidate> = merged
             .into_iter()
-            .map(|(id, (content, rel, tags, trust))| RecallCandidate {
+            .map(|(id, (content, rel, tags, trust, kt, sids))| RecallCandidate {
                 memory_id: id,
                 content,
                 relevance: rel,
                 tags,
                 trust_level: trust,
+                knowledge_tier: kt,
+                source_ids: sids,
             })
             .collect();
         results.sort_by(|a, b| {
@@ -606,7 +622,9 @@ impl PostgresMemoryStore {
                 COALESCE(ms.stability, 1.0) AS stability,
                 ms.last_reinforced_at,
                 m.tags,
-                m.trust_level
+                m.trust_level,
+                m.knowledge_tier,
+                m.source_ids
             FROM memories m
             LEFT JOIN memory_salience ms ON ms.memory_id = m.id
             LEFT JOIN session_recalls sr ON sr.session_id = $1 AND sr.memory_id = m.id
@@ -641,6 +659,8 @@ impl PostgresMemoryStore {
                     row.get("last_reinforced_at");
                 let tags: Option<serde_json::Value> = row.get("tags");
                 let trust_level: f32 = row.try_get::<f32, _>("trust_level").unwrap_or(0.5);
+                let knowledge_tier: String = row.try_get("knowledge_tier").unwrap_or_else(|_| "explicit".to_string());
+                let source_ids: Option<serde_json::Value> = row.try_get("source_ids").unwrap_or(None);
                 QuerylessCandidate {
                     memory_id,
                     content,
@@ -650,6 +670,8 @@ impl PostgresMemoryStore {
                     last_reinforced_at,
                     tags,
                     trust_level,
+                    knowledge_tier,
+                    source_ids,
                 }
             })
             .collect();

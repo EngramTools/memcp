@@ -120,6 +120,12 @@ enum Commands {
         /// Bypass secret/PII redaction. By default, secrets are redacted before storing.
         #[arg(long)]
         no_redact: bool,
+        /// Knowledge tier override (default: inferred from context). Values: raw, imported, explicit, derived, pattern.
+        #[arg(long)]
+        knowledge_tier: Option<String>,
+        /// Source memory IDs for provenance (comma-separated UUIDs). Required when knowledge_tier=derived.
+        #[arg(long, value_delimiter = ',')]
+        source_ids: Option<Vec<String>>,
     },
     /// Search memories by keyword + metadata matching with salience ranking
     Search {
@@ -163,6 +169,12 @@ enum Commands {
         /// Falls back gracefully if tier unavailable.
         #[arg(long, default_value = "2")]
         depth: u8,
+        /// Tier filter: "all", "raw", "explicit", or comma-separated list (default: excludes raw)
+        #[arg(long)]
+        tier: Option<String>,
+        /// Attach source memories to derived/pattern results (single-hop provenance)
+        #[arg(long)]
+        show_sources: bool,
     },
     /// List memories with optional filters and pagination
     List {
@@ -294,6 +306,12 @@ enum Commands {
         /// Falls back gracefully if tier unavailable.
         #[arg(long, default_value = "2")]
         depth: u8,
+        /// Tier filter: "all", "raw", "explicit", or comma-separated list (default: excludes raw)
+        #[arg(long)]
+        tier: Option<String>,
+        /// Attach source memories to derived/pattern results (single-hop provenance)
+        #[arg(long)]
+        show_sources: bool,
     },
     /// AI brain curation — merge, flag stale, and strengthen memories
     Curation {
@@ -980,6 +998,8 @@ async fn main() -> Result<()> {
             session_id,
             agent_role,
             no_redact,
+            knowledge_tier,
+            source_ids,
         } => {
             let resolved = cli::resolve_content_arg(content, stdin)?;
             if let Some(ref remote_url) = cli.remote {
@@ -998,6 +1018,8 @@ async fn main() -> Result<()> {
                     "session_id": session_id,
                     "agent_role": agent_role,
                     "skip_redaction": no_redact,
+                    "knowledge_tier": knowledge_tier,
+                    "source_ids": source_ids,
                 });
                 let result = cli::dispatch_remote(remote_url, "store", body).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -1021,6 +1043,8 @@ async fn main() -> Result<()> {
                     session_id,
                     agent_role,
                     no_redact,
+                    knowledge_tier,
+                    source_ids,
                 )
                 .await?;
             }
@@ -1043,6 +1067,8 @@ async fn main() -> Result<()> {
             min_salience,
             project,
             depth,
+            tier,
+            show_sources,
         } => {
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
@@ -1057,6 +1083,8 @@ async fn main() -> Result<()> {
                     "fields": fields,
                     "cursor": cursor,
                     "depth": depth,
+                    "tier": tier,
+                    "show_sources": show_sources,
                 });
                 let result = cli::dispatch_remote(remote_url, "search", body).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -1082,6 +1110,8 @@ async fn main() -> Result<()> {
                     min_salience,
                     project,
                     depth,
+                    tier,
+                    show_sources,
                 )
                 .await?;
             }
@@ -1195,6 +1225,8 @@ async fn main() -> Result<()> {
             limit,
             boost_tags,
             depth,
+            tier,
+            show_sources,
         } => {
             if let Some(ref remote_url) = cli.remote {
                 let body = serde_json::json!({
@@ -1206,6 +1238,8 @@ async fn main() -> Result<()> {
                     "limit": limit,
                     "boost_tags": boost_tags,
                     "depth": depth,
+                    "tier": tier,
+                    "show_sources": show_sources,
                 });
                 let result = cli::dispatch_remote(remote_url, "recall", body).await?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -1224,6 +1258,8 @@ async fn main() -> Result<()> {
                     limit,
                     &boost_tags,
                     depth,
+                    tier,
+                    show_sources,
                 )
                 .await?;
             }

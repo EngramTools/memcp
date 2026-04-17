@@ -72,6 +72,8 @@ pub struct RecallCandidate {
     pub relevance: f32,
     pub tags: Option<serde_json::Value>,
     pub trust_level: f32,
+    pub knowledge_tier: String,
+    pub source_ids: Option<serde_json::Value>,
 }
 
 /// Candidate memory returned by query-less recall (no vector search).
@@ -88,6 +90,8 @@ pub struct QuerylessCandidate {
     pub last_reinforced_at: Option<chrono::DateTime<Utc>>,
     pub tags: Option<serde_json::Value>,
     pub trust_level: f32,
+    pub knowledge_tier: String,
+    pub source_ids: Option<serde_json::Value>,
 }
 
 /// A curation run record from the curation_runs table.

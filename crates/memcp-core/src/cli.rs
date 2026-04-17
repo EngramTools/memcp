@@ -354,6 +354,8 @@ pub async fn cmd_store(
     session_id: Option<String>,
     agent_role: Option<String>,
     no_redact: bool,
+    knowledge_tier: Option<String>,
+    source_ids: Option<Vec<String>>,
 ) -> Result<()> {
     let content = content.ok_or_else(|| {
         anyhow::anyhow!("Content is required — provide as argument or use --stdin")
@@ -445,8 +447,8 @@ pub async fn cmd_store(
         session_id,
         agent_role,
         write_path: Some("explicit_store".to_string()),
-        knowledge_tier: None,
-        source_ids: None,
+        knowledge_tier,
+        source_ids,
     };
 
     let memory = store
@@ -660,6 +662,8 @@ pub async fn cmd_search(
     min_salience: Option<f64>,
     project: Option<String>,
     depth: u8,
+    _tier: Option<String>,
+    show_sources: bool,
 ) -> Result<()> {
     // Validate query size
     crate::validation::validate_query(&query, &config.input_limits)
@@ -980,6 +984,20 @@ pub async fn cmd_search(
         None
     };
 
+    // Pre-compute source chains if show_sources is requested (D-08: opt-in).
+    let source_chains: std::collections::HashMap<String, Vec<(String, Memory)>> = if show_sources {
+        let mut chains = std::collections::HashMap::new();
+        for hit in &scored_hits {
+            let sources = crate::transport::server::fetch_source_chain_single_hop(store, &hit.memory).await;
+            if !sources.is_empty() {
+                chains.insert(hit.memory.id.clone(), sources);
+            }
+        }
+        chains
+    } else {
+        std::collections::HashMap::new()
+    };
+
     // Format results according to output mode.
     if json {
         // --json: MCP-compatible JSON envelope. id always present at top level (SCF-03).
@@ -1014,6 +1032,19 @@ pub async fn cmd_search(
                     );
                     obj.insert("rrf_score".to_string(), json!(h.rrf_score));
                     obj.insert("match_source".to_string(), json!(h.match_source));
+                    obj.insert("knowledge_tier".to_string(), json!(h.memory.knowledge_tier));
+                    // Attach source chain if show_sources was requested
+                    if let Some(sources) = source_chains.get(&h.memory.id) {
+                        let source_entries: Vec<serde_json::Value> = sources
+                            .iter()
+                            .map(|(id, mem)| json!({
+                                "id": id,
+                                "content": crate::transport::server::truncate_source_content(&mem.content, 200),
+                                "knowledge_tier": mem.knowledge_tier,
+                            }))
+                            .collect();
+                        obj.insert("sources".to_string(), json!(source_entries));
+                    }
                 }
                 // Apply field projection (no-op when fields is None or empty).
                 apply_field_projection(entry, &field_list)
@@ -1119,6 +1150,18 @@ pub async fn cmd_search(
                     );
                     obj.insert("rrf_score".to_string(), json!(h.rrf_score));
                     obj.insert("match_source".to_string(), json!(h.match_source));
+                    obj.insert("knowledge_tier".to_string(), json!(h.memory.knowledge_tier));
+                    if let Some(sources) = source_chains.get(&h.memory.id) {
+                        let source_entries: Vec<serde_json::Value> = sources
+                            .iter()
+                            .map(|(id, mem)| json!({
+                                "id": id,
+                                "content": crate::transport::server::truncate_source_content(&mem.content, 200),
+                                "knowledge_tier": mem.knowledge_tier,
+                            }))
+                            .collect();
+                        obj.insert("sources".to_string(), json!(source_entries));
+                    }
                 }
                 // Apply field projection (no-op when fields is None or empty).
                 apply_field_projection(entry, &field_list)
@@ -1767,6 +1810,8 @@ pub async fn cmd_recall(
     limit: Option<usize>,
     boost_tags: &[String],
     depth: u8,
+    _tier: Option<String>,
+    show_sources: bool,
 ) -> Result<()> {
     // Validate query size (recall query can be empty for query-less mode)
     if !query.is_empty() {
@@ -1837,6 +1882,8 @@ pub async fn cmd_recall(
                 trust_level: 1.0,
                 abstract_text: None,
                 overview_text: None,
+                knowledge_tier: Some("explicit".to_string()),
+                source_ids: None,
             }),
             Ok(None) => None,
             Err(e) => {
@@ -1918,6 +1965,34 @@ pub async fn cmd_recall(
             obj
         })
         .collect();
+
+    // Attach source chain if show_sources is requested (D-08: opt-in).
+    let mut memories = memories;
+    if show_sources {
+        let mem_ids: Vec<String> = result.memories.iter().map(|m| m.memory_id.clone()).collect();
+        if let Ok(full_memories) = store.get_memories_by_ids(&mem_ids).await {
+            for (i, recalled) in result.memories.iter().enumerate() {
+                if let Some(full_mem) = full_memories.get(&recalled.memory_id) {
+                    let sources = crate::transport::server::fetch_source_chain_single_hop(store, full_mem).await;
+                    if !sources.is_empty() {
+                        let source_entries: Vec<serde_json::Value> = sources
+                            .iter()
+                            .map(|(id, mem)| {
+                                json!({
+                                    "id": id,
+                                    "content": crate::transport::server::truncate_source_content(&mem.content, 200),
+                                    "knowledge_tier": mem.knowledge_tier,
+                                })
+                            })
+                            .collect();
+                        if let Some(obj) = memories.get_mut(i).and_then(|v| v.as_object_mut()) {
+                            obj.insert("sources".to_string(), json!(source_entries));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Assemble final output.
     let mut output = json!({

@@ -2441,6 +2441,8 @@ Callable from code_execution_20260120 sandboxes."
                             trust_level: 1.0,
                             abstract_text: None,
                             overview_text: None,
+                            knowledge_tier: Some("explicit".to_string()),
+                            source_ids: None,
                         });
                     }
                     Ok(None) => {}

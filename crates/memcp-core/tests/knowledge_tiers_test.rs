@@ -277,9 +277,36 @@ fn test_tier_search_ranking() {
 /// Store a memory with source_ids=['uuid1','uuid2'], retrieve by id,
 /// verify source_ids are returned correctly as a JSON array.
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
-#[ignore = "Wave 3: 24-03-PLAN"]
 async fn test_source_ids_roundtrip(pool: PgPool) {
-    todo!("Store with source_ids=['uuid1','uuid2'], get by id, verify source_ids returned")
+    let store = PostgresMemoryStore::from_pool(pool.clone()).await.unwrap();
+
+    let uuid1 = "00000000-0000-0000-0000-000000000001";
+    let uuid2 = "00000000-0000-0000-0000-000000000002";
+
+    // Store a derived memory with source_ids
+    let input = MemoryBuilder::new()
+        .content("Derived conclusion from two sources")
+        .knowledge_tier("derived")
+        .source_ids(vec![uuid1, uuid2])
+        .build();
+    let memory = store.store(input).await.unwrap();
+    assert_eq!(memory.knowledge_tier, "derived");
+
+    // Verify source_ids are present
+    let source_ids = memory.source_ids.as_ref().expect("source_ids should be set");
+    let arr = source_ids.as_array().expect("source_ids should be a JSON array");
+    assert_eq!(arr.len(), 2);
+    assert!(arr.iter().any(|v| v.as_str() == Some(uuid1)));
+    assert!(arr.iter().any(|v| v.as_str() == Some(uuid2)));
+
+    // Retrieve by id and verify round-trip
+    let fetched = store.get(&memory.id).await.unwrap();
+    assert_eq!(fetched.knowledge_tier, "derived");
+    let fetched_ids = fetched.source_ids.as_ref().expect("source_ids should persist");
+    let fetched_arr = fetched_ids.as_array().expect("source_ids should be a JSON array");
+    assert_eq!(fetched_arr.len(), 2);
+    assert!(fetched_arr.iter().any(|v| v.as_str() == Some(uuid1)));
+    assert!(fetched_arr.iter().any(|v| v.as_str() == Some(uuid2)));
 }
 
 // ---------------------------------------------------------------------------
@@ -345,11 +372,54 @@ async fn test_tier_filter_excludes_raw(pool: PgPool) {
 }
 
 /// Store source memories, then store a derived memory with source_ids pointing
-/// to those sources. Using --show-sources should return the source memories.
+/// to those sources. Using get_memories_by_ids should return the source memories.
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
-#[ignore = "Wave 3: 24-03-PLAN"]
 async fn test_show_sources_single_hop(pool: PgPool) {
-    todo!("Store source memories, store derived with source_ids, show-sources returns sources")
+    let store = PostgresMemoryStore::from_pool(pool.clone()).await.unwrap();
+
+    // Store two source memories
+    let source1 = store.store(
+        MemoryBuilder::new()
+            .content("Source fact: the sky is blue")
+            .write_path("explicit_store")
+            .build()
+    ).await.unwrap();
+    assert_eq!(source1.knowledge_tier, "explicit");
+
+    let source2 = store.store(
+        MemoryBuilder::new()
+            .content("Source fact: water is wet")
+            .write_path("explicit_store")
+            .build()
+    ).await.unwrap();
+    assert_eq!(source2.knowledge_tier, "explicit");
+
+    // Store a derived memory referencing both sources
+    let derived = store.store(
+        MemoryBuilder::new()
+            .content("Derived: sky is blue and water is wet")
+            .knowledge_tier("derived")
+            .source_ids(vec![&source1.id, &source2.id])
+            .build()
+    ).await.unwrap();
+    assert_eq!(derived.knowledge_tier, "derived");
+
+    // Simulate show-sources: extract source_ids and fetch via get_memories_by_ids
+    let source_ids: Vec<String> = derived.source_ids
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|e| e.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    assert_eq!(source_ids.len(), 2);
+
+    let source_map = store.get_memories_by_ids(&source_ids).await.unwrap();
+    assert_eq!(source_map.len(), 2, "Both source memories should be returned");
+    assert!(source_map.contains_key(&source1.id), "Source 1 should be in results");
+    assert!(source_map.contains_key(&source2.id), "Source 2 should be in results");
+
+    // Verify source content matches
+    assert_eq!(source_map[&source1.id].content, "Source fact: the sky is blue");
+    assert_eq!(source_map[&source2.id].content, "Source fact: water is wet");
 }
 
 /// Queryless recall (--first, no query) should return all tiers including raw (D-11).
@@ -433,7 +503,62 @@ async fn test_queryless_recall_all_tiers(pool: PgPool) {
 /// When a source memory is deleted/GC'd, derived memories referencing it
 /// via source_ids should get tagged with 'orphaned_sources'. No cascade delete.
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
-#[ignore = "Wave 3: 24-03-PLAN"]
 async fn test_orphan_tagging_on_gc(pool: PgPool) {
-    todo!("Delete source memory, derived memory gets 'orphaned_sources' tag")
+    let store = PostgresMemoryStore::from_pool(pool.clone()).await.unwrap();
+
+    // Store a source memory
+    let source = store.store(
+        MemoryBuilder::new()
+            .content("Source memory that will be deleted")
+            .write_path("explicit_store")
+            .build()
+    ).await.unwrap();
+
+    // Store a derived memory referencing the source
+    let derived = store.store(
+        MemoryBuilder::new()
+            .content("Derived conclusion from source")
+            .knowledge_tier("derived")
+            .source_ids(vec![&source.id])
+            .build()
+    ).await.unwrap();
+
+    // Verify derived initially has no orphaned_sources tag
+    let initial_tags = derived.tags.as_ref()
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(!initial_tags.contains(&"orphaned_sources"), "Derived should not have orphaned_sources tag initially");
+
+    // Soft-delete the source memory (simulating GC)
+    store.soft_delete_memories(&[source.id.clone()]).await.unwrap();
+
+    // Run the orphan tagging SQL (same as GC worker Step 6d)
+    let deleted_ids = vec![source.id.clone()];
+    sqlx::query(
+        "UPDATE memories
+         SET tags = COALESCE(tags, '[]'::jsonb) || '[\"orphaned_sources\"]'::jsonb
+         WHERE source_ids IS NOT NULL
+           AND deleted_at IS NULL
+           AND EXISTS (
+               SELECT 1 FROM jsonb_array_elements_text(source_ids) AS sid
+               WHERE sid = ANY($1)
+           )
+           AND NOT (COALESCE(tags, '[]'::jsonb) @> '[\"orphaned_sources\"]'::jsonb)"
+    )
+    .bind(&deleted_ids)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Verify derived memory now has 'orphaned_sources' tag
+    let updated_derived = store.get(&derived.id).await.unwrap();
+    let updated_tags = updated_derived.tags.as_ref()
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(updated_tags.contains(&"orphaned_sources"), "Derived memory should have 'orphaned_sources' tag after source deletion");
+
+    // Verify derived memory still exists (not cascade-deleted per D-06)
+    assert!(updated_derived.content.contains("Derived conclusion"), "Derived memory should still exist");
 }
