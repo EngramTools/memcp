@@ -270,6 +270,8 @@ impl MemoryStore for PostgresMemoryStore {
             overview_text: None,
             // abstraction_status was computed above and used in the INSERT
             abstraction_status: abstraction_status.to_string(),
+            knowledge_tier: "explicit".to_string(),
+            source_ids: None,
         })
     }
 

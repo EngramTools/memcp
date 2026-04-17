@@ -445,6 +445,8 @@ pub async fn cmd_store(
         session_id,
         agent_role,
         write_path: Some("explicit_store".to_string()),
+        knowledge_tier: None,
+        source_ids: None,
     };
 
     let memory = store

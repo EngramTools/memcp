@@ -414,6 +414,8 @@ impl RecallEngine {
                 abstract_text: None,
                 overview_text: None,
                 abstraction_status: "skipped".to_string(),
+                knowledge_tier: "explicit".to_string(),
+                source_ids: None,
             };
 
             hits.push(ScoredHit {

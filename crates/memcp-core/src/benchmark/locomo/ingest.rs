@@ -74,6 +74,8 @@ async fn ingest_per_turn(
                 session_id: None,
                 agent_role: None,
                 write_path: None,
+                knowledge_tier: None,
+                source_ids: None,
             };
 
             let stored = store.store(memory).await?;
@@ -139,6 +141,8 @@ async fn ingest_per_session(
             session_id: None,
             agent_role: None,
             write_path: None,
+            knowledge_tier: None,
+            source_ids: None,
         };
 
         let stored = store.store(memory).await?;

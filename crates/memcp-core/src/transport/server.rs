@@ -794,6 +794,8 @@ Callable from code_execution_20260120 sandboxes."
             session_id: params.session_id,
             agent_role: params.agent_role,
             write_path: params.write_path,
+            knowledge_tier: None,
+            source_ids: None,
         };
 
         // Determine if sync store is requested

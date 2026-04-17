@@ -87,6 +87,12 @@ pub struct Memory {
     /// Abstraction pipeline status: "pending", "complete", "failed", "skipped".
     /// "skipped" = content too short (< 200 chars) — abstraction adds no value.
     pub abstraction_status: String,
+    /// Knowledge tier: "raw", "imported", "explicit", "derived", "pattern".
+    /// Inferred from write_path at store time; caller can override. Per D-03.
+    pub knowledge_tier: String,
+    /// Source memory IDs (JSONB array of UUID strings).
+    /// Required non-empty when tier = "derived" (D-04). Optional for "pattern". Null for others.
+    pub source_ids: Option<serde_json::Value>,
 }
 
 /// Input type for creating a new memory.
@@ -152,6 +158,13 @@ pub struct CreateMemory {
     /// How this memory was created: "session_summary", "explicit_store", "annotation", "import".
     #[serde(default)]
     pub write_path: Option<String>,
+    /// Optional knowledge tier override. None = inferred from write_path (D-01).
+    /// Valid values: "raw", "imported", "explicit", "derived", "pattern".
+    #[serde(default)]
+    pub knowledge_tier: Option<String>,
+    /// Provenance source memory IDs. Required (non-empty) when knowledge_tier = "derived" (D-04).
+    #[serde(default)]
+    pub source_ids: Option<Vec<String>>,
 }
 
 fn default_type_hint() -> String {
@@ -276,6 +289,9 @@ pub struct SearchFilter {
     pub tags: Option<Vec<String>>,
     /// Filter by audience scope (optional)
     pub audience: Option<String>,
+    /// Tier filter for search results. None = exclude "raw" by default (D-10).
+    /// Some(vec!["all"]) = no filter. Some(vec!["raw","explicit",...]) = exact tier list.
+    pub tier_filter: Option<Vec<String>>,
 }
 
 impl Default for SearchFilter {
@@ -291,6 +307,7 @@ impl Default for SearchFilter {
             created_before: None,
             tags: None,
             audience: None,
+            tier_filter: None,
         }
     }
 }

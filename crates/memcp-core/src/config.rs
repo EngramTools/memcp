@@ -36,6 +36,11 @@ pub struct SearchConfig {
     /// Default: false — no hint on empty results.
     #[serde(default)]
     pub salience_hint_mode: bool,
+
+    /// Scoring weights for composite score with knowledge tier dimension (D-05).
+    /// Configured under [search.tier_weights] in memcp.toml.
+    #[serde(default)]
+    pub tier_weights: TierWeightsConfig,
 }
 
 fn default_bm25_backend() -> String {
@@ -48,7 +53,55 @@ impl Default for SearchConfig {
             bm25_backend: default_bm25_backend(),
             default_min_salience: None,
             salience_hint_mode: false,
+            tier_weights: TierWeightsConfig::default(),
         }
+    }
+}
+
+/// Scoring weights for composite score with knowledge tier dimension (D-05).
+/// Nested under [search.tier_weights] in memcp.toml.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TierWeightsConfig {
+    /// Weight for RRF score dimension (default: 0.4)
+    #[serde(default = "default_w_rrf")]
+    pub w_rrf: f64,
+    /// Weight for salience*trust dimension (default: 0.4)
+    #[serde(default = "default_w_sal")]
+    pub w_sal: f64,
+    /// Weight for tier score dimension (default: 0.2)
+    #[serde(default = "default_w_tier")]
+    pub w_tier: f64,
+}
+
+fn default_w_rrf() -> f64 {
+    0.4
+}
+fn default_w_sal() -> f64 {
+    0.4
+}
+fn default_w_tier() -> f64 {
+    0.2
+}
+
+impl Default for TierWeightsConfig {
+    fn default() -> Self {
+        TierWeightsConfig {
+            w_rrf: default_w_rrf(),
+            w_sal: default_w_sal(),
+            w_tier: default_w_tier(),
+        }
+    }
+}
+
+/// Map knowledge tier to a 0.0-1.0 score for composite scoring (D-05).
+pub fn tier_score_for(tier: &str) -> f64 {
+    match tier {
+        "raw" => 0.0,
+        "imported" => 0.25,
+        "explicit" => 0.5,
+        "derived" => 0.75,
+        "pattern" => 1.0,
+        _ => 0.5,
     }
 }
 

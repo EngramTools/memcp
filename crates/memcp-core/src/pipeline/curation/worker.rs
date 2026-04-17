@@ -194,6 +194,8 @@ async fn execute_curation(
                         session_id: None,
                         agent_role: None,
                         write_path: Some("curation_merge".to_string()),
+                        knowledge_tier: None,
+                        source_ids: None,
                     };
 
                     match store.store(new_memory).await {

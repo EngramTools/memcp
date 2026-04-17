@@ -537,6 +537,7 @@ impl PostgresMemoryStore {
                     created_before,
                     tags: tags.map(|t| t.to_vec()),
                     audience: audience.map(|s| s.to_string()),
+                    tier_filter: None,
                 };
                 let result = self.search_similar(&filter).await?;
                 result

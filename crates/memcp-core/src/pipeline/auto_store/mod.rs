@@ -365,6 +365,8 @@ async fn run_worker(
             session_id: entry.session_id.clone(),
             agent_role: None,
             write_path: Some("auto_store".to_string()),
+            knowledge_tier: None,
+            source_ids: None,
         };
 
         match store.store(create).await {
@@ -499,6 +501,8 @@ async fn run_worker(
                             session_id: entry.session_id.clone(),
                             agent_role: None,
                             write_path: Some("auto_store".to_string()),
+                            knowledge_tier: None,
+                            source_ids: None,
                         };
 
                         match store.store(chunk_create).await {
