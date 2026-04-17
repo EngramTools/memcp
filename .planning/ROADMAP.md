@@ -681,7 +681,7 @@ Plans:
 
 ## Phase 24: Knowledge Tiers
 - **Goal**: Separate raw conversation captures from derived conclusions. Add `knowledge_tier` enum column (5 values: `raw` | `imported` | `explicit` | `derived` | `pattern`) and `source_ids` JSONB column for provenance chains linking derived memories to their evidence. Search ranking boosts higher-tier memories via configurable 3-dimensional composite score formula.
-- **Status**: Planned
+- **Status**: In Progress (3/4 plans complete)
 - **Depends on**: Phase 23
 - **Origin**: Honcho architecture analysis (2026-04-11) — separate messages table from documents table, adapted as a column on existing memories table.
 - **Requirements:**
@@ -696,7 +696,7 @@ Plans:
 Plans:
 - [x] 24-00-PLAN.md — Wave 0: test scaffolds + MemoryBuilder extensions (Nyquist)
 - [x] 24-01-PLAN.md — Migration 026, Memory/CreateMemory structs, TierWeightsConfig, tier inference at store, backfill
-- [ ] 24-02-PLAN.md — Composite scoring with tier dimension + tier filter in search/recall SQL + D-10/D-11 split
+- [x] 24-02-PLAN.md — Composite scoring with tier dimension + tier filter in search/recall SQL + D-10/D-11 split
 - [ ] 24-03-PLAN.md — Transport threading (MCP/CLI/HTTP) + source chain traversal + GC orphan tagging
 
 ## Phase 24.5: Universal Ingestion API
