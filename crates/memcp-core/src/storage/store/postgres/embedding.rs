@@ -81,7 +81,7 @@ impl PostgresMemoryStore {
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
-             abstract_text, overview_text, abstraction_status \
+             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
              FROM memories WHERE embedding_status IN ('pending', 'failed') AND deleted_at IS NULL \
              AND abstraction_status != 'pending' \
              ORDER BY created_at ASC LIMIT $1",
@@ -109,7 +109,7 @@ impl PostgresMemoryStore {
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
-             abstract_text, overview_text, abstraction_status \
+             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
              FROM memories \
              WHERE deleted_at IS NULL \
                AND embedding_status = 'complete' \
@@ -484,7 +484,7 @@ impl PostgresMemoryStore {
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
-             abstract_text, overview_text, abstraction_status \
+             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
              FROM memories WHERE id = ANY($1) AND deleted_at IS NULL",
         )
         .bind(ids)

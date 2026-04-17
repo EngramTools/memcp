@@ -39,6 +39,8 @@ async fn test_trust_inference_from_source_and_actor_type(pool: PgPool) {
             session_id: None,
             agent_role: None,
             write_path: None,
+            knowledge_tier: None,
+            source_ids: None,
         })
         .await
         .unwrap();
@@ -70,6 +72,8 @@ async fn test_trust_inference_from_source_and_actor_type(pool: PgPool) {
             session_id: None,
             agent_role: None,
             write_path: None,
+            knowledge_tier: None,
+            source_ids: None,
         })
         .await
         .unwrap();
@@ -101,6 +105,8 @@ async fn test_trust_inference_from_source_and_actor_type(pool: PgPool) {
             session_id: None,
             agent_role: None,
             write_path: None,
+            knowledge_tier: None,
+            source_ids: None,
         })
         .await
         .unwrap();
@@ -137,6 +143,8 @@ async fn test_explicit_trust_level_honored(pool: PgPool) {
             session_id: None,
             agent_role: None,
             write_path: None,
+            knowledge_tier: None,
+            source_ids: None,
         })
         .await
         .unwrap();
@@ -182,6 +190,8 @@ async fn test_session_id_stored_and_filterable(pool: PgPool) {
             session_id: Some("sess-123".to_string()),
             agent_role: None,
             write_path: None,
+            knowledge_tier: None,
+            source_ids: None,
         })
         .await
         .unwrap();
@@ -208,6 +218,8 @@ async fn test_session_id_stored_and_filterable(pool: PgPool) {
             session_id: None,
             agent_role: None,
             write_path: None,
+            knowledge_tier: None,
+            source_ids: None,
         })
         .await
         .unwrap();
@@ -255,6 +267,8 @@ async fn test_agent_role_stored_and_filterable(pool: PgPool) {
             session_id: None,
             agent_role: Some("coder".to_string()),
             write_path: None,
+            knowledge_tier: None,
+            source_ids: None,
         })
         .await
         .unwrap();
@@ -281,6 +295,8 @@ async fn test_agent_role_stored_and_filterable(pool: PgPool) {
             session_id: None,
             agent_role: Some("reviewer".to_string()),
             write_path: None,
+            knowledge_tier: None,
+            source_ids: None,
         })
         .await
         .unwrap();
@@ -328,6 +344,8 @@ async fn test_update_trust_level_audit_trail(pool: PgPool) {
             session_id: None,
             agent_role: None,
             write_path: None,
+            knowledge_tier: None,
+            source_ids: None,
         })
         .await
         .unwrap();

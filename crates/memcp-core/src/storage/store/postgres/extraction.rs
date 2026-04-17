@@ -243,7 +243,7 @@ impl PostgresMemoryStore {
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
-             abstract_text, overview_text, abstraction_status \
+             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
              FROM memories WHERE abstraction_status = 'pending' AND deleted_at IS NULL \
              ORDER BY created_at ASC LIMIT $1",
         )
@@ -1199,7 +1199,7 @@ impl PostgresMemoryStore {
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
-             abstract_text, overview_text, abstraction_status \
+             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
              FROM memories WHERE parent_id = $1 AND deleted_at IS NULL \
              ORDER BY chunk_index ASC",
         )

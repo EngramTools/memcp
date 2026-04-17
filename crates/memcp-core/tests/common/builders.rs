@@ -136,9 +136,8 @@ impl MemoryBuilder {
             session_id: None,
             agent_role: None,
             write_path: self.write_path,
-            // Phase 24: will be wired when CreateMemory gains these fields
-            // knowledge_tier: self.knowledge_tier,
-            // source_ids: self.source_ids,
+            knowledge_tier: self.knowledge_tier,
+            source_ids: self.source_ids,
         }
     }
 

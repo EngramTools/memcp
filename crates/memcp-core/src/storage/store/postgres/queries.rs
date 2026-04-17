@@ -111,7 +111,7 @@ impl MemoryStore for PostgresMemoryStore {
                  parent_id, chunk_index, total_chunks, \
                  event_time, event_time_precision, project, \
                  trust_level, session_id, agent_role, write_path, metadata, \
-                 abstract_text, overview_text, abstraction_status \
+                 abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
                  FROM memories \
                  WHERE content_hash = $1 AND deleted_at IS NULL \
                    AND created_at > NOW() - ($2 || ' seconds')::interval \
@@ -149,6 +149,36 @@ impl MemoryStore for PostgresMemoryStore {
             .unwrap_or_else(|| crate::store::infer_trust_level(&input.source, &input.actor_type));
         let empty_metadata = serde_json::json!({});
 
+        // D-01: Tier inferred from write_path, caller can override
+        let resolved_tier = input.knowledge_tier.clone().unwrap_or_else(|| {
+            match input.write_path.as_deref() {
+                Some("auto_store") | Some("session_summary") | Some("ingest") => "raw",
+                Some("explicit_store") | Some("annotation") => "explicit",
+                Some("import") => "imported",
+                _ => "explicit", // NULL or unknown write_path -> explicit
+            }
+            .to_string()
+        });
+
+        // D-04: derived tier requires non-empty source_ids
+        if resolved_tier == "derived" {
+            let has_sources = input
+                .source_ids
+                .as_ref()
+                .map(|v| !v.is_empty())
+                .unwrap_or(false);
+            if !has_sources {
+                return Err(MemcpError::Validation {
+                    message: "derived tier requires non-empty source_ids".into(),
+                    field: Some("source_ids".into()),
+                });
+            }
+        }
+
+        // Convert source_ids Vec<String> to JSONB for storage
+        let source_ids_json: Option<serde_json::Value> =
+            input.source_ids.as_ref().map(|v| serde_json::json!(v));
+
         // Determine abstraction_status at store time: skip short content (< 200 chars)
         let abstraction_status = if input.content.len() < 200 {
             "skipped"
@@ -157,8 +187,8 @@ impl MemoryStore for PostgresMemoryStore {
         };
 
         sqlx::query(
-            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks, event_time, event_time_precision, project, trust_level, session_id, agent_role, write_path, metadata, abstraction_status) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)",
+            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks, event_time, event_time_precision, project, trust_level, session_id, agent_role, write_path, metadata, abstraction_status, knowledge_tier, source_ids) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)",
         )
         .bind(&id)
         .bind(&input.content)
@@ -183,6 +213,8 @@ impl MemoryStore for PostgresMemoryStore {
         .bind(&input.write_path)
         .bind(&empty_metadata)
         .bind(abstraction_status)
+        .bind(&resolved_tier)
+        .bind(&source_ids_json)
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to insert memory: {}", e)))?;
@@ -270,8 +302,8 @@ impl MemoryStore for PostgresMemoryStore {
             overview_text: None,
             // abstraction_status was computed above and used in the INSERT
             abstraction_status: abstraction_status.to_string(),
-            knowledge_tier: "explicit".to_string(),
-            source_ids: None,
+            knowledge_tier: resolved_tier,
+            source_ids: source_ids_json,
         })
     }
 
@@ -282,7 +314,7 @@ impl MemoryStore for PostgresMemoryStore {
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
-             abstract_text, overview_text, abstraction_status \
+             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
              FROM memories WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(id)
@@ -379,7 +411,7 @@ impl MemoryStore for PostgresMemoryStore {
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
-             abstract_text, overview_text, abstraction_status \
+             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
              FROM memories WHERE id = $1",
         )
         .bind(id)
@@ -486,7 +518,7 @@ impl MemoryStore for PostgresMemoryStore {
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
-             abstract_text, overview_text, abstraction_status \
+             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
              FROM memories {} ORDER BY created_at DESC, id ASC LIMIT ${}",
             where_clause, param_idx
         );

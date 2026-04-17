@@ -73,6 +73,8 @@ fn test_memory(content: &str) -> CreateMemory {
         session_id: None,
         agent_role: None,
         write_path: None,
+        knowledge_tier: None,
+        source_ids: None,
     }
 }
 
@@ -206,6 +208,7 @@ async fn test_quarantined_excluded_from_search_similar(pool: PgPool) {
         created_before: None,
         tags: None,
         audience: None,
+        tier_filter: None,
     };
     let result = store.search_similar(&filter).await.unwrap();
 
