@@ -337,7 +337,7 @@ fn test_tool_discovery() {
     assert!(response["result"]["tools"].is_array());
 
     let tools = response["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 13, "Should have exactly 13 tools");
+    assert_eq!(tools.len(), 16, "Should have exactly 16 tools");
 
     // Check all expected tools are present
     let tool_names: Vec<String> = tools
