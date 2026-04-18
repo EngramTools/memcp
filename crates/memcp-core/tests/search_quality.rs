@@ -191,6 +191,7 @@ async fn test_golden_search_quality(pool: PgPool) {
                 None,
                 None,
                 None, // project
+                Some(vec!["all".into()]), // tier_filter: include all
             )
             .await
             .expect("hybrid_search failed");
@@ -312,6 +313,7 @@ async fn test_golden_no_false_negatives(pool: PgPool) {
             None,
             None,
             None, // project
+            Some(vec!["all".into()]), // tier_filter: include all
         )
         .await
         .expect("hybrid_search failed");
@@ -399,6 +401,7 @@ async fn test_golden_cross_category_isolation(pool: PgPool) {
             None,
             None,
             None, // project
+            Some(vec!["all".into()]), // tier_filter: include all
         )
         .await
         .expect("hybrid_search failed");

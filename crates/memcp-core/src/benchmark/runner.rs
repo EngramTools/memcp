@@ -197,6 +197,7 @@ pub async fn run_benchmark(
                     None, // no source filter for benchmark
                     None, // no audience filter for benchmark
                     None, // no project filter for benchmark
+                    Some(vec!["all".into()]), // benchmark: include all tiers
                 )
                 .await?;
 

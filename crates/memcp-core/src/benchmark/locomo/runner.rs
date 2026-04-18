@@ -234,6 +234,7 @@ pub async fn run_locomo_benchmark(
                         None,
                         None,
                         None,
+                        Some(vec!["all".into()]), // benchmark: include all tiers
                     )
                     .await?;
 

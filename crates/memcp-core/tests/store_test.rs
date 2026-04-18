@@ -418,6 +418,7 @@ async fn test_search_cursor_pagination(pool: PgPool) {
             None,
             None,
             None,
+            Some(vec!["all".into()]), // tier_filter: include all
         )
         .await
         .unwrap();
@@ -444,6 +445,7 @@ async fn test_search_cursor_pagination(pool: PgPool) {
             None,
             None,
             None,
+            Some(vec!["all".into()]), // tier_filter: include all
         )
         .await
         .unwrap();
@@ -496,6 +498,7 @@ async fn test_search_result_has_id(pool: PgPool) {
             None,
             None,
             None,
+            Some(vec!["all".into()]), // tier_filter: include all
         )
         .await
         .unwrap();

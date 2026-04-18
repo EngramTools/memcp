@@ -547,6 +547,7 @@ impl PostgresMemoryStore {
         source: Option<&[String]>,
         audience: Option<&str>,
         project: Option<&str>,
+        tier_filter: Option<Vec<String>>,
     ) -> Result<Vec<crate::search::HybridRawHit>, MemcpError> {
         let candidate_limit = 40i64;
 
@@ -568,7 +569,7 @@ impl PostgresMemoryStore {
                     created_before,
                     tags: tags.map(|t| t.to_vec()),
                     audience: audience.map(|s| s.to_string()),
-                    tier_filter: None,
+                    tier_filter: tier_filter.clone(),
                 };
                 let result = self.search_similar(&filter).await?;
                 result
@@ -638,6 +639,20 @@ impl PostgresMemoryStore {
             hits.retain(|hit| {
                 hit.memory.project.as_deref() == Some(ws) || hit.memory.project.is_none()
             });
+        }
+
+        // Apply tier filter to fused results (BM25/symbolic legs bypass SearchFilter)
+        match &tier_filter {
+            None => {
+                // D-10: exclude raw by default
+                hits.retain(|hit| hit.memory.knowledge_tier != "raw");
+            }
+            Some(tiers) if tiers.iter().any(|t| t == "all") => {
+                // No filtering — return all tiers
+            }
+            Some(tiers) => {
+                hits.retain(|hit| tiers.contains(&hit.memory.knowledge_tier));
+            }
         }
 
         Ok(hits)
@@ -744,6 +759,7 @@ impl PostgresMemoryStore {
         source: Option<&[String]>,
         audience: Option<&str>,
         project: Option<&str>,
+        tier_filter: Option<Vec<String>>,
     ) -> Result<Vec<crate::search::HybridRawHit>, MemcpError> {
         let candidate_limit = 40i64;
 
@@ -835,6 +851,17 @@ impl PostgresMemoryStore {
             });
         }
 
+        // Apply tier filter to fused results (BM25/symbolic legs bypass SearchFilter)
+        match &tier_filter {
+            None => {
+                hits.retain(|hit| hit.memory.knowledge_tier != "raw");
+            }
+            Some(tiers) if tiers.iter().any(|t| t == "all") => {}
+            Some(tiers) => {
+                hits.retain(|hit| tiers.contains(&hit.memory.knowledge_tier));
+            }
+        }
+
         Ok(hits)
     }
 
@@ -855,6 +882,7 @@ impl PostgresMemoryStore {
         source: Option<&[String]>,
         audience: Option<&str>,
         project: Option<&str>,
+        tier_filter: Option<Vec<String>>,
     ) -> Result<SearchResult, MemcpError> {
         let cursor_position: Option<(f64, String)> = if let Some(ref c) = cursor {
             Some(decode_search_keyset_cursor(c)?)
@@ -882,6 +910,7 @@ impl PostgresMemoryStore {
                 source,
                 audience,
                 project,
+                tier_filter,
             )
             .await?;
 

@@ -1722,6 +1722,13 @@ Callable from code_execution_20260120 sandboxes."
             })));
         }
 
+        // 7c. Parse tier filter from params
+        let tier_filter: Option<Vec<String>> = match params.tier.as_deref() {
+            None => None,
+            Some("all") => Some(vec!["all".into()]),
+            Some(list) => Some(list.split(',').map(|s| s.trim().to_string()).collect()),
+        };
+
         // 8. Call hybrid_search — BM25 + vector + symbolic with three-way RRF fusion.
         // Fetch a larger candidate pool when using cursor pagination (need candidates beyond cursor pos).
         // Salience re-ranking happens after, then cursor filtering is applied application-side.
@@ -1762,6 +1769,7 @@ Callable from code_execution_20260120 sandboxes."
                         None,
                         params.audience.as_deref(),
                         params.project.as_deref(),
+                        tier_filter.clone(),
                     )
                     .await
                 {
@@ -1797,6 +1805,7 @@ Callable from code_execution_20260120 sandboxes."
                         None,
                         params.audience.as_deref(),
                         params.project.as_deref(),
+                        tier_filter.clone(),
                     )
                     .await
                 {
@@ -1853,6 +1862,7 @@ Callable from code_execution_20260120 sandboxes."
                     None, // source filter (MCP uses separate params)
                     params.audience.as_deref(),
                     params.project.as_deref(),
+                    tier_filter.clone(),
                 )
                 .await
             {

@@ -108,6 +108,13 @@ pub async fn search_handler(
         (None, None)
     };
 
+    // Parse tier filter from request
+    let tier_filter = match req.tier.as_deref() {
+        None => None,
+        Some("all") => Some(vec!["all".into()]),
+        Some(list) => Some(list.split(',').map(|s| s.trim().to_string()).collect()),
+    };
+
     // Execute hybrid search (single-model path).
     let raw_hits = match store
         .hybrid_search(
@@ -123,6 +130,7 @@ pub async fn search_handler(
             req.source.as_deref(),
             req.audience.as_deref(),
             req.project.as_deref(),
+            tier_filter,
         )
         .await
     {

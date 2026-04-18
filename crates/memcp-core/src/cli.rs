@@ -662,7 +662,7 @@ pub async fn cmd_search(
     min_salience: Option<f64>,
     project: Option<String>,
     depth: u8,
-    _tier: Option<String>,
+    tier: Option<String>,
     show_sources: bool,
 ) -> Result<()> {
     // Validate query size
@@ -671,6 +671,13 @@ pub async fn cmd_search(
 
     let ca = created_after.as_deref().map(parse_datetime).transpose()?;
     let cb = created_before.as_deref().map(parse_datetime).transpose()?;
+
+    // Parse tier filter
+    let tier_filter: Option<Vec<String>> = match tier.as_deref() {
+        None => None,
+        Some("all") => Some(vec!["all".into()]),
+        Some(list) => Some(list.split(',').map(|s| s.trim().to_string()).collect()),
+    };
 
     // Validate min_salience and compute effective threshold (mirrors MCP path).
     if let Some(ms) = min_salience {
@@ -735,6 +742,7 @@ pub async fn cmd_search(
                         source.as_deref(),
                         audience.as_deref(),
                         project.as_deref(),
+                        tier_filter.clone(),
                     )
                     .await
                     .map_err(|e| anyhow::anyhow!("{}", e))?
@@ -756,6 +764,7 @@ pub async fn cmd_search(
                         source.as_deref(),
                         audience.as_deref(),
                         project.as_deref(),
+                        tier_filter,
                     )
                     .await
                     .map_err(|e| anyhow::anyhow!("{}", e))?
@@ -788,6 +797,7 @@ pub async fn cmd_search(
                 source.as_deref(),
                 audience.as_deref(),
                 project.as_deref(),
+                tier_filter,
             )
             .await
             .map_err(|e| anyhow::anyhow!("{}", e))?

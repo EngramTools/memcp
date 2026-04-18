@@ -216,6 +216,7 @@ async fn stress_100k_memories(pool: PgPool) {
             None,      // source
             None,      // audience
             None,      // project
+            Some(vec!["all".into()]), // tier_filter: include all
         )
         .await
         .expect("hybrid_search failed");
