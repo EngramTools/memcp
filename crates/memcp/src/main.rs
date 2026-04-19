@@ -127,6 +127,28 @@ enum Commands {
         #[arg(long, value_delimiter = ',')]
         source_ids: Option<Vec<String>>,
     },
+    /// Ingest conversation turns through the auto-store pipeline (analog of POST /v1/ingest).
+    /// Accepts a batch via --file, --message, or stdin. Emits {results, summary} JSON to stdout.
+    Ingest {
+        /// Path to a JSONL file (one message per line) or JSON array file.
+        #[arg(long, conflicts_with_all = ["message", "stdin"])]
+        file: Option<String>,
+        /// One-shot single message as a JSON object string. Wrapped into a 1-element batch.
+        #[arg(long, conflicts_with_all = ["file", "stdin"])]
+        message: Option<String>,
+        /// Force stdin read. When omitted but stdin is piped, stdin is used automatically.
+        #[arg(long, conflicts_with_all = ["file", "message"])]
+        stdin: bool,
+        /// Source provenance identifier (e.g. "telegram-bot", "web-chat").
+        #[arg(long)]
+        source: String,
+        /// Session identifier for conversation grouping.
+        #[arg(long = "session-id")]
+        session_id: String,
+        /// Project scope. Required per D-09 "no hollow memories".
+        #[arg(long, alias = "project")]
+        project: String,
+    },
     /// Search memories by keyword + metadata matching with salience ranking
     Search {
         query: String,
@@ -1048,6 +1070,21 @@ async fn main() -> Result<()> {
                 )
                 .await?;
             }
+        }
+
+        Commands::Ingest {
+            file,
+            message,
+            stdin,
+            source,
+            session_id,
+            project,
+        } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_ingest(
+                &store, &config, file, message, stdin, source, session_id, project,
+            )
+            .await?;
         }
 
         Commands::Search {
@@ -2210,6 +2247,11 @@ async fn main() -> Result<()> {
 
             // 10. Create service with store, pipeline, embedding provider, salience config, extraction pipeline, and QI providers
             let pg_store_for_search = store.clone();
+            // Snapshot the embedding + extraction queue senders BEFORE moving the pipelines
+            // into MemoryService — the ingest MCP tools need them to enqueue jobs after store.
+            let embed_sender_for_ingest = Some(pipeline.sender());
+            let extract_sender_for_ingest =
+                extraction_pipeline.as_ref().map(|ep| ep.sender());
             let mut service = MemoryService::new(
                 store as Arc<dyn memcp::store::MemoryStore + Send + Sync>,
                 Some(pipeline),
@@ -2230,6 +2272,14 @@ async fn main() -> Result<()> {
             service.set_reembed_on_tag_change(config.embedding.reembed_on_tag_change);
             service.set_resource_limits(config.resource_limits.clone(), config.gc.clone());
             service.set_input_limits(config.input_limits.clone());
+            // Phase 24.5 Plan 04: wire ingest MCP tool deps.
+            service.set_embed_sender(embed_sender_for_ingest);
+            service.set_extract_sender(extract_sender_for_ingest);
+            service.set_ingest_config(config.ingest.clone());
+            service.set_user_birth_year(config.user.birth_year);
+            // Summarization provider stays None here — `memcp serve` doesn't spin up a
+            // summarization backend; the daemon path does. Ingest tools then simply
+            // skip summarization (passthrough) which is safe per D-10.
 
             // 11. Serve via stdio transport
             let (stdin, stdout) = rmcp::transport::io::stdio();

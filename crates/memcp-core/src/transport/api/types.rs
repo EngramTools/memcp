@@ -219,7 +219,7 @@ pub struct BatchGetRequest {
 // ---------------------------------------------------------------------------
 
 /// Single conversation turn inside an `IngestRequest` batch.
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IngestMessage {
     /// Conversation role: "user" | "assistant" | "tool" | "system" | "function".
     /// Only "assistant" triggers summarization (D-12).
@@ -240,7 +240,7 @@ pub struct IngestMessage {
 }
 
 /// Request body for POST /v1/ingest.
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IngestRequest {
     /// Batch of messages, processed sequentially. Capped by `config.ingest.max_batch_size`.
     pub messages: Vec<IngestMessage>,

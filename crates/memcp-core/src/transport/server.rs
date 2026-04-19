@@ -128,6 +128,14 @@ pub struct MemoryService {
     last_auto_gc: Arc<std::sync::Mutex<Option<Instant>>>,
     ref_map: UuidRefMap,
     input_limits: crate::validation::InputLimitsConfig,
+    // Phase 24.5 Plan 04: ingest MCP tool dependencies (mirror AppState fields
+    // the HTTP /v1/ingest handler uses). All optional; `ingest_messages` tool
+    // surfaces a structured error when pg_store is absent (sqlite backend etc).
+    summarization_provider: Option<Arc<dyn crate::summarization::SummarizationProvider>>,
+    embed_sender: Option<tokio::sync::mpsc::Sender<EmbeddingJob>>,
+    extract_sender: Option<tokio::sync::mpsc::Sender<ExtractionJob>>,
+    ingest_config: crate::config::IngestConfig,
+    user_birth_year: Option<u32>,
 }
 
 impl MemoryService {
@@ -175,7 +183,47 @@ impl MemoryService {
             last_auto_gc: Arc::new(std::sync::Mutex::new(None)),
             ref_map: UuidRefMap::new(),
             input_limits: crate::validation::InputLimitsConfig::default(),
+            summarization_provider: None,
+            embed_sender: None,
+            extract_sender: None,
+            ingest_config: crate::config::IngestConfig::default(),
+            user_birth_year: None,
         }
+    }
+
+    /// Wire the summarization provider used by the `ingest_messages` / `ingest_message`
+    /// MCP tools (D-10 pipeline parity with /v1/ingest). `None` => passthrough.
+    pub fn set_summarization_provider(
+        &mut self,
+        provider: Option<Arc<dyn crate::summarization::SummarizationProvider>>,
+    ) {
+        self.summarization_provider = provider;
+    }
+
+    /// Wire the embedding queue sender used by the ingest MCP tools.
+    pub fn set_embed_sender(
+        &mut self,
+        sender: Option<tokio::sync::mpsc::Sender<EmbeddingJob>>,
+    ) {
+        self.embed_sender = sender;
+    }
+
+    /// Wire the extraction queue sender used by the ingest MCP tools.
+    pub fn set_extract_sender(
+        &mut self,
+        sender: Option<tokio::sync::mpsc::Sender<ExtractionJob>>,
+    ) {
+        self.extract_sender = sender;
+    }
+
+    /// Wire the ingest config (max_batch_size / max_content_size) surfaced to MCP tools.
+    pub fn set_ingest_config(&mut self, config: crate::config::IngestConfig) {
+        self.ingest_config = config;
+    }
+
+    /// Wire the user birth_year used for temporal age-relative phrases in ingest.
+    pub fn set_user_birth_year(&mut self, birth_year: Option<u32>) {
+        self.user_birth_year = birth_year;
     }
 
     /// Update the input limits configuration.
@@ -270,6 +318,45 @@ impl MemoryService {
             }
         }
         router
+    }
+
+    /// Shared body for `ingest_messages` and `ingest_message` MCP tools — builds a
+    /// `ProcessMessageContext` from MemoryService fields and delegates to
+    /// `transport::api::ingest::run_ingest_batch_with_ctx` (same function the HTTP
+    /// handler uses). Returns a structured CallToolResult with `{results, summary}`.
+    async fn run_ingest_via_tool(
+        &self,
+        req: crate::transport::api::types::IngestRequest,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(pg_store) = self.pg_store.as_ref() else {
+            return Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": "ingest tools require a PostgreSQL store — current backend does not support ingest"
+            })));
+        };
+
+        let embed_sender = self.embed_sender.clone();
+        let extract_sender = self.extract_sender.clone();
+
+        let helper_ctx = crate::pipeline::auto_store::shared::ProcessMessageContext {
+            store: pg_store,
+            redaction_engine: self.redaction_engine.as_deref(),
+            content_filter: self.content_filter.as_ref(),
+            summarization_provider: self.summarization_provider.as_ref(),
+            embed_sender: embed_sender.as_ref(),
+            extract_sender: extract_sender.as_ref(),
+        };
+
+        let (_status, value) = crate::transport::api::ingest::run_ingest_batch_with_ctx(
+            &helper_ctx,
+            self.ingest_config.max_batch_size,
+            self.ingest_config.max_content_size,
+            self.user_birth_year,
+            req,
+        )
+        .await;
+
+        Ok(CallToolResult::structured(value))
     }
 }
 
@@ -754,6 +841,85 @@ fn apply_field_projection(
             } else {
                 obj
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 24.5 Plan 04: ingest_messages + ingest_message MCP tool params.
+//
+// Mirror the HTTP /v1/ingest request shape 1:1 per D-22. The single-message
+// wrapper (`IngestSingleMessageParams`) flattens the message fields at the top
+// level so LLMs can call it as one object rather than nesting a `message` key.
+// ---------------------------------------------------------------------------
+
+/// Single conversation turn inside an `IngestMessagesParams` batch.
+///
+/// Mirrors `transport::api::types::IngestMessage`; separate struct because that
+/// one is Deserialize-only and we need JsonSchema for the MCP tool catalogue.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct IngestMessageParams {
+    /// Conversation role: "user" | "assistant" | "tool" | "system" | "function".
+    /// Only "assistant" triggers summarization (D-12).
+    pub role: String,
+    /// Raw message content. Redacted before storage (D-10).
+    pub content: String,
+    /// Optional caller-supplied RFC3339 timestamp. Defaults to now() when absent.
+    #[serde(default)]
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    /// Optional caller-supplied idempotency key. Server computes SHA-256 over
+    /// (source, session_id, timestamp, role, content) when omitted (D-13).
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    /// Optional caller-supplied reply-to memory id. Overrides within-batch
+    /// auto-chaining when set (D-18).
+    #[serde(default)]
+    pub reply_to_id: Option<String>,
+}
+
+/// Params for `ingest_messages` MCP tool — a batch of conversation turns.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct IngestMessagesParams {
+    /// Batch of messages, processed sequentially. reply_to auto-chains within the batch
+    /// unless a caller-supplied `reply_to_id` is present on a message.
+    pub messages: Vec<IngestMessageParams>,
+    /// Source provenance (e.g. "telegram-bot", "web-chat", "anthropic-sdk").
+    pub source: String,
+    /// Session identifier for conversation grouping. Required per D-23 "no hollow memories".
+    pub session_id: String,
+    /// Project scope. Required per D-23 "no hollow memories".
+    pub project: String,
+}
+
+/// Params for `ingest_message` MCP tool — single-message convenience wrapper.
+///
+/// Flattens the message fields so LLMs can pass one flat object rather than
+/// constructing `{ "message": {...}, "source": ..., ... }`.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct IngestSingleMessageParams {
+    /// Same field as IngestMessageParams.role.
+    pub role: String,
+    /// Same field as IngestMessageParams.content.
+    pub content: String,
+    #[serde(default)]
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    #[serde(default)]
+    pub reply_to_id: Option<String>,
+    pub source: String,
+    pub session_id: String,
+    pub project: String,
+}
+
+impl From<IngestMessageParams> for crate::transport::api::types::IngestMessage {
+    fn from(p: IngestMessageParams) -> Self {
+        crate::transport::api::types::IngestMessage {
+            role: p.role,
+            content: p.content,
+            timestamp: p.timestamp,
+            idempotency_key: p.idempotency_key,
+            reply_to_id: p.reply_to_id,
         }
     }
 }
@@ -2285,6 +2451,73 @@ Callable from code_execution_20260120 sandboxes."
             }
             Err(e) => Ok(store_error_to_result(e)),
         }
+    }
+
+    #[tool(
+        description = "Ingest a batch of conversation turns through the auto-store pipeline. \
+Returns {\"results\": [{\"index\", \"status\": \"stored\"|\"filtered\"|\"duplicate\"|\"error\", \"memory_id\"?, \"reason\"?}], \"summary\": {\"stored\", \"filtered\", \"duplicate\", \"errored\"}}. \
+Mirrors POST /v1/ingest semantics: same redaction, content filter, summarization, and salience-seed pipeline as auto-store. \
+Params: messages (required array of {role, content, timestamp?, idempotency_key?, reply_to_id?}), source (required, e.g. \"telegram-bot\"), session_id (required — groups turns into a conversation), project (required — D-09 no-hollow-memories). \
+reply_to_id auto-chains within the batch (msg[N] replies to msg[N-1]) unless the caller supplies one explicitly."
+    )]
+    async fn ingest_messages(
+        &self,
+        Parameters(params): Parameters<IngestMessagesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tracing::info!(
+            tool = "ingest_messages",
+            source = %params.source,
+            session_id = %params.session_id,
+            project = %params.project,
+            count = params.messages.len(),
+            "Tool called"
+        );
+
+        let req = crate::transport::api::types::IngestRequest {
+            messages: params
+                .messages
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            source: params.source,
+            session_id: params.session_id,
+            project: params.project,
+        };
+        self.run_ingest_via_tool(req).await
+    }
+
+    #[tool(
+        description = "Convenience wrapper around ingest_messages for a single conversation turn. \
+Same pipeline, same result shape — results[0] holds the outcome for the one message. \
+Params: role (required), content (required), source (required), session_id (required), project (required), timestamp? / idempotency_key? / reply_to_id?."
+    )]
+    async fn ingest_message(
+        &self,
+        Parameters(params): Parameters<IngestSingleMessageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        tracing::info!(
+            tool = "ingest_message",
+            source = %params.source,
+            session_id = %params.session_id,
+            project = %params.project,
+            role = %params.role,
+            "Tool called"
+        );
+
+        let msg = crate::transport::api::types::IngestMessage {
+            role: params.role,
+            content: params.content,
+            timestamp: params.timestamp,
+            idempotency_key: params.idempotency_key,
+            reply_to_id: params.reply_to_id,
+        };
+        let req = crate::transport::api::types::IngestRequest {
+            messages: vec![msg],
+            source: params.source,
+            session_id: params.session_id,
+            project: params.project,
+        };
+        self.run_ingest_via_tool(req).await
     }
 
     #[tool(

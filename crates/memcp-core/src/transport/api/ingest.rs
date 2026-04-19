@@ -14,12 +14,38 @@ use std::sync::atomic::Ordering;
 use axum::{extract::State, http::StatusCode, Json};
 use sha2::{Digest, Sha256};
 
-use super::types::{error_json, IngestRequest, IngestResult, IngestSummary};
+use super::types::{error_json, IngestMessage, IngestRequest, IngestResult, IngestSummary};
 use crate::pipeline::auto_store::shared::{
     process_ingest_message, ProcessMessageContext, ProcessMessageInput, ProcessOutcome,
 };
 use crate::store::StoreOutcome;
 use crate::transport::health::AppState;
+
+/// D-21: Auto-detect JSONL (one object per line) vs JSON array (`[{...},{...}]`)
+/// by the first non-whitespace character and parse into a `Vec<IngestMessage>`.
+///
+/// Empty / whitespace-only input returns `Ok(vec![])`.
+///
+/// Used by:
+///   - CLI `memcp ingest --file ...` and stdin-piped ingest (Plan 24.5-04).
+///   - Any future callers that need to accept both wire formats transparently.
+pub fn parse_ingest_stream(raw: &str) -> serde_json::Result<Vec<IngestMessage>> {
+    let trimmed = raw.trim_start();
+    let first = match trimmed.chars().next() {
+        Some(c) => c,
+        None => return Ok(Vec::new()),
+    };
+    if first == '[' {
+        serde_json::from_str(trimmed)
+    } else {
+        // JSONL: stream-deserialize each object, surface the first error if any.
+        let mut out = Vec::new();
+        for res in serde_json::Deserializer::from_str(trimmed).into_iter::<IngestMessage>() {
+            out.push(res?);
+        }
+        Ok(out)
+    }
+}
 
 /// D-13: Deterministic SHA-256 idempotency key over (source, session_id, timestamp, role, content).
 ///
@@ -80,19 +106,6 @@ pub async fn run_ingest_batch(
     state: &AppState,
     req: IngestRequest,
 ) -> (StatusCode, serde_json::Value) {
-    // Batch-size guard (D-20 / T-24.5-03).
-    let max_batch = state.config.ingest.max_batch_size;
-    if req.messages.len() > max_batch {
-        return (
-            StatusCode::BAD_REQUEST,
-            error_json(&format!(
-                "batch size {} exceeds configured max_batch_size {}",
-                req.messages.len(),
-                max_batch
-            )),
-        );
-    }
-
     let store = match state.store.as_ref() {
         Some(s) => s,
         None => {
@@ -112,9 +125,49 @@ pub async fn run_ingest_batch(
         extract_sender: state.extract_sender.as_ref(),
     };
 
-    let max_content = state.config.ingest.max_content_size;
-    let total = req.messages.len();
+    run_ingest_batch_with_ctx(
+        &helper_ctx,
+        state.config.ingest.max_batch_size,
+        state.config.ingest.max_content_size,
+        state.config.user.birth_year,
+        req,
+    )
+    .await
+}
 
+/// Pipeline-agnostic per-message batch loop shared by HTTP, MCP, and CLI callers.
+///
+/// HTTP callers provide `&AppState` via `run_ingest_batch`. MCP and CLI callers
+/// build their own `ProcessMessageContext` and pass the per-config caps directly,
+/// so they do NOT need a full `AppState` (no rate-limit layer, no ready bool).
+///
+/// Semantics are identical to `run_ingest_batch`:
+///   - Batch-size cap check (T-24.5-03).
+///   - Per-message content-size cap (T-24.5-03).
+///   - D-18 > D-17 reply chain with prev-id advance on Stored and Deduplicated only.
+///   - D-13 auto-computed idempotency_key when absent.
+///   - D-14 Stored vs Deduplicated status mapping.
+///   - D-08 per-message errors do not abort the batch.
+pub async fn run_ingest_batch_with_ctx<'a>(
+    helper_ctx: &ProcessMessageContext<'a>,
+    max_batch: usize,
+    max_content: usize,
+    birth_year: Option<u32>,
+    req: IngestRequest,
+) -> (StatusCode, serde_json::Value) {
+    // Batch-size guard (D-20 / T-24.5-03).
+    if req.messages.len() > max_batch {
+        return (
+            StatusCode::BAD_REQUEST,
+            error_json(&format!(
+                "batch size {} exceeds configured max_batch_size {}",
+                req.messages.len(),
+                max_batch
+            )),
+        );
+    }
+
+    let total = req.messages.len();
     let mut results: Vec<IngestResult> = Vec::with_capacity(total);
     let mut summary = IngestSummary::default();
     // D-17: track last successfully stored memory id so msg[N+1] chains to msg[N].
@@ -170,10 +223,10 @@ pub async fn run_ingest_batch(
             write_path: "ingest",
             base_tags: Vec::new(),
             category: None,
-            birth_year: state.config.user.birth_year,
+            birth_year,
         };
 
-        let outcome = process_ingest_message(&helper_ctx, input).await;
+        let outcome = process_ingest_message(helper_ctx, input).await;
 
         match outcome {
             ProcessOutcome::Stored {

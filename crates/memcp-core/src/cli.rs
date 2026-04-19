@@ -499,6 +499,139 @@ pub async fn cmd_store(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// cmd_ingest — Phase 24.5 Plan 04 batch ingestion CLI subcommand
+// ---------------------------------------------------------------------------
+
+/// CLI entry for `memcp ingest`. Resolves input from `--file`, `--message`, or
+/// stdin (explicit `--stdin` flag or piped) and dispatches to
+/// `cmd_ingest_from_reader` which is testable without touching real stdin.
+///
+/// Emits pretty-printed `{results, summary}` JSON to stdout.
+#[allow(clippy::too_many_arguments)] // CLI args map to command-line flags
+pub async fn cmd_ingest(
+    store: &Arc<PostgresMemoryStore>,
+    config: &Config,
+    file: Option<String>,
+    message: Option<String>,
+    stdin_flag: bool,
+    source: String,
+    session_id: String,
+    project: String,
+) -> Result<()> {
+    use std::io::IsTerminal;
+
+    // Dispatch by input mode. The `--message` path wraps the JSON object into a
+    // single-element batch to avoid re-using the JSONL/array auto-detect path.
+    let value = if let Some(msg_str) = message {
+        cmd_ingest_from_message_str(store, config, &msg_str, source, session_id, project).await?
+    } else if let Some(path) = file {
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("failed to read --file '{}': {}", path, e))?;
+        cmd_ingest_from_reader(
+            store,
+            config,
+            std::io::Cursor::new(raw),
+            source,
+            session_id,
+            project,
+        )
+        .await?
+    } else if stdin_flag || !std::io::stdin().is_terminal() {
+        cmd_ingest_from_reader(
+            store,
+            config,
+            std::io::stdin(),
+            source,
+            session_id,
+            project,
+        )
+        .await?
+    } else {
+        anyhow::bail!("no input: provide --file, --message, or pipe via stdin");
+    };
+
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
+
+/// Testable seam for `cmd_ingest`: reads an arbitrary `Read`, auto-detects
+/// JSONL vs JSON array via `parse_ingest_stream`, and dispatches to the shared
+/// batch loop (same code path as HTTP / MCP).
+pub async fn cmd_ingest_from_reader<R: std::io::Read>(
+    store: &Arc<PostgresMemoryStore>,
+    config: &Config,
+    mut reader: R,
+    source: String,
+    session_id: String,
+    project: String,
+) -> Result<serde_json::Value> {
+    let mut raw = String::new();
+    reader
+        .read_to_string(&mut raw)
+        .map_err(|e| anyhow::anyhow!("failed to read ingest input: {}", e))?;
+    let messages = crate::transport::api::ingest::parse_ingest_stream(&raw)
+        .map_err(|e| anyhow::anyhow!("failed to parse ingest input: {}", e))?;
+
+    let req = crate::transport::api::types::IngestRequest {
+        messages,
+        source,
+        session_id,
+        project,
+    };
+    run_cmd_ingest(store, config, req).await
+}
+
+/// Internal helper for `--message '{...}'` — deserializes a single JSON object
+/// into an `IngestMessage` and wraps it in a 1-element batch.
+async fn cmd_ingest_from_message_str(
+    store: &Arc<PostgresMemoryStore>,
+    config: &Config,
+    msg_str: &str,
+    source: String,
+    session_id: String,
+    project: String,
+) -> Result<serde_json::Value> {
+    let msg: crate::transport::api::types::IngestMessage = serde_json::from_str(msg_str)
+        .map_err(|e| anyhow::anyhow!("invalid --message JSON: {}", e))?;
+    let req = crate::transport::api::types::IngestRequest {
+        messages: vec![msg],
+        source,
+        session_id,
+        project,
+    };
+    run_cmd_ingest(store, config, req).await
+}
+
+/// Build a `ProcessMessageContext` from CLI resources and invoke
+/// `run_ingest_batch_with_ctx`. CLI is DB-direct like other subcommands — no
+/// AppState, no rate-limit layer. Skips summarization / content filter /
+/// embedding enqueue (each is optional in the shared helper).
+async fn run_cmd_ingest(
+    store: &Arc<PostgresMemoryStore>,
+    config: &Config,
+    req: crate::transport::api::types::IngestRequest,
+) -> Result<serde_json::Value> {
+    let helper_ctx = crate::pipeline::auto_store::shared::ProcessMessageContext {
+        store,
+        redaction_engine: None,
+        content_filter: None,
+        summarization_provider: None,
+        embed_sender: None,
+        extract_sender: None,
+    };
+
+    let (_status, value) = crate::transport::api::ingest::run_ingest_batch_with_ctx(
+        &helper_ctx,
+        config.ingest.max_batch_size,
+        config.ingest.max_content_size,
+        config.user.birth_year,
+        req,
+    )
+    .await;
+    Ok(value)
+}
+
 /// Update a memory's content or metadata in place.
 ///
 /// At least one of content, type_hint, source, or tags must be provided.
