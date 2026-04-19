@@ -54,3 +54,9 @@ mod entropy;
 
 #[path = "unit/abstraction.rs"]
 mod abstraction;
+
+#[path = "unit/ingest_hash.rs"]
+mod ingest_hash;
+
+#[path = "unit/ingest_parse.rs"]
+mod ingest_parse;
