@@ -5,12 +5,14 @@
 //! be layered on `/v1/*` in Phase 12 without affecting /health or /status.
 
 pub mod annotate;
+pub mod auth;
 pub mod batch_get;
 pub mod delete;
 pub mod discover;
 pub mod entities;
 pub mod export;
 pub mod graph;
+pub mod ingest;
 pub mod pipeline;
 pub mod recall;
 pub mod search;

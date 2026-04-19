@@ -213,3 +213,67 @@ pub struct BatchGetRequest {
     /// Memory IDs to retrieve (max 50).
     pub ids: Vec<String>,
 }
+
+// ---------------------------------------------------------------------------
+// Phase 24.5 — POST /v1/ingest DTOs
+// ---------------------------------------------------------------------------
+
+/// Single conversation turn inside an `IngestRequest` batch.
+#[derive(Deserialize)]
+pub struct IngestMessage {
+    /// Conversation role: "user" | "assistant" | "tool" | "system" | "function".
+    /// Only "assistant" triggers summarization (D-12).
+    pub role: String,
+    /// Raw message content. Runs through RedactionEngine before storage (D-10).
+    pub content: String,
+    /// Optional client-supplied timestamp. Defaults to `Utc::now()` when absent.
+    #[serde(default)]
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    /// Caller-supplied idempotency key (D-13). When absent, the handler computes
+    /// `make_idempotency_key(source, session_id, timestamp, role, content)`.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    /// Caller-supplied reply-to link (D-18). Overrides within-batch auto-chain
+    /// when present.
+    #[serde(default)]
+    pub reply_to_id: Option<String>,
+}
+
+/// Request body for POST /v1/ingest.
+#[derive(Deserialize)]
+pub struct IngestRequest {
+    /// Batch of messages, processed sequentially. Capped by `config.ingest.max_batch_size`.
+    pub messages: Vec<IngestMessage>,
+    /// Provenance tag written to every stored memory (e.g., "telegram-bot").
+    pub source: String,
+    /// Session grouping identifier (D-23 "no hollow memories" — required).
+    pub session_id: String,
+    /// Project scope (D-23 — required).
+    pub project: String,
+}
+
+/// Per-message result row in the `/v1/ingest` response.
+#[derive(Serialize)]
+pub struct IngestResult {
+    /// Zero-based index into the request `messages` array.
+    pub index: usize,
+    /// "stored" | "filtered" | "duplicate" | "error".
+    pub status: &'static str,
+    /// Memory ID — populated on "stored" and "duplicate" statuses.
+    pub memory_id: Option<String>,
+    /// Explanation for filtered/error statuses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Embedding lifecycle hint — "pending" when a job was enqueued (D-09).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding_status: Option<&'static str>,
+}
+
+/// Aggregate counts attached to the `/v1/ingest` response body.
+#[derive(Serialize, Default)]
+pub struct IngestSummary {
+    pub stored: usize,
+    pub filtered: usize,
+    pub duplicate: usize,
+    pub errored: usize,
+}
