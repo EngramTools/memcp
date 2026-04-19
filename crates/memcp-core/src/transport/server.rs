@@ -923,6 +923,7 @@ Callable from code_execution_20260120 sandboxes."
             write_path: params.write_path,
             knowledge_tier: params.knowledge_tier,
             source_ids: params.source_ids,
+            reply_to_id: None,
         };
 
         // Determine if sync store is requested

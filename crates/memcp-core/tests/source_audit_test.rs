@@ -37,6 +37,7 @@ async fn test_direct_store_preserves_source(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -81,6 +82,7 @@ async fn test_user_actor_type_gets_high_trust(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();

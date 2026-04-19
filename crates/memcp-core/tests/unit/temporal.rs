@@ -45,6 +45,7 @@ fn make_memory(created_at: DateTime<Utc>, event_time: Option<DateTime<Utc>>) -> 
         abstraction_status: "skipped".to_string(),
         knowledge_tier: "explicit".to_string(),
         source_ids: None,
+        reply_to_id: None,
     }
 }
 

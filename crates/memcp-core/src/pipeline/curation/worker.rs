@@ -196,6 +196,7 @@ async fn execute_curation(
                         write_path: Some("curation_merge".to_string()),
                         knowledge_tier: None,
                         source_ids: None,
+                        reply_to_id: None,
                     };
 
                     match store.store(new_memory).await {
@@ -568,6 +569,7 @@ mod tests {
             abstraction_status: "skipped".to_string(),
             knowledge_tier: "explicit".to_string(),
             source_ids: None,
+            reply_to_id: None,
         }
     }
 

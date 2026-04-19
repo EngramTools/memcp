@@ -449,6 +449,7 @@ pub async fn cmd_store(
         write_path: Some("explicit_store".to_string()),
         knowledge_tier,
         source_ids,
+        reply_to_id: None,
     };
 
     let memory = store

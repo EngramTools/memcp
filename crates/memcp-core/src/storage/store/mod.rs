@@ -93,6 +93,8 @@ pub struct Memory {
     /// Source memory IDs (JSONB array of UUID strings).
     /// Required non-empty when tier = "derived" (D-04). Optional for "pattern". Null for others.
     pub source_ids: Option<serde_json::Value>,
+    /// D-16: conversation-threading link. None for non-reply memories. Distinct from parent_id (chunking).
+    pub reply_to_id: Option<String>,
 }
 
 /// Input type for creating a new memory.
@@ -165,6 +167,9 @@ pub struct CreateMemory {
     /// Provenance source memory IDs. Required (non-empty) when knowledge_tier = "derived" (D-04).
     #[serde(default)]
     pub source_ids: Option<Vec<String>>,
+    /// D-16: conversation-threading link. None for non-reply memories. Distinct from parent_id (chunking).
+    #[serde(default)]
+    pub reply_to_id: Option<String>,
 }
 
 fn default_type_hint() -> String {

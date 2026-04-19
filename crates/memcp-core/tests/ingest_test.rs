@@ -195,10 +195,37 @@ async fn test_cli_ingest_message_flag() {
 // Migration 027 — reply_to_id column
 // ---------------------------------------------------------------------------
 
-/// Migration 027: `reply_to_id` column exists and is nullable.
-/// Intentionally `#[sqlx::test]` — needs a live pool to query information_schema.
-#[ignore = "24.5 impl pending"]
+/// Migration 027: `reply_to_id` column exists, is nullable TEXT, and the partial index exists.
+/// Intentionally `#[sqlx::test]` — needs a live pool to query information_schema / pg_indexes.
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
-async fn test_reply_to_id_migration(_pool: sqlx::PgPool) {
-    unimplemented!("24.5");
+async fn test_reply_to_id_migration(pool: sqlx::PgPool) {
+    use sqlx::Row;
+
+    // Column exists, nullable TEXT.
+    let row = sqlx::query(
+        "SELECT data_type, is_nullable FROM information_schema.columns \
+         WHERE table_name = 'memories' AND column_name = 'reply_to_id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("information_schema should list reply_to_id column after migration 027");
+
+    let data_type: String = row.try_get("data_type").unwrap();
+    let is_nullable: String = row.try_get("is_nullable").unwrap();
+    assert_eq!(data_type, "text", "reply_to_id should be TEXT");
+    assert_eq!(is_nullable, "YES", "reply_to_id should be nullable");
+
+    // Partial index exists.
+    let idx_row = sqlx::query(
+        "SELECT indexname FROM pg_indexes \
+         WHERE tablename = 'memories' AND indexname = 'idx_memories_reply_to_id'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .expect("pg_indexes query should succeed");
+
+    assert!(
+        idx_row.is_some(),
+        "idx_memories_reply_to_id partial index should exist after migration 027"
+    );
 }

@@ -304,6 +304,7 @@ impl MemoryStore for PostgresMemoryStore {
             abstraction_status: abstraction_status.to_string(),
             knowledge_tier: resolved_tier,
             source_ids: source_ids_json,
+            reply_to_id: None,
         })
     }
 

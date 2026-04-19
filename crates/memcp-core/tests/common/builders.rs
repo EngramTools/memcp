@@ -19,8 +19,6 @@ pub struct MemoryBuilder {
     write_path: Option<String>,
     knowledge_tier: Option<String>,
     source_ids: Option<Vec<String>>,
-    // TODO(24.5-01): thread self.reply_to_id into CreateMemory once the field lands.
-    #[allow(dead_code)]
     reply_to_id: Option<String>,
 }
 
@@ -119,11 +117,6 @@ impl MemoryBuilder {
     }
 
     /// Set the `reply_to_id` for conversation threading (Phase 24.5 / D-16).
-    ///
-    /// Note: until Plan 24.5-01 adds `reply_to_id` to `CreateMemory`, this value is
-    /// stored on the builder but NOT threaded into the produced `CreateMemory`.
-    /// See TODO(24.5-01) in `build()`.
-    #[allow(dead_code)]
     pub fn reply_to_id(mut self, id: &str) -> Self {
         self.reply_to_id = Some(id.to_string());
         self
@@ -153,7 +146,7 @@ impl MemoryBuilder {
             write_path: self.write_path,
             knowledge_tier: self.knowledge_tier,
             source_ids: self.source_ids,
-            // TODO(24.5-01): thread self.reply_to_id into CreateMemory once the field lands.
+            reply_to_id: self.reply_to_id,
         }
     }
 

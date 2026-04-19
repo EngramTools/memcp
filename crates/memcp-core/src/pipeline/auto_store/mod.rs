@@ -367,6 +367,7 @@ async fn run_worker(
             write_path: Some("auto_store".to_string()),
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         };
 
         match store.store(create).await {
@@ -503,6 +504,7 @@ async fn run_worker(
                             write_path: Some("auto_store".to_string()),
                             knowledge_tier: None,
                             source_ids: None,
+                            reply_to_id: None,
                         };
 
                         match store.store(chunk_create).await {

@@ -692,5 +692,6 @@ pub(crate) fn row_to_memory(row: &PgRow) -> Result<Memory, MemcpError> {
             .try_get("knowledge_tier")
             .unwrap_or_else(|_| "explicit".to_string()),
         source_ids: row.try_get("source_ids").unwrap_or(None),
+        reply_to_id: row.try_get("reply_to_id").unwrap_or(None),
     })
 }

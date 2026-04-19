@@ -155,6 +155,7 @@ pub async fn store_handler(
         write_path: req.write_path,
         knowledge_tier: req.knowledge_tier,
         source_ids: req.source_ids,
+        reply_to_id: None,
     };
 
     let memory = match store.store(input).await {

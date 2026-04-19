@@ -401,6 +401,7 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -430,6 +431,7 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -463,6 +465,7 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -490,6 +493,7 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -529,6 +533,7 @@ async fn test_idempotency_dedup_journey(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -573,6 +578,7 @@ async fn test_store_list_get_delete_journey(pool: PgPool) {
                 write_path: None,
                 knowledge_tier: None,
                 source_ids: None,
+                reply_to_id: None,
             })
             .await
             .unwrap();

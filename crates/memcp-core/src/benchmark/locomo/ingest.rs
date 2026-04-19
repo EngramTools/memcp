@@ -76,6 +76,7 @@ async fn ingest_per_turn(
                 write_path: None,
                 knowledge_tier: None,
                 source_ids: None,
+                reply_to_id: None,
             };
 
             let stored = store.store(memory).await?;
@@ -143,6 +144,7 @@ async fn ingest_per_session(
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         };
 
         let stored = store.store(memory).await?;

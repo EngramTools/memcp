@@ -41,6 +41,7 @@ async fn test_trust_inference_from_source_and_actor_type(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -74,6 +75,7 @@ async fn test_trust_inference_from_source_and_actor_type(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -107,6 +109,7 @@ async fn test_trust_inference_from_source_and_actor_type(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -145,6 +148,7 @@ async fn test_explicit_trust_level_honored(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -192,6 +196,7 @@ async fn test_session_id_stored_and_filterable(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -220,6 +225,7 @@ async fn test_session_id_stored_and_filterable(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -269,6 +275,7 @@ async fn test_agent_role_stored_and_filterable(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -297,6 +304,7 @@ async fn test_agent_role_stored_and_filterable(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
@@ -346,6 +354,7 @@ async fn test_update_trust_level_audit_trail(pool: PgPool) {
             write_path: None,
             knowledge_tier: None,
             source_ids: None,
+            reply_to_id: None,
         })
         .await
         .unwrap();
