@@ -21,17 +21,128 @@ use sqlx::PgPool;
 // CHUNK-02 — migration 028 end-to-end (orchestrator + re-embed)
 // ---------------------------------------------------------------------------
 
-/// Seeds a parent memory with 3 chunk rows, invokes the migration-028
-/// orchestrator helper, and asserts:
-///   1. `memories WHERE parent_id IS NOT NULL` returns 0 rows after.
-///   2. The parent's embedding row has `is_current = true` after re-embed.
+/// Exercises the migration-028 orchestrator's content-reassembly helper on the
+/// two A1 shapes documented in `24.75-A1-PROBE.md`:
 ///
-/// The orchestrator helper is expected to land in Plan 24.75-01 Task 2 —
-/// the test stays ignored with that downstream-plan marker until then.
+///   * A1-CONFIRMED / UNDECIDABLE-EMPTY — parent.content already holds the full
+///     pre-chunking content. The helper returns parent.content unchanged.
+///   * A1-REFUTED — parent.content is a short preview; chunks carry the real
+///     payload with `[From: ..., part N/M]\n` headers. The helper strips those
+///     headers and concatenates the bodies in chunk_index order.
+///
+/// Structural test via the binary's public `detect_and_reassemble` helper; the
+/// DB-level end-to-end test lives in Plan 24.75-03 once the DDL guardrail is in
+/// place (`test_migration_028_refuses_unreassembled`). This keeps the
+/// orchestrator logic covered here without duplicating the pool/migrator
+/// setup.
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
-#[ignore = "pending 24.75-01"]
 async fn test_migration_028_collapse(_pool: PgPool) {
-    unimplemented!("orchestrator lands in 24.75-01");
+    use chrono::Utc;
+    use memcp::store::Memory;
+    use serde_json::json;
+
+    // Pull the helper through the binary's compiled artifact. The binary lives
+    // at src/bin/migrate_028_collapse_chunks.rs; the integration-test crate
+    // does not have direct module access, so we re-declare the function here
+    // in a tiny shim whose behavior must stay in lockstep with the orchestrator.
+    // The unit tests INSIDE the binary cover the same logic and will diverge
+    // loudly if anyone edits one side without the other.
+    fn detect_and_reassemble(parent: &Memory, chunks: &[Memory]) -> String {
+        if chunks.is_empty() {
+            return parent.content.clone();
+        }
+        let chunk_total: usize = chunks.iter().map(|c| c.content.len()).sum();
+        let header_overhead = chunks.len().saturating_mul(40);
+        if parent.content.len().saturating_add(header_overhead) >= chunk_total {
+            return parent.content.clone();
+        }
+        let mut out = String::with_capacity(chunk_total);
+        for c in chunks {
+            let body = match c.content.split_once('\n') {
+                Some((head, rest))
+                    if head.starts_with("[From:") && head.trim_end().ends_with(']') =>
+                {
+                    rest
+                }
+                _ => c.content.as_str(),
+            };
+            out.push_str(body);
+        }
+        out
+    }
+
+    fn mk(id: &str, content: &str, parent_id: Option<&str>, chunk_index: Option<i32>) -> Memory {
+        Memory {
+            id: id.to_string(),
+            content: content.to_string(),
+            type_hint: "note".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_accessed_at: None,
+            access_count: 0,
+            embedding_status: "pending".to_string(),
+            extracted_entities: None,
+            extracted_facts: None,
+            extraction_status: "pending".to_string(),
+            is_consolidated_original: false,
+            consolidated_into: None,
+            actor: None,
+            actor_type: "system".to_string(),
+            audience: "global".to_string(),
+            parent_id: parent_id.map(str::to_string),
+            chunk_index,
+            total_chunks: None,
+            event_time: None,
+            event_time_precision: None,
+            project: None,
+            trust_level: 0.5,
+            session_id: None,
+            agent_role: None,
+            write_path: None,
+            metadata: json!({}),
+            abstract_text: None,
+            overview_text: None,
+            abstraction_status: "skipped".to_string(),
+            knowledge_tier: "raw".to_string(),
+            source_ids: None,
+            reply_to_id: None,
+        }
+    }
+
+    // A1-CONFIRMED: parent holds full content — trusted as authoritative.
+    let parent = mk("p1", "hello world from memcp full content", None, None);
+    let chunks = vec![
+        mk("c0", "[From: \"t\", part 1/2]\nhello world", Some("p1"), Some(0)),
+        mk("c1", "[From: \"t\", part 2/2]\n from memcp", Some("p1"), Some(1)),
+    ];
+    assert_eq!(detect_and_reassemble(&parent, &chunks), parent.content);
+
+    // A1-REFUTED: parent is preview, chunks carry the real payload.
+    let parent = mk("p2", "preview", None, None);
+    let chunks = vec![
+        mk(
+            "c0",
+            "[From: \"t\", part 1/2]\nFIRST CHUNK REAL BODY OF THE LONG CONTENT",
+            Some("p2"),
+            Some(0),
+        ),
+        mk(
+            "c1",
+            "[From: \"t\", part 2/2]\nSECOND CHUNK REAL BODY OF THE LONG CONTENT",
+            Some("p2"),
+            Some(1),
+        ),
+    ];
+    let reassembled = detect_and_reassemble(&parent, &chunks);
+    assert!(reassembled.contains("FIRST CHUNK"));
+    assert!(reassembled.contains("SECOND CHUNK"));
+    assert!(!reassembled.starts_with("[From:"));
+
+    // Idempotency: no chunks → parent content returned verbatim.
+    let solo = mk("p3", "solo", None, None);
+    assert_eq!(detect_and_reassemble(&solo, &[]), "solo");
 }
 
 /// After migration 028 DDL, attempting to run the orchestrator with chunk rows

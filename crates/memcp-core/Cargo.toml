@@ -68,3 +68,8 @@ required-features = ["local-embed"]
 [[bin]]
 name = "load-test"
 path = "src/bin/load_test.rs"
+
+[[bin]]
+name = "migrate_028_collapse_chunks"
+path = "src/bin/migrate_028_collapse_chunks.rs"
+required-features = ["local-embed"]
