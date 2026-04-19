@@ -264,6 +264,58 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         None
     };
 
+    // 2.65. Build content filter if enabled — needed by both auto-store worker AND
+    // /v1/ingest handler (via AppState). Moved ahead of health-server spawn in Phase
+    // 24.5-03 so the ingest handler inherits the same content filter as auto-store (D-10).
+    let content_filter: Option<Arc<dyn crate::content_filter::ContentFilter>> = if config
+        .content_filter
+        .enabled
+    {
+        match CompositeFilter::from_config(&config.content_filter, Some(provider_for_filter.clone())).await
+        {
+            Ok(filter) => {
+                tracing::info!(
+                    regex_patterns = config.content_filter.regex_patterns.len(),
+                    excluded_topics = config.content_filter.excluded_topics.len(),
+                    "Content filter enabled"
+                );
+                Some(Arc::new(filter))
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to initialize content filter -- filtering disabled");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // 2.66. Create summarization provider if enabled — used by auto-store AND
+    // /v1/ingest (assistant-role summarization per D-10 / D-12).
+    let summarization_provider = match create_summarization_provider(&config.summarization) {
+        Ok(Some(provider)) => {
+            let model = if config.summarization.provider == "openai" {
+                &config.summarization.openai_model
+            } else {
+                &config.summarization.ollama_model
+            };
+            tracing::info!(
+                provider = %config.summarization.provider,
+                model = %model,
+                "Summarization enabled"
+            );
+            Some(provider)
+        }
+        Ok(None) => {
+            tracing::info!("Summarization disabled");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to initialize summarization provider — summarization disabled");
+            None
+        }
+    };
+
     // 2.7. Spawn health HTTP server if enabled
     // AppState carries config, embed_provider, and embed_sender for /v1/* API handlers.
     let health_handle = if config.health.enabled {
@@ -295,6 +347,10 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             poll_interval,
         );
 
+        let auth = crate::transport::api::auth::AuthState::from_optional(
+            config.ingest.api_key.clone(),
+        );
+
         let state = crate::health::AppState {
             ready: ready.clone(),
             started_at: tokio::time::Instant::now(),
@@ -305,6 +361,14 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             embed_sender: Some(pipeline.sender()),
             metrics_handle,
             redaction_engine: redaction_engine.clone(),
+            auth,
+            content_filter: content_filter.clone(),
+            summarization_provider: summarization_provider.clone(),
+            // extract_sender is only available after extraction pipeline is built
+            // below; for now /v1/ingest runs without the extraction queue. The
+            // auto-store worker still gets the sender via its own context, so
+            // extraction parity for file-watched memories is unchanged.
+            extract_sender: None,
         };
         Some(tokio::spawn(crate::health::serve(addr, state)))
     } else {
@@ -359,54 +423,8 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         None
     };
 
-    // 7. Build content filter if enabled
-    let content_filter: Option<Arc<dyn crate::content_filter::ContentFilter>> = if config
-        .content_filter
-        .enabled
-    {
-        match CompositeFilter::from_config(&config.content_filter, Some(provider_for_filter)).await
-        {
-            Ok(filter) => {
-                tracing::info!(
-                    regex_patterns = config.content_filter.regex_patterns.len(),
-                    excluded_topics = config.content_filter.excluded_topics.len(),
-                    "Content filter enabled"
-                );
-                Some(Arc::new(filter))
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to initialize content filter -- filtering disabled");
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // 7.5. Create summarization provider if enabled
-    let summarization_provider = match create_summarization_provider(&config.summarization) {
-        Ok(Some(provider)) => {
-            let model = if config.summarization.provider == "openai" {
-                &config.summarization.openai_model
-            } else {
-                &config.summarization.ollama_model
-            };
-            tracing::info!(
-                provider = %config.summarization.provider,
-                model = %model,
-                "Summarization enabled for auto-store"
-            );
-            Some(provider)
-        }
-        Ok(None) => {
-            tracing::info!("Summarization disabled — auto-store will store raw content");
-            None
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to initialize summarization provider — summarization disabled");
-            None
-        }
-    };
+    // (content_filter + summarization_provider were constructed above, before the
+    // health-server spawn, so AppState can carry them for /v1/ingest — D-10.)
 
     // 8. Spawn auto-store sidecar if enabled
     if config.auto_store.enabled {

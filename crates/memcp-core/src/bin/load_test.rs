@@ -280,6 +280,10 @@ async fn main() -> Result<()> {
                     embed_sender: None,
                     metrics_handle,
                     redaction_engine: None,
+                    auth: memcp::transport::api::auth::AuthState::default(),
+                    content_filter: None,
+                    summarization_provider: None,
+                    extract_sender: None,
                 };
 
                 // Spawn test server on a random port
@@ -424,7 +428,7 @@ fn parse_rw_ratio(s: &str) -> Result<WorkloadProfile> {
 ///
 /// Mirrors the pattern from crates/memcp-core/tests/api_test.rs.
 async fn spawn_test_server(state: AppState, rl_config: &RateLimitConfig) -> String {
-    let api_routes = api::router(rl_config);
+    let api_routes = api::router(rl_config, state.auth.clone());
     let app = Router::new()
         .route("/health", get(memcp::transport::health::status_handler))
         .merge(api_routes)
@@ -552,6 +556,10 @@ async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
         embed_sender: None,
         metrics_handle,
         redaction_engine: None,
+        auth: memcp::transport::api::auth::AuthState::default(),
+        content_filter: None,
+        summarization_provider: None,
+        extract_sender: None,
     };
 
     let base_url = spawn_test_server(app_state, &rl_config).await;

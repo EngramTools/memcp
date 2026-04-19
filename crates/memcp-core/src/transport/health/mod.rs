@@ -15,8 +15,12 @@ use tokio::time::Instant;
 use tower_http::trace::TraceLayer;
 
 use crate::config::{Config, ResourceCapsConfig};
+use crate::content_filter::ContentFilter;
 use crate::embedding::{EmbeddingJob, EmbeddingProvider};
+use crate::extraction::ExtractionJob;
 use crate::pipeline::redaction::RedactionEngine;
+use crate::summarization::SummarizationProvider;
+use crate::transport::api::auth::AuthState;
 
 /// Shared state for the health and API server.
 ///
@@ -46,6 +50,16 @@ pub struct AppState {
     /// Redaction engine for secret/PII masking on store operations.
     /// None when redaction is disabled (both secrets_enabled=false and pii_enabled=false).
     pub redaction_engine: Option<Arc<RedactionEngine>>,
+    /// Ingest-specific auth state (Phase 24.5 Plan 03). `api_key: None` => passthrough
+    /// middleware (D-02 loopback). Populated from `config.ingest.api_key` at daemon boot.
+    pub auth: AuthState,
+    /// Content filter for ingest pipeline (D-10). Shared with auto-store.
+    /// None when the composite filter has no patterns or topics configured.
+    pub content_filter: Option<Arc<dyn ContentFilter>>,
+    /// Summarization provider for assistant-role ingest messages. None when disabled.
+    pub summarization_provider: Option<Arc<dyn SummarizationProvider>>,
+    /// Extraction queue sender for post-store entity extraction. None when extraction disabled.
+    pub extract_sender: Option<mpsc::Sender<ExtractionJob>>,
 }
 
 #[derive(Serialize)]
@@ -191,9 +205,10 @@ pub async fn status_handler(
 pub async fn serve(addr: SocketAddr, state: AppState) {
     // Apply per-endpoint rate limits, then wrap with metrics middleware.
     // /health, /status, and /metrics are NOT in api_routes — they are never metered.
-    let api_routes = crate::transport::api::router(&state.config.rate_limit).layer(
-        axum::middleware::from_fn(crate::transport::metrics::metrics_middleware),
-    );
+    let api_routes =
+        crate::transport::api::router(&state.config.rate_limit, state.auth.clone()).layer(
+            axum::middleware::from_fn(crate::transport::metrics::metrics_middleware),
+        );
 
     let app = Router::new()
         .route("/health", get(health_handler))

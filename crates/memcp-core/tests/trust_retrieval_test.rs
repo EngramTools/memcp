@@ -41,11 +41,15 @@ async fn make_test_state(pool: PgPool, ready: bool) -> AppState {
         embed_sender: None,
         metrics_handle,
         redaction_engine: None,
+        auth: memcp::transport::api::auth::AuthState::default(),
+        content_filter: None,
+        summarization_provider: None,
+        extract_sender: None,
     }
 }
 
 async fn spawn_test_server(state: AppState) -> String {
-    let api_routes = api::router(&state.config.rate_limit);
+    let api_routes = api::router(&state.config.rate_limit, state.auth.clone());
     let app = Router::new()
         .route("/health", get(memcp::transport::health::status_handler))
         .merge(api_routes)

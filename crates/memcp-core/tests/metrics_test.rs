@@ -54,15 +54,19 @@ async fn make_test_state(pool: PgPool, ready: bool) -> AppState {
         embed_sender: None,
         metrics_handle: handle,
         redaction_engine: None,
+        auth: memcp::transport::api::auth::AuthState::default(),
+        content_filter: None,
+        summarization_provider: None,
+        extract_sender: None,
     }
 }
 
 /// Spawn the full app (health + /metrics + /v1/* routes with metrics middleware) on a random port.
 /// Matches the production serve() layout from health/mod.rs.
 async fn spawn_test_server(state: AppState) -> String {
-    let api_routes = api::router(&state.config.rate_limit).layer(axum::middleware::from_fn(
-        memcp::transport::metrics::metrics_middleware,
-    ));
+    let api_routes = api::router(&state.config.rate_limit, state.auth.clone()).layer(
+        axum::middleware::from_fn(memcp::transport::metrics::metrics_middleware),
+    );
 
     let app = Router::new()
         .route("/health", get(memcp::transport::health::status_handler))

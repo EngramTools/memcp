@@ -33,6 +33,7 @@ use tower_governor::{
 };
 
 use crate::config::RateLimitConfig;
+use crate::transport::api::auth::AuthState;
 use crate::transport::health::AppState;
 
 /// Build a GovernorLayer with a global (non-per-IP) rate limit and JSON 429 responses.
@@ -117,9 +118,19 @@ fn build_rate_limit_layer(
 /// ```rust
 /// let api_routes = api::router(&rl_config).layer(jwt_middleware);
 /// ```
-pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
+pub fn router(rl: &RateLimitConfig, auth_state: AuthState) -> Router<AppState> {
     if !rl.enabled {
-        // Rate limiting disabled — flat router with no layers
+        // Rate limiting disabled — flat router with no layers. /v1/ingest still needs
+        // the auth layer so missing keys get 401 instead of being silently accepted on
+        // a non-loopback bind (the boot-safety gate already refuses such configs, but
+        // defense-in-depth is cheap). When `api_key` is None the middleware is a
+        // passthrough, so loopback dev still works.
+        let ingest_route = Router::new()
+            .route("/v1/ingest", post(ingest::ingest_handler))
+            .layer(axum::middleware::from_fn_with_state(
+                auth_state.clone(),
+                auth::require_api_key,
+            ));
         return Router::new()
             .route("/v1/recall", post(recall::recall_handler))
             .route("/v1/search", post(search::search_handler))
@@ -143,6 +154,7 @@ pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
             )
             .route("/v1/graph", get(graph::graph_handler))
             .route("/v1/pipeline/health", get(pipeline::pipeline_health_handler))
+            .merge(ingest_route)
             .layer(DefaultBodyLimit::max(256 * 1024)); // 256KB hard limit on request bodies
     }
 
@@ -208,6 +220,19 @@ pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
         .route("/v1/pipeline/health", get(pipeline::pipeline_health_handler))
         .layer(build_rate_limit_layer(rl.search_rps, rl.burst_multiplier));
 
+    // CRITICAL: auth is .layer()'d LAST so it wraps OUTERMOST and runs FIRST.
+    // `.layer(A).layer(B)` => request flow is B -> A -> handler, so auth must be
+    // the second `.layer(...)` to gate rate-limit token consumption on authenticated
+    // callers only. See RESEARCH pitfall 1 — reversing these burns rate-limit tokens
+    // on unauthenticated calls.
+    let ingest_routes = Router::new()
+        .route("/v1/ingest", post(ingest::ingest_handler))
+        .layer(build_rate_limit_layer(rl.ingest_rps, rl.burst_multiplier))
+        .layer(axum::middleware::from_fn_with_state(
+            auth_state.clone(),
+            auth::require_api_key,
+        ));
+
     Router::new()
         .merge(recall_routes)
         .merge(search_routes)
@@ -221,6 +246,7 @@ pub fn router(rl: &RateLimitConfig) -> Router<AppState> {
         .merge(entity_routes)
         .merge(graph_routes)
         .merge(pipeline_routes)
+        .merge(ingest_routes)
         .route("/v1/status", get(crate::transport::health::status_handler))
         .layer(DefaultBodyLimit::max(256 * 1024)) // 256KB hard limit on request bodies
 }
