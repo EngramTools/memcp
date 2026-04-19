@@ -9,7 +9,9 @@ use uuid::Uuid;
 
 use super::{row_to_memory, PostgresMemoryStore};
 use crate::errors::MemcpError;
-use crate::store::{CreateMemory, ListFilter, ListResult, Memory, MemoryStore, UpdateMemory};
+use crate::store::{
+    CreateMemory, ListFilter, ListResult, Memory, MemoryStore, StoreOutcome, UpdateMemory,
+};
 
 /// Encode a pagination cursor from created_at and id.
 fn encode_cursor(created_at: &DateTime<Utc>, id: &str) -> String {
@@ -72,7 +74,10 @@ impl MemoryStore for PostgresMemoryStore {
     /// Per CONTEXT.md locked decisions:
     ///   - Silent return: same response shape as new store — caller cannot distinguish dedup hit.
     ///   - No metadata updates: existing memory stays exactly as originally stored (true no-op).
-    async fn store(&self, input: CreateMemory) -> Result<Memory, MemcpError> {
+    async fn store_with_outcome(
+        &self,
+        input: CreateMemory,
+    ) -> Result<StoreOutcome, MemcpError> {
         // --- Step 1: Idempotency key lookup (highest priority) ---
         if let Some(ref key) = input.idempotency_key {
             let existing_row = sqlx::query(
@@ -83,7 +88,7 @@ impl MemoryStore for PostgresMemoryStore {
                  m.parent_id, m.chunk_index, m.total_chunks, \
                  m.event_time, m.event_time_precision, m.project, \
                  m.trust_level, m.session_id, m.agent_role, m.write_path, m.metadata, \
-                 m.abstract_text, m.overview_text, m.abstraction_status \
+                 m.abstract_text, m.overview_text, m.abstraction_status, m.knowledge_tier, m.source_ids, m.reply_to_id \
                  FROM idempotency_keys ik \
                  JOIN memories m ON m.id = ik.memory_id \
                  WHERE ik.key = $1 AND ik.expires_at > NOW() AND m.deleted_at IS NULL",
@@ -95,7 +100,7 @@ impl MemoryStore for PostgresMemoryStore {
 
             if let Some(row) = existing_row {
                 tracing::info!(idempotency_key = %key, "store: idempotency key hit, returning existing memory");
-                return row_to_memory(&row);
+                return Ok(StoreOutcome::Deduplicated(row_to_memory(&row)?));
             }
         }
 
@@ -111,7 +116,7 @@ impl MemoryStore for PostgresMemoryStore {
                  parent_id, chunk_index, total_chunks, \
                  event_time, event_time_precision, project, \
                  trust_level, session_id, agent_role, write_path, metadata, \
-                 abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
+                 abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids, reply_to_id \
                  FROM memories \
                  WHERE content_hash = $1 AND deleted_at IS NULL \
                    AND created_at > NOW() - ($2 || ' seconds')::interval \
@@ -131,7 +136,7 @@ impl MemoryStore for PostgresMemoryStore {
                     .try_get("id")
                     .map_err(|e| MemcpError::Storage(e.to_string()))?;
                 tracing::info!(content_hash = %hash, existing_id = %existing_id, "store: content-hash dedup hit, returning existing memory");
-                return row_to_memory(&row);
+                return Ok(StoreOutcome::Deduplicated(row_to_memory(&row)?));
             }
         }
 
@@ -187,8 +192,8 @@ impl MemoryStore for PostgresMemoryStore {
         };
 
         sqlx::query(
-            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks, event_time, event_time_precision, project, trust_level, session_id, agent_role, write_path, metadata, abstraction_status, knowledge_tier, source_ids) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)",
+            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks, event_time, event_time_precision, project, trust_level, session_id, agent_role, write_path, metadata, abstraction_status, knowledge_tier, source_ids, reply_to_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)",
         )
         .bind(&id)
         .bind(&input.content)
@@ -215,6 +220,7 @@ impl MemoryStore for PostgresMemoryStore {
         .bind(abstraction_status)
         .bind(&resolved_tier)
         .bind(&source_ids_json)
+        .bind(&input.reply_to_id)
         .execute(&self.pool)
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to insert memory: {}", e)))?;
@@ -268,7 +274,7 @@ impl MemoryStore for PostgresMemoryStore {
             }
         }
 
-        Ok(Memory {
+        Ok(StoreOutcome::Created(Memory {
             id,
             content: input.content,
             type_hint: input.type_hint,
@@ -304,8 +310,8 @@ impl MemoryStore for PostgresMemoryStore {
             abstraction_status: abstraction_status.to_string(),
             knowledge_tier: resolved_tier,
             source_ids: source_ids_json,
-            reply_to_id: None,
-        })
+            reply_to_id: input.reply_to_id,
+        }))
     }
 
     async fn get(&self, id: &str) -> Result<Memory, MemcpError> {
@@ -315,7 +321,7 @@ impl MemoryStore for PostgresMemoryStore {
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
-             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
+             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids, reply_to_id \
              FROM memories WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(id)
@@ -412,7 +418,7 @@ impl MemoryStore for PostgresMemoryStore {
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
-             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
+             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids, reply_to_id \
              FROM memories WHERE id = $1",
         )
         .bind(id)
@@ -519,7 +525,7 @@ impl MemoryStore for PostgresMemoryStore {
              actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
-             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
+             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids, reply_to_id \
              FROM memories {} ORDER BY created_at DESC, id ASC LIMIT ${}",
             where_clause, param_idx
         );

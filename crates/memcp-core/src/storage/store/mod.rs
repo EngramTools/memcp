@@ -432,14 +432,50 @@ pub fn decode_search_cursor(cursor: &str) -> Result<i64, MemcpError> {
     })
 }
 
+/// Outcome of a store/persist operation. Enables callers (e.g. POST /v1/ingest)
+/// to distinguish a newly inserted memory from a dedup hit (D-14).
+#[derive(Debug, Clone)]
+pub enum StoreOutcome {
+    Created(Memory),
+    Deduplicated(Memory),
+}
+
+impl StoreOutcome {
+    pub fn into_inner(self) -> Memory {
+        match self {
+            Self::Created(m) | Self::Deduplicated(m) => m,
+        }
+    }
+    pub fn memory(&self) -> &Memory {
+        match self {
+            Self::Created(m) | Self::Deduplicated(m) => m,
+        }
+    }
+    pub fn was_deduplicated(&self) -> bool {
+        matches!(self, Self::Deduplicated(_))
+    }
+}
+
 /// Core abstraction for memory persistence operations.
 ///
 /// All implementations must be Send + Sync to support concurrent access.
 /// The trait uses async_trait to enable async methods in trait definitions.
 #[async_trait]
 pub trait MemoryStore: Send + Sync {
+    /// Store a new memory and return a StoreOutcome distinguishing a newly
+    /// inserted memory from a dedup hit (D-14). Canonical path for writes.
+    async fn store_with_outcome(
+        &self,
+        input: CreateMemory,
+    ) -> Result<StoreOutcome, MemcpError>;
+
     /// Store a new memory and return the created record.
-    async fn store(&self, input: CreateMemory) -> Result<Memory, MemcpError>;
+    ///
+    /// Provided default delegates to `store_with_outcome` and discards the
+    /// outcome variant. Existing callers keep their Memory-returning shape.
+    async fn store(&self, input: CreateMemory) -> Result<Memory, MemcpError> {
+        Ok(self.store_with_outcome(input).await?.into_inner())
+    }
 
     /// Retrieve a memory by ID.
     ///
