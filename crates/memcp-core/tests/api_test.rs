@@ -448,3 +448,16 @@ async fn test_dispatch_remote_invalid_url() {
         msg
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 24.75 — /v1/memory/span HTTP route (CHUNK-04)
+// ---------------------------------------------------------------------------
+
+/// POST /v1/memory/span with `{memory_id, topic}` returns 200 with a JSON body
+/// shaped `{content, span: {start, end}}`. Flips ON in Plan 24.75-04 once the
+/// route + handler exist. RED scaffold pre-registered by Plan 24.75-00.
+#[tokio::test]
+#[ignore = "pending 24.75-04"]
+async fn test_memory_span_http() {
+    unimplemented!("pending 24.75-04");
+}
