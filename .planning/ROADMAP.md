@@ -681,7 +681,7 @@ Plans:
 
 ## Phase 24: Knowledge Tiers
 - **Goal**: Separate raw conversation captures from derived conclusions. Add `knowledge_tier` enum column (5 values: `raw` | `imported` | `explicit` | `derived` | `pattern`) and `source_ids` JSONB column for provenance chains linking derived memories to their evidence. Search ranking boosts higher-tier memories via configurable 3-dimensional composite score formula.
-- **Status**: In Progress (3/4 plans complete)
+- **Status**: Complete (4/4 plans)
 - **Depends on**: Phase 23
 - **Origin**: Honcho architecture analysis (2026-04-11) — separate messages table from documents table, adapted as a column on existing memories table.
 - **Requirements:**
@@ -697,11 +697,11 @@ Plans:
 - [x] 24-00-PLAN.md — Wave 0: test scaffolds + MemoryBuilder extensions (Nyquist)
 - [x] 24-01-PLAN.md — Migration 026, Memory/CreateMemory structs, TierWeightsConfig, tier inference at store, backfill
 - [x] 24-02-PLAN.md — Composite scoring with tier dimension + tier filter in search/recall SQL + D-10/D-11 split
-- [ ] 24-03-PLAN.md — Transport threading (MCP/CLI/HTTP) + source chain traversal + GC orphan tagging
+- [x] 24-03-PLAN.md — Transport threading (MCP/CLI/HTTP) + source chain traversal + GC orphan tagging
 
 ## Phase 24.5: Universal Ingestion API
 - **Goal**: HTTP endpoint that accepts raw conversation turns from any source (Telegram bots, web apps, Python Claude SDK agents) and runs them through the full auto-store enrichment pipeline (noise filter → dedup → optional summarization → store as `raw` tier). Bridges the gap between file-watching auto-store (Claude Code/OpenClaw) and deployed apps that push messages via HTTP.
-- **Status**: Planned
+- **Status**: DONE
 - **Depends on**: Phase 24
 - **Origin**: Auto-store sidecar only watches JSONL files. Deployed Python apps (Telegram, web) need a push-based ingestion path with the same enrichment pipeline.
 - **Requirements:**
@@ -711,6 +711,35 @@ Plans:
   - INGEST-04: Source provenance: `source` field propagated to stored memories (e.g., "telegram-bot", "web-app", "anthropic-sdk")
   - INGEST-05: Rate limiting per source (reuses existing rate limit infra)
   - INGEST-06: MCP tool `ingest_messages` and CLI `memcp ingest` for non-HTTP access paths
+- **Plans:** 5 plans
+
+Plans:
+- [x] 24.5-00-PLAN.md — Wave 0: ingest_test.rs stubs, unit stubs for hash+parse, MemoryBuilder.reply_to_id(), tool-count 16→18
+- [x] 24.5-01-PLAN.md — Migration 027, reply_to_id on Memory/CreateMemory, StoreOutcome enum + store_with_outcome()
+- [x] 24.5-02-PLAN.md — IngestConfig + rate_limit.ingest_rps + D-02 loopback boot-fail check
+- [x] 24.5-03-PLAN.md — Auth middleware, /v1/ingest handler, shared process_ingest_message, reply chain, route wiring
+- [x] 24.5-04-PLAN.md — MCP tools ingest_messages/ingest_message, CLI memcp ingest, parse_ingest_stream
+
+## Phase 24.75: Remove Chunks, Rely on Reasoning Layer
+- **Goal**: Remove chunking from memcp entirely. One memory per atomic unit (message, turn, document). No sibling rows with `parent_id`. Retrieval returns whole memories. Agents drill into long memories on demand via a new `get_memory_span(memory_id, topic)` tool that splits and embeds lazily at query time. Precision comes from the reasoning layer (Phases 25/27) and the summary layer (Phase 29), not from pre-computed chunks.
+- **Status**: Planned
+- **Depends on**: Phase 24 (knowledge tiers need intact per-memory identity for `source_ids`), Phase 24.5 (ingest ships without chunking first, then 24.75 rehabilitates auto-store)
+- **Origin**: Phase 24.5 D-10 plus 24.75 discuss-phase (2026-04-19) — pivoted from "chunks-as-internal-embeddings" after recognizing that the Honcho-style reasoning stack (QI re-ranker, reasoning specialists, source chains, salience, tier boosting) makes chunks a liability at every layer. Chunking was designed for one-shot vector retrieval; the reasoning stack has moved past that. Removing chunks is simpler than rehabilitating them.
+- **Locked discussion decisions (2026-04-19):**
+  - Import granularity: **one memory per message/turn** (Honcho-aligned) — conversations fan out to N memory rows, not 1
+  - Migration posture: **one-shot destructive** — reassemble parents from chunk_index, re-embed, delete chunk rows; manual DB backup taken before run
+  - Re-embedding: **always re-embed parents from reassembled full content** (one-time compute cost)
+  - `get_memory_span` hint shape: **topic query only** (`{topic: string}`) — agent-friendly; no char-range support (no real UI client use-case)
+  - Benchmark tolerance: **≤5% recall drop acceptable** — chunks-as-internal was a correctness fix, not a recall optimization
+- **Requirements:**
+  - CHUNK-01: Drop the chunking fan-out loop from auto-store (`pipeline/auto_store/mod.rs:463-570`). Auto-store stores content whole, regardless of length.
+  - CHUNK-02: Migration 028 — collapse `memories WHERE parent_id IS NOT NULL` rows back into their parents (reassemble content ordered by `chunk_index`, re-embed parent from the full reassembled content, delete chunk rows). One-shot destructive; manual backup required before running.
+  - CHUNK-03: Drop `parent_id`, `chunk_index`, `total_chunks` columns from `memories`. Drop `idx_memories_parent_id`. Update all SQL, type definitions, and tests that reference these columns.
+  - CHUNK-04: New MCP/HTTP/CLI tool `get_memory_span(memory_id, topic)` — splits the target memory on-the-fly (reusing `pipeline/chunking/splitter.rs` as a runtime utility), embeds each candidate span, returns the best-matching span. No persistent chunk storage. Agent-driven precision tool.
+  - CHUNK-05: Update import paths (chatgpt, claude_ai, claude_code, markdown) to store one memory per message/turn (conversations) or per document (markdown). The existing `chunk_content()` helper in imports becomes obsolete for storage; retains utility for `get_memory_span` at query time.
+  - CHUNK-06: Salience + reinforcement operate on whole memory rows only — no "split signal across siblings" problem to solve, just remove the chunk-aware handling.
+  - CHUNK-07: Ensure `source_ids` referencing rules cascade cleanly once chunks no longer exist (no CHUNK-09 schema enforcement needed — there are no chunk IDs).
+  - CHUNK-08: Benchmark suite re-run after migration to confirm retrieval regression ≤5%. If >5%, investigate but do not revert — precision path is Phase 27 (agentic retrieval) and Phase 29 (multi-depth summaries). Document findings.
 
 ## Phase 25: Reasoning Agent
 - **Goal**: Shared reasoning agent infrastructure powering both dreaming (Phase 26) and agentic retrieval (Phase 27). `ReasoningProvider` trait with API-based providers (MiniMax, ZAI GLM, OpenRouter) and Ollama for self-hosted. Tool definitions for agentic memory operations with salience side-effects. Iteration loop runner with cost tracking.
@@ -732,7 +761,8 @@ Plans:
 ## Phase 26: Dreaming Worker
 - **Goal**: Queue-driven daemon worker running deduction → contradiction detection → induction cycles on recent memory activity. Uses Phase 25's reasoning agent with dreaming-specific prompts. Creates derived/pattern-tier memories with source chains. Soft-deletes (tombstones) superseded facts.
 - **Status**: Planned
-- **Depends on**: Phases 24 + 25
+- **Depends on**: Phases 24 + 25 + **24.75** (dreaming reads whole memories — once 24.75 removes chunks entirely, the sample is naturally per-idea; source chains reference whole-memory IDs cleanly)
+- **Note (updated 2026-04-19):** If Phase 26 ships before 24.75, add a transitional filter `WHERE parent_id IS NULL` on every dreaming query so chunk rows don't pollute the sample. DREAM-03/DREAM-05 specialist prompts assume each retrieved item is a whole conversational turn; chunk fragments would cause the deduction/induction agent to derive patterns from window-slides rather than ideas. After 24.75 this filter becomes unnecessary (the `parent_id` column is dropped).
 - **Origin**: Honcho dreaming orchestrator — 3-phase cycle (surprisal → deduction → induction), adapted for memcp's daemon architecture.
 - **Requirements:**
   - DREAM-01: `dream_queue` table or counter tracking un-dreamed memories since last cycle
@@ -749,7 +779,8 @@ Plans:
 ## Phase 27: Agentic Retrieval Mode
 - **Goal**: Opt-in iterative retrieval using Phase 25's reasoning agent. Agent searches, evaluates results, reformulates and re-searches until satisfied. Exposed as `search_mode=agentic` on search/recall API. Default stays fast single-pass (existing QI pipeline).
 - **Status**: Planned
-- **Depends on**: Phase 25
+- **Depends on**: Phase 25 + **24.75** (agentic retrieval consumes whole memories; the `get_memory_span(memory_id, topic)` tool from CHUNK-04 gives the agent explicit topic-driven drill-down rather than forcing it to reassemble chunk families)
+- **Note (updated 2026-04-19):** Add `get_memory_span(memory_id, topic)` to ARET-02's tool palette once 24.75 lands — the retrieval specialist can narrow from whole memory → specific topic span on demand. Pre-24.75, agent must deal with `parent_id` chunk rows (filter or manually fetch parents); this is the second-biggest reason 24.75 exists.
 - **Origin**: Honcho specialists' iterative search pattern, applied to retrieval instead of dreaming.
 - **Requirements:**
   - ARET-01: `search_mode` parameter on search/recall: `fast` (default, existing QI pipeline) or `agentic` (reasoning agent loop)
@@ -758,6 +789,26 @@ Plans:
   - ARET-04: Result dedup across iterations — don't return the same memory from multiple passes
   - ARET-05: MCP tool, CLI flag (`--agentic`), and HTTP query param for opting in
   - ARET-06: Metrics: agentic search invocations, iterations per search, latency histogram, tokens consumed
+
+## Phase 29: Multi-Depth Summaries
+- **Goal**: Each memory can carry multiple summary levels alongside its raw content. Retrieval callers (agents, UI, reasoning specialists) request the depth they want — `brief` for context-packing, `standard` for quick skim, `detailed` for follow-ups, raw for verbatim quoting. Closes the "one summary per memory" ceiling from Phase 06.6 and rescues long-memory recall after 24.75 removes chunks (brief-depth summary embeddings act as crisp search targets where the raw-content embedding is blurry).
+- **Status**: Planned
+- **Depends on**: Phase 06.6 (summarization provider + auto-summarize pipeline), Phase 24 (knowledge tiers — summaries are an orthogonal axis to tier)
+- **Origin**: Phase 24.75 discuss-phase (2026-04-19) — long content stored whole means the single `memories.embedding` is blurry for multi-topic memories. Multi-depth summaries give agents a shorter, sharper representation to pack into context and give retrieval a per-depth embedding surface without reintroducing chunks.
+- **Open questions for /gsd-discuss-phase 29:**
+  1. Sidecar table (`memory_summaries`) vs JSONB column on `memories`?
+  2. Fixed depth enum (`brief`/`standard`/`detailed`) vs freeform depth labels?
+  3. Eager generation on store (slow write, fast read) vs lazy on first request (fast write, slow first read)?
+  4. Should `brief`-depth summary embeddings be hit by default search, or opt-in per call?
+- **Requirements (draft — refined at discuss-phase):**
+  - SUM-01: `memory_summaries(memory_id, depth, content, embedding, generated_at)` sidecar table. Fixed depth enum: `brief` (≤ 1 sentence), `standard` (≤ 1 paragraph), `detailed` (≤ 1 page)
+  - SUM-02: Summaries generated lazily on first request, cached thereafter. Write path stays fast; cost paid at recall time for the first caller who wants that depth
+  - SUM-03: `memory_get`, `memory_recall`, `memory_search` gain optional `summary_depth` param — returns summary text at that depth alongside (or instead of) raw content
+  - SUM-04: Summary embeddings stored for semantic search — a `brief`-depth embedding of a long memory can be far more useful than the raw-content embedding (addresses the blurrier-embeddings concern from 24.75)
+  - SUM-05: Reasoning agents (Phase 25/27) can request `summary_depth=brief` to pack more memories into their context window per iteration
+  - SUM-06: Re-summarize trigger — when a memory is updated, mark summaries stale (`generated_at < updated_at`); lazy regenerate on next request
+  - SUM-07: `[summaries]` config section: `depths_enabled = ["brief", "standard"]`, `generation_provider` — operators disable depths to control summarization cost
+  - SUM-08: Metrics: cache hit rate per depth, generation latency p50/p95, tokens consumed per depth
 
 ---
 *Open-source fork cutoff: After Phase 22, fork memcp into a public MIT repo containing phases 01–22 (core memory server + test suite + gap closures + PII redaction + security hardening). Phase 12+ (auth, boosting, hosted features) stays in the private memcp repo (or engram repo) — never published to the public fork. See engram Phase 4.5 and /Users/ayoamadi/projects/engram/.planning/ROADMAP.md for strategy.*
