@@ -14,8 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
-use crate::chunking::chunk_content;
-use crate::config::{AutoStoreConfig, ChunkingConfig};
+use crate::config::AutoStoreConfig;
 use crate::content_filter::ContentFilter;
 use crate::embedding::pipeline::EmbeddingPipeline;
 use crate::embedding::router::EmbeddingRouter;
@@ -24,7 +23,7 @@ use crate::extraction::pipeline::ExtractionPipeline;
 use crate::extraction::ExtractionJob;
 use crate::pipeline::redaction::RedactionEngine;
 use crate::store::postgres::PostgresMemoryStore;
-use crate::store::{CreateMemory, MemoryStore, StoreOutcome};
+use crate::store::StoreOutcome;
 use crate::summarization::SummarizationProvider;
 
 use self::filter::{create_filter, FilterStrategy};
@@ -38,7 +37,6 @@ use self::watcher::{spawn_watcher, WatchEvent};
 pub struct AutoStoreContext<'a> {
     // Config
     pub config: AutoStoreConfig,
-    pub chunking_config: ChunkingConfig,
     pub extraction_config: &'a crate::config::ExtractionConfig,
     // Store
     pub store: Arc<PostgresMemoryStore>,
@@ -73,7 +71,6 @@ impl AutoStoreWorker {
     pub fn spawn(ctx: AutoStoreContext<'_>) -> JoinHandle<()> {
         let AutoStoreContext {
             config,
-            chunking_config,
             extraction_config,
             store,
             embedding_pipeline,
@@ -137,7 +134,6 @@ impl AutoStoreWorker {
                 extraction_sender,
                 content_filter,
                 summarization_provider,
-                chunking_config,
                 embedding_router,
                 project,
                 birth_year,
@@ -170,7 +166,6 @@ async fn run_worker(
     extraction_sender: Option<tokio::sync::mpsc::Sender<ExtractionJob>>,
     content_filter: Option<Arc<dyn ContentFilter>>,
     summarization_provider: Option<Arc<dyn SummarizationProvider>>,
-    chunking_config: ChunkingConfig,
     embedding_router: Option<Arc<EmbeddingRouter>>,
     project: Option<String>,
     birth_year: Option<u32>,
@@ -382,118 +377,10 @@ async fn run_worker(
             }
         }
 
-        // Chunk long content for better retrieval granularity (auto-store only; D-10
-        // excludes chunking from /v1/ingest).
-        let chunks = chunk_content(&memory.content, &chunking_config);
-        if !chunks.is_empty() {
-            tracing::info!(
-                memory_id = %memory.id,
-                chunk_count = chunks.len(),
-                "Chunking auto-store content"
-            );
-
-            // Tier for chunk embedding jobs: reuse the router choice from above if any,
-            // else "fast". Recomputed here because the earlier block only applies
-            // non-fast tiers.
-            let chunk_tier = if let Some(ref router) = embedding_router {
-                router
-                    .route(Some(type_hint_str), None, memory.content.len())
-                    .to_string()
-            } else {
-                "fast".to_string()
-            };
-
-            for chunk_output in &chunks {
-                let mut chunk_tags = tags.clone();
-                chunk_tags.push(format!(
-                    "chunk:{}/{}",
-                    chunk_output.index + 1,
-                    chunk_output.total
-                ));
-
-                let chunk_create = CreateMemory {
-                    content: chunk_output.content.clone(),
-                    type_hint: if is_summarized {
-                        "summary".to_string()
-                    } else {
-                        "auto".to_string()
-                    },
-                    source: entry.source.clone(),
-                    tags: Some(chunk_tags),
-                    created_at: entry.timestamp,
-                    actor: entry.actor.clone(),
-                    actor_type: "auto-store".to_string(),
-                    audience: "global".to_string(),
-                    idempotency_key: None,
-                    parent_id: Some(memory.id.clone()),
-                    chunk_index: Some(chunk_output.index as i32),
-                    total_chunks: Some(chunk_output.total as i32),
-                    event_time: memory.event_time,
-                    event_time_precision: memory.event_time_precision.clone(),
-                    project: project.clone(),
-                    trust_level: Some(0.3),
-                    session_id: entry.session_id.clone(),
-                    agent_role: None,
-                    write_path: Some("auto_store".to_string()),
-                    knowledge_tier: None,
-                    source_ids: None,
-                    reply_to_id: None,
-                };
-
-                match store.store(chunk_create).await {
-                    Ok(chunk_mem) => {
-                        // Seed chunk salience from parent values
-                        if let Err(e) = store
-                            .upsert_salience(&chunk_mem.id, 2.5, 5.0, 0, None)
-                            .await
-                        {
-                            tracing::warn!(error = %e, chunk_id = %chunk_mem.id, "Failed to seed chunk salience");
-                        }
-
-                        // Enqueue chunk to embedding pipeline (same tier as parent)
-                        if let Some(ref sender) = embedding_sender {
-                            let text = build_embedding_text(
-                                &chunk_mem.content,
-                                chunk_mem.abstract_text.as_deref(),
-                                &chunk_mem.tags,
-                            );
-                            let _ = sender.try_send(EmbeddingJob {
-                                memory_id: chunk_mem.id.clone(),
-                                text,
-                                attempt: 0,
-                                completion_tx: None,
-                                tier: chunk_tier.clone(),
-                            });
-                        }
-
-                        // Enqueue chunk to extraction pipeline
-                        if let Some(ref sender) = extraction_sender {
-                            let _ = sender.try_send(ExtractionJob {
-                                memory_id: chunk_mem.id.clone(),
-                                content: chunk_mem.content.clone(),
-                                attempt: 0,
-                            });
-                        }
-
-                        tracing::debug!(
-                            chunk_id = %chunk_mem.id,
-                            parent_id = %memory.id,
-                            index = chunk_output.index,
-                            total = chunk_output.total,
-                            "Stored chunk"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            error = %e,
-                            parent_id = %memory.id,
-                            chunk_index = chunk_output.index,
-                            "Failed to store chunk"
-                        );
-                    }
-                }
-            }
-        }
+        // Phase 24.75: chunking removed. Auto-store stores whole content as a single
+        // memory row; precision on long content comes from Phase 27 (agentic retrieval)
+        // and Phase 29 (multi-depth summaries). `get_memory_span` (Plan 24.75-04) does
+        // on-demand splitting at query time using pipeline/chunking/splitter.rs.
     }
 
     tracing::warn!("Auto-store worker: watch event channel closed, shutting down");

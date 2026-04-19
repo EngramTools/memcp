@@ -448,7 +448,6 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
         let _auto_store_handle =
             crate::auto_store::AutoStoreWorker::spawn(crate::auto_store::AutoStoreContext {
                 config: config.auto_store.clone(),
-                chunking_config: config.chunking.clone(),
                 extraction_config: &config.extraction,
                 store: store.clone(),
                 embedding_pipeline: Some(&pipeline),
