@@ -267,6 +267,18 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
     // 2.7. Spawn health HTTP server if enabled
     // AppState carries config, embed_provider, and embed_sender for /v1/* API handlers.
     let health_handle = if config.health.enabled {
+        // Phase 24.5 D-02 boot-safety gate (threat T-24.5-01):
+        // Refuse to start the API if we bind non-loopback without an ingest api_key.
+        // MUST run before any `axum::serve` / `TcpListener::bind` so a misconfigured
+        // daemon cannot expose unauthenticated /v1/ingest on a routable interface.
+        if let Err(msg) = crate::transport::boot_safety::check_ingest_auth_safety(
+            &config.health.bind,
+            config.ingest.api_key.as_deref(),
+        ) {
+            eprintln!("ERROR: {msg}");
+            std::process::exit(1);
+        }
+
         let addr: std::net::SocketAddr = format!("{}:{}", config.health.bind, config.health.port)
             .parse()
             .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], 9090)));

@@ -6,6 +6,7 @@
 //! Wires together storage/, intelligence/, and pipeline/ layers.
 
 pub mod api;
+pub mod boot_safety;
 pub mod daemon;
 pub mod health;
 pub mod ipc;

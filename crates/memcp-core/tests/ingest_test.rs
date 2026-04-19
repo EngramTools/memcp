@@ -45,10 +45,32 @@ async fn test_ingest_loopback_no_auth() {
 
 /// INGEST-01 / D-02: Daemon boot fails when non-loopback bind and no ingest key is configured.
 /// Intentionally a plain `#[test]` (not async) — this asserts a startup-side failure.
-#[ignore = "24.5 impl pending"]
+///
+/// Six assertions cover the decision matrix:
+///   (loopback bind, no key) -> Ok        // dev-safe default
+///   (loopback bind, key)    -> Ok        // sanity
+///   (non-loopback, no key)  -> Err       // the gate
+///   (non-loopback, key)     -> Ok        // prod path
 #[test]
 fn test_boot_fails_non_loopback_no_key() {
-    unimplemented!("24.5");
+    use memcp::transport::boot_safety::check_ingest_auth_safety;
+
+    // D-02 loopback paths — key not required
+    assert!(check_ingest_auth_safety("127.0.0.1:8080", None).is_ok());
+    assert!(check_ingest_auth_safety("::1", None).is_ok());
+    assert!(check_ingest_auth_safety("localhost", None).is_ok());
+
+    // D-02 non-loopback paths
+    let err0 = check_ingest_auth_safety("0.0.0.0:8080", None);
+    assert!(err0.is_err(), "0.0.0.0 with no key must refuse boot");
+    let msg = err0.unwrap_err();
+    assert!(
+        msg.contains("MEMCP_INGEST__API_KEY"),
+        "error message must name the env var, got: {msg}"
+    );
+
+    assert!(check_ingest_auth_safety("0.0.0.0:8080", Some("k")).is_ok());
+    assert!(check_ingest_auth_safety("192.168.1.5", None).is_err());
 }
 
 // ---------------------------------------------------------------------------
