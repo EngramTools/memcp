@@ -71,6 +71,7 @@ async fn make_rate_limited_state(pool: PgPool, store_rps: u32, burst_multiplier:
         delete_rps: 1000,
         export_rps: 1000,
         batch_get_rps: 1000,
+        ingest_rps: 1000,
     };
     AppState {
         ready: Arc::new(AtomicBool::new(true)),

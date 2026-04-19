@@ -1535,6 +1535,47 @@ impl Default for HealthConfig {
     }
 }
 
+/// Phase 24.5 Universal Ingestion API config.
+///
+/// Backs the `[ingest]` section in `memcp.toml`. Consumed by:
+/// - `transport/api/ingest.rs` (handler — Plan 24.5-03)
+/// - `transport/daemon.rs` D-02 boot-safety check (Plan 24.5-02 Task 2)
+///
+/// Nested env var overrides use double underscores (figment convention):
+///   MEMCP_INGEST__API_KEY=secret123
+///   MEMCP_INGEST__MAX_BATCH_SIZE=50
+///   MEMCP_INGEST__MAX_CONTENT_SIZE=65536
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestConfig {
+    /// Static API key for `/v1/ingest` auth (D-01).
+    /// Optional when HTTP binds to loopback; REQUIRED otherwise (D-02 boot-fail check in daemon.rs).
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Max messages per `/v1/ingest` batch (Claude discretion; default 100 per RESEARCH §Q5).
+    #[serde(default = "default_ingest_max_batch_size")]
+    pub max_batch_size: usize,
+    /// Max content bytes per message (default 32768 per RESEARCH §Q5).
+    #[serde(default = "default_ingest_max_content_size")]
+    pub max_content_size: usize,
+}
+
+fn default_ingest_max_batch_size() -> usize {
+    100
+}
+fn default_ingest_max_content_size() -> usize {
+    32_768
+}
+
+impl Default for IngestConfig {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            max_batch_size: default_ingest_max_batch_size(),
+            max_content_size: default_ingest_max_content_size(),
+        }
+    }
+}
+
 /// Resource caps configuration for container deployments.
 ///
 /// Controls resource limits for deployed instances. Used by /status endpoint
@@ -1991,6 +2032,9 @@ pub struct RateLimitConfig {
     /// Requests per second for store endpoint (default: 50)
     #[serde(default = "default_store_rps")]
     pub store_rps: u32,
+    /// Requests per second for `/v1/ingest` endpoint (default: 50; Phase 24.5 D-05)
+    #[serde(default = "default_ingest_rps")]
+    pub ingest_rps: u32,
     /// Requests per second for search endpoint (default: 100)
     #[serde(default = "default_search_rps")]
     pub search_rps: u32,
@@ -2029,6 +2073,7 @@ fn default_recall_rps() -> u32 {
 fn default_store_rps() -> u32 {
     50
 }
+fn default_ingest_rps() -> u32 { 50 }
 fn default_search_rps() -> u32 {
     100
 }
@@ -2061,6 +2106,7 @@ impl Default for RateLimitConfig {
             global_rps: default_global_rps(),
             recall_rps: default_recall_rps(),
             store_rps: default_store_rps(),
+            ingest_rps: default_ingest_rps(),
             search_rps: default_search_rps(),
             annotate_rps: default_annotate_rps(),
             update_rps: default_update_rps(),
@@ -2273,6 +2319,11 @@ pub struct Config {
     #[serde(default)]
     pub health: HealthConfig,
 
+    /// Phase 24.5 Universal Ingestion API configuration.
+    /// Existing configs without [ingest] section still work (serde default applied).
+    #[serde(default)]
+    pub ingest: IngestConfig,
+
     /// Resource caps configuration (container deployment limits).
     /// Existing configs without [resource_caps] section still work (serde default applied).
     #[serde(default)]
@@ -2388,6 +2439,7 @@ impl Default for Config {
             idempotency: IdempotencyConfig::default(),
             recall: RecallConfig::default(),
             health: HealthConfig::default(),
+            ingest: IngestConfig::default(),
             resource_caps: ResourceCapsConfig::default(),
             chunking: ChunkingConfig::default(),
             store: StoreConfig::default(),
@@ -2493,6 +2545,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Phase 24.5 Plan 02 Task 1: verify [ingest] + [rate_limit] ingest_rps defaults.
+    #[test]
+    fn config_ingest_defaults() {
+        let c = Config::default();
+        assert!(c.ingest.api_key.is_none());
+        assert_eq!(c.ingest.max_batch_size, 100);
+        assert_eq!(c.ingest.max_content_size, 32_768);
+        assert_eq!(c.rate_limit.ingest_rps, 50);
+    }
 
     #[test]
     fn test_retention_defaults() {
