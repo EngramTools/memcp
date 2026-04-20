@@ -127,6 +127,17 @@ enum Commands {
         #[arg(long, value_delimiter = ',')]
         source_ids: Option<Vec<String>>,
     },
+    /// Drill into a long memory: splits the target memory on the fly, embeds each
+    /// candidate span, returns the span whose semantic match against `topic` is
+    /// highest. Emits {content, span: {start, end}} JSON on stdout. Phase 24.75-04.
+    MemorySpan {
+        /// Memory UUID to drill into.
+        #[arg(long)]
+        id: String,
+        /// Topic to match within the memory — describe what you're looking for in words.
+        #[arg(long)]
+        topic: String,
+    },
     /// Ingest conversation turns through the auto-store pipeline (analog of POST /v1/ingest).
     /// Accepts a batch via --file, --message, or stdin. Emits {results, summary} JSON to stdout.
     Ingest {
@@ -1070,6 +1081,11 @@ async fn main() -> Result<()> {
                 )
                 .await?;
             }
+        }
+
+        Commands::MemorySpan { id, topic } => {
+            let store = cli::connect_store(&config, cli.skip_migrate).await?;
+            cli::cmd_memory_span(&store, &config, &id, &topic).await?;
         }
 
         Commands::Ingest {

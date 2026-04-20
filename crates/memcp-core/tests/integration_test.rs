@@ -337,7 +337,7 @@ fn test_tool_discovery() {
     assert!(response["result"]["tools"].is_array());
 
     let tools = response["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 18, "Should have exactly 18 tools (Phase 24.5 added ingest_messages + ingest_message)");
+    assert_eq!(tools.len(), 19, "Should have exactly 19 tools (Phase 24.75 added get_memory_span)");
 
     // Check all expected tools are present
     let tool_names: Vec<String> = tools
@@ -365,6 +365,10 @@ fn test_tool_discovery() {
     assert!(
         tool_names.contains(&"ingest_message".to_string()),
         "expected ingest_message tool (Phase 24.5)"
+    );
+    assert!(
+        tool_names.contains(&"get_memory_span".to_string()),
+        "expected get_memory_span tool (Phase 24.75)"
     );
 
     // Verify each tool has required fields

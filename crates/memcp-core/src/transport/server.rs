@@ -136,6 +136,11 @@ pub struct MemoryService {
     extract_sender: Option<tokio::sync::mpsc::Sender<ExtractionJob>>,
     ingest_config: crate::config::IngestConfig,
     user_birth_year: Option<u32>,
+    // Phase 24.75 Plan 04 (CHUNK-04): shared topic-embedding cache used by the
+    // get_memory_span MCP tool. Same Arc as AppState so HTTP + MCP callers reuse
+    // one embedding per topic. Fresh HashMap if no cache is wired.
+    topic_embedding_cache:
+        Arc<tokio::sync::Mutex<HashMap<String, Vec<f32>>>>,
 }
 
 impl MemoryService {
@@ -188,7 +193,18 @@ impl MemoryService {
             extract_sender: None,
             ingest_config: crate::config::IngestConfig::default(),
             user_birth_year: None,
+            topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Wire the shared topic-embedding cache used by the `get_memory_span` MCP
+    /// tool (Phase 24.75 Plan 04). Pass the same Arc as AppState's cache so a
+    /// topic embed at either surface hits the same bounded HashMap.
+    pub fn set_topic_embedding_cache(
+        &mut self,
+        cache: Arc<tokio::sync::Mutex<HashMap<String, Vec<f32>>>>,
+    ) {
+        self.topic_embedding_cache = cache;
     }
 
     /// Wire the summarization provider used by the `ingest_messages` / `ingest_message`
@@ -910,6 +926,19 @@ pub struct IngestSingleMessageParams {
     pub source: String,
     pub session_id: String,
     pub project: String,
+}
+
+// Phase 24.75 Plan 04 (CHUNK-04): get_memory_span MCP tool params.
+//
+// Topic-query-only per D-04. Agents describe what they want in words; no
+// char-range variant (agents don't know byte offsets in advance).
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetMemorySpanParams {
+    /// Memory UUID to drill into.
+    pub memory_id: String,
+    /// Topic to match within the memory — describe what you're looking for in
+    /// words. Max 512 chars.
+    pub topic: String,
 }
 
 impl From<IngestMessageParams> for crate::transport::api::types::IngestMessage {
@@ -2514,6 +2543,65 @@ Params: role (required), content (required), source (required), session_id (requ
             project: params.project,
         };
         self.run_ingest_via_tool(req).await
+    }
+
+    #[tool(
+        description = "Drill into a long memory: returns the span semantically closest to `topic`. \
+Splits the memory on the fly (no stored chunks), embeds each candidate span, returns the best \
+match with byte offsets. First call on a given memory is slow (embedding N spans); topic \
+embeddings are cached per session. Use when a whole-memory hit is too long to fit in context — \
+ask for the topic-specific span instead of retrieving the full memory. \
+Params: memory_id (required UUID), topic (required, describe what you are looking for in words, \
+max 512 chars). \
+Returns: {content: string (the span), span: {start: int (byte offset), end: int}}."
+    )]
+    async fn get_memory_span(
+        &self,
+        Parameters(params): Parameters<GetMemorySpanParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // T-24.75-04-05: emit tool + memory_id; DO NOT log topic (content leakage).
+        tracing::info!(
+            tool = "get_memory_span",
+            memory_id = %params.memory_id,
+            "Tool called"
+        );
+        let provider = match self.embedding_provider.clone() {
+            Some(p) => p,
+            None => {
+                return Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": "embedding_provider_unavailable",
+                })));
+            }
+        };
+        match crate::transport::api::memory_span::compute_memory_span(
+            self.store.clone(),
+            provider,
+            self.topic_embedding_cache.clone(),
+            &params.memory_id,
+            &params.topic,
+        )
+        .await
+        {
+            Ok(resp) => Ok(CallToolResult::structured(
+                serde_json::to_value(resp).unwrap_or(serde_json::Value::Null),
+            )),
+            // Uniform "memory not found" per T-24.75-04-03 — do not disclose scope.
+            Err(MemcpError::NotFound { .. }) => Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": "memory not found",
+            }))),
+            Err(MemcpError::Validation { message, .. }) => {
+                Ok(CallToolResult::structured_error(json!({
+                    "isError": true,
+                    "error": message,
+                })))
+            }
+            Err(e) => Ok(CallToolResult::structured_error(json!({
+                "isError": true,
+                "error": e.to_string(),
+            }))),
+        }
     }
 
     #[tool(

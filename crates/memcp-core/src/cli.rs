@@ -629,6 +629,47 @@ async fn run_cmd_ingest(
     Ok(value)
 }
 
+// ---------------------------------------------------------------------------
+// cmd_memory_span — Phase 24.75 Plan 04 topic-span drill-down CLI subcommand
+// ---------------------------------------------------------------------------
+
+/// CLI entry for `memcp memory-span`. Connects the shared embedding provider and
+/// delegates to `transport::api::memory_span::compute_memory_span` — byte-identical
+/// output shape to the MCP tool and HTTP /v1/memory/span handler.
+///
+/// Emits a single-line JSON object `{content, span: {start, end}}` to stdout so
+/// the output is pipe-friendly (`memcp memory-span --id ... --topic ... | jq ...`).
+pub async fn cmd_memory_span(
+    store: &Arc<PostgresMemoryStore>,
+    config: &Config,
+    id: &str,
+    topic: &str,
+) -> Result<()> {
+    let provider = crate::daemon::create_embedding_provider(config).await?;
+    let value = cmd_memory_span_from_reader(store.clone(), provider, id, topic).await?;
+    println!("{}", serde_json::to_string(&value)?);
+    Ok(())
+}
+
+/// Testable seam for `cmd_memory_span`: takes pre-built store + provider so
+/// unit tests inject stub implementations. Matches Phase 24.5-04 D-04 seam
+/// precedent (`cmd_ingest` / `cmd_ingest_from_reader`).
+pub async fn cmd_memory_span_from_reader(
+    store: Arc<PostgresMemoryStore>,
+    provider: Arc<dyn crate::embedding::EmbeddingProvider + Send + Sync>,
+    id: &str,
+    topic: &str,
+) -> Result<serde_json::Value> {
+    let cache = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let store_dyn: Arc<dyn MemoryStore + Send + Sync> = store;
+    let resp = crate::transport::api::memory_span::compute_memory_span(
+        store_dyn, provider, cache, id, topic,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("{}", e))?;
+    Ok(serde_json::to_value(resp)?)
+}
+
 /// Update a memory's content or metadata in place.
 ///
 /// At least one of content, type_hint, source, or tags must be provided.
