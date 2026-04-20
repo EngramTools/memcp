@@ -394,32 +394,6 @@ impl PostgresMemoryStore {
         Ok(result.rows_affected() as usize)
     }
 
-    /// Soft-delete all chunks whose parent_id is in the given set.
-    ///
-    /// Used by the GC worker to cascade soft-deletes to chunks when a parent
-    /// memory is garbage-collected. FK ON DELETE CASCADE only triggers on
-    /// hard-delete (DELETE), not on UPDATE of deleted_at.
-    pub async fn soft_delete_chunks_by_parents(
-        &self,
-        parent_ids: &[String],
-    ) -> Result<usize, MemcpError> {
-        if parent_ids.is_empty() {
-            return Ok(0);
-        }
-        let result = sqlx::query(
-            "UPDATE memories SET deleted_at = NOW()
-             WHERE parent_id = ANY($1) AND deleted_at IS NULL",
-        )
-        .bind(parent_ids)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| {
-            MemcpError::Storage(format!("Failed to soft-delete chunks by parent: {}", e))
-        })?;
-
-        Ok(result.rows_affected() as usize)
-    }
-
     /// Hard purge memories soft-deleted more than grace_days ago.
     ///
     /// Also removes associated rows from memory_embeddings, memory_salience,
@@ -736,24 +710,6 @@ impl PostgresMemoryStore {
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to increment dedup merges: {}", e)))?;
         Ok(())
-    }
-
-    /// Delete all chunks belonging to a parent memory.
-    ///
-    /// Used for re-chunking when parent content changes.
-    /// Returns the number of deleted chunk rows.
-    pub async fn delete_chunks_by_parent(&self, parent_id: &str) -> Result<u64, MemcpError> {
-        let result = sqlx::query("DELETE FROM memories WHERE parent_id = $1")
-            .bind(parent_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| {
-                MemcpError::Storage(format!(
-                    "Failed to delete chunks for parent {}: {}",
-                    parent_id, e
-                ))
-            })?;
-        Ok(result.rows_affected())
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -1184,36 +1140,6 @@ impl PostgresMemoryStore {
         .await
         .map_err(|e| MemcpError::Storage(format!("Failed to add tag to memory: {}", e)))?;
         Ok(())
-    }
-
-    /// Get all chunks for a parent memory, ordered by chunk_index.
-    pub async fn get_chunks_by_parent(
-        &self,
-        parent_id: &str,
-    ) -> Result<Vec<crate::store::Memory>, MemcpError> {
-        let rows = sqlx::query(
-            "SELECT id, content, type_hint, source, tags, created_at, updated_at, \
-             last_accessed_at, access_count, embedding_status, \
-             extracted_entities, extracted_facts, extraction_status, \
-             is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience, \
-             event_time, event_time_precision, project, \
-             trust_level, session_id, agent_role, write_path, metadata, \
-             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
-             FROM memories WHERE parent_id = $1 AND deleted_at IS NULL \
-             ORDER BY chunk_index ASC",
-        )
-        .bind(parent_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| {
-            MemcpError::Storage(format!(
-                "Failed to get chunks for parent {}: {}",
-                parent_id, e
-            ))
-        })?;
-
-        rows.iter().map(row_to_memory).collect()
     }
 
     // -----------------------------------------------------------------------

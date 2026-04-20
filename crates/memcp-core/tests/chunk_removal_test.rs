@@ -143,16 +143,36 @@ async fn test_migration_028_collapse(_pool: PgPool) {
     assert_eq!(detect_and_reassemble(&solo, &[]), "solo");
 }
 
-/// After migration 028 DDL, attempting to run the orchestrator with chunk rows
-/// still present (manually re-inserted, simulating a partial rollback) MUST
-/// fail with a clean, actionable error — not silently drop data.
+/// After migration 028 DDL applies, attempting to re-introduce chunk rows via
+/// direct SQL MUST fail — the parent_id/chunk_index/total_chunks columns no
+/// longer exist. This is the post-DDL guardrail: a partial rollback cannot
+/// silently plant chunk-shaped rows back onto the migrated schema.
 ///
-/// This guardrail flips ON in Plan 24.75-03 Task 3 once the DDL step owns
-/// the "no chunks present" precondition.
+/// Plan 24.75-03 Task 3: flipped ON once migration 028 DDL owns the "no chunk
+/// columns" precondition.
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
-#[ignore = "pending 24.75-03"]
-async fn test_migration_028_refuses_unreassembled(_pool: PgPool) {
-    unimplemented!("DDL guardrail lands in 24.75-03");
+async fn test_migration_028_refuses_unreassembled(pool: PgPool) {
+    // Any INSERT that names parent_id must fail at the column-resolution stage.
+    let err = sqlx::query(
+        "INSERT INTO memories (id, content, type_hint, source, parent_id) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind("fake chunk body")
+    .bind("note")
+    .bind("test")
+    .bind("00000000-0000-0000-0000-000000000000")
+    .execute(&pool)
+    .await
+    .expect_err("INSERT with parent_id must fail post-migration-028");
+
+    let msg = err.to_string();
+    // Postgres surfaces "column \"parent_id\" ... does not exist".
+    assert!(
+        msg.contains("parent_id") && (msg.contains("does not exist") || msg.contains("not exist")),
+        "expected column-not-found error mentioning parent_id, got: {}",
+        msg
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -163,9 +183,21 @@ async fn test_migration_028_refuses_unreassembled(_pool: PgPool) {
 /// total_chunks) no longer exist on `memories`. A `SELECT parent_id FROM
 /// memories LIMIT 0` must surface a column-not-found error from Postgres.
 ///
-/// Flips ON in Plan 24.75-03 Task 3 with the ALTER TABLE DROP COLUMN DDL.
+/// Plan 24.75-03 Task 3: flipped ON with the ALTER TABLE DROP COLUMN DDL.
 #[sqlx::test(migrator = "memcp::MIGRATOR")]
-#[ignore = "pending 24.75-03"]
-async fn test_columns_dropped(_pool: PgPool) {
-    unimplemented!("column drop lands in 24.75-03");
+async fn test_columns_dropped(pool: PgPool) {
+    for column in ["parent_id", "chunk_index", "total_chunks"] {
+        let sql = format!("SELECT {} FROM memories LIMIT 0", column);
+        let result = sqlx::query(&sql).execute(&pool).await;
+        let err = result
+            .err()
+            .unwrap_or_else(|| panic!("SELECT {} must fail post-migration-028", column));
+        let msg = err.to_string();
+        assert!(
+            msg.contains(column) && (msg.contains("does not exist") || msg.contains("not exist")),
+            "expected column-not-found error for {}, got: {}",
+            column,
+            msg
+        );
+    }
 }

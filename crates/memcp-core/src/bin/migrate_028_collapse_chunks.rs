@@ -189,8 +189,75 @@ async fn run_collapse(
     );
 
     for parent_id in parent_ids {
-        // Last use of get_chunks_by_parent before Plan 03 removes the helper.
-        let chunks = store.get_chunks_by_parent(parent_id).await?;
+        // Phase 24.75-03 removed `get_chunks_by_parent` from the store helper
+        // surface; inline the query here so this binary remains compileable as
+        // a historical record even after Plan 03 deletes the helper.
+        //
+        // NOTE: this SQL targets the pre-migration-028 schema (parent_id +
+        // chunk_index columns present). Once migration 028 SQL has applied on
+        // this DB, the query will fail with a clean column-not-found error,
+        // which is correct post-condition: the binary has nothing to do.
+        let chunk_rows = sqlx::query(
+            "SELECT id, content, type_hint, source, tags, created_at, updated_at, \
+             last_accessed_at, access_count, embedding_status, \
+             extracted_entities, extracted_facts, extraction_status, \
+             is_consolidated_original, consolidated_into, \
+             actor, actor_type, audience, \
+             event_time, event_time_precision, project, \
+             trust_level, session_id, agent_role, write_path, metadata, \
+             abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
+             FROM memories WHERE parent_id = $1 AND deleted_at IS NULL \
+             ORDER BY chunk_index ASC",
+        )
+        .bind(parent_id)
+        .fetch_all(pool)
+        .await
+        .with_context(|| format!("failed to fetch chunk rows for parent {}", parent_id))?;
+        // The fetched rows are deliberately left as raw sqlx rows — the only
+        // field consumed below is `chunk_rows.len()` and `c.content` via the
+        // narrower fixture used by detect_and_reassemble tests. Build a minimal
+        // Memory fixture per row so detect_and_reassemble's Memory-based
+        // signature keeps working without pulling in the deleted helper.
+        let chunks: Vec<Memory> = chunk_rows
+            .iter()
+            .map(|r| {
+                use sqlx::Row;
+                Memory {
+                    id: r.try_get::<String, _>("id").unwrap_or_default(),
+                    content: r.try_get::<String, _>("content").unwrap_or_default(),
+                    type_hint: r.try_get::<String, _>("type_hint").unwrap_or_default(),
+                    source: r.try_get::<String, _>("source").unwrap_or_default(),
+                    tags: None,
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                    last_accessed_at: None,
+                    access_count: 0,
+                    embedding_status: "pending".to_string(),
+                    extracted_entities: None,
+                    extracted_facts: None,
+                    extraction_status: "pending".to_string(),
+                    is_consolidated_original: false,
+                    consolidated_into: None,
+                    actor: None,
+                    actor_type: "system".to_string(),
+                    audience: "global".to_string(),
+                    event_time: None,
+                    event_time_precision: None,
+                    project: None,
+                    trust_level: 0.5,
+                    session_id: None,
+                    agent_role: None,
+                    write_path: None,
+                    metadata: serde_json::json!({}),
+                    abstract_text: None,
+                    overview_text: None,
+                    abstraction_status: "skipped".to_string(),
+                    knowledge_tier: "raw".to_string(),
+                    source_ids: None,
+                    reply_to_id: None,
+                }
+            })
+            .collect();
         let parent = store.get(parent_id).await?;
 
         // A1 guardrail (A1-UNDECIDABLE-EMPTY path from 24.75-A1-PROBE.md):

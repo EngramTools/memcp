@@ -84,11 +84,13 @@ pub struct Memory {
     /// Knowledge tier: "raw", "imported", "explicit", "derived", "pattern".
     /// Inferred from write_path at store time; caller can override. Per D-03.
     pub knowledge_tier: String,
-    /// Source memory IDs (JSONB array of UUID strings).
-    /// Required non-empty when tier = "derived" (D-04). Optional for "pattern". Null for others.
+    /// Source memory IDs (JSONB array of UUID strings). Required non-empty when
+    /// tier = derived (D-04). Optional for pattern. Null for others. Post-24.75:
+    /// every referenced UUID points to a whole memory (chunk rows no longer exist).
     pub source_ids: Option<serde_json::Value>,
-    /// D-16: conversation-threading link. None for non-reply memories. (Phase 24.75 dropped
-    /// the separate parent_id/chunking column; reply_to_id is the only threading link.)
+    /// D-16: conversation-threading link. None for non-reply memories. Phase 24.75
+    /// dropped the separate chunk-parent column, leaving reply_to_id as the sole
+    /// threading link.
     pub reply_to_id: Option<String>,
 }
 
@@ -153,8 +155,9 @@ pub struct CreateMemory {
     /// Provenance source memory IDs. Required (non-empty) when knowledge_tier = "derived" (D-04).
     #[serde(default)]
     pub source_ids: Option<Vec<String>>,
-    /// D-16: conversation-threading link. None for non-reply memories. (Phase 24.75 dropped
-    /// the separate parent_id/chunking column; reply_to_id is the only threading link.)
+    /// D-16: conversation-threading link. None for non-reply memories. Phase 24.75
+    /// dropped the separate chunk-parent column, leaving reply_to_id as the sole
+    /// threading link.
     #[serde(default)]
     pub reply_to_id: Option<String>,
 }
