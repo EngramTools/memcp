@@ -670,9 +670,6 @@ pub(crate) fn row_to_memory(row: &PgRow) -> Result<Memory, MemcpError> {
         audience: row
             .try_get("audience")
             .unwrap_or_else(|_| "global".to_string()),
-        parent_id: row.try_get("parent_id").unwrap_or(None),
-        chunk_index: row.try_get("chunk_index").unwrap_or(None),
-        total_chunks: row.try_get("total_chunks").unwrap_or(None),
         event_time: row.try_get("event_time").unwrap_or(None),
         event_time_precision: row.try_get("event_time_precision").unwrap_or(None),
         project: row.try_get("project").unwrap_or(None),

@@ -15,7 +15,6 @@ use tokio::sync::mpsc;
 use crate::config::DedupConfig;
 use crate::consolidation::similarity::find_similar_memories;
 use crate::store::postgres::PostgresMemoryStore;
-use crate::store::MemoryStore;
 
 /// A job sent to the dedup worker after a memory's embedding is complete.
 pub struct DedupJob {
@@ -75,12 +74,6 @@ impl DedupWorker {
         )
         .await;
 
-        // Look up parent_id of the incoming memory (for chunk-sibling detection)
-        let job_parent_id: Option<String> = match self.store.get(&job.memory_id).await {
-            Ok(m) => m.parent_id,
-            Err(_) => None,
-        };
-
         match result {
             Err(e) => {
                 tracing::warn!(
@@ -94,22 +87,10 @@ impl DedupWorker {
                 tracing::debug!(memory_id = %job.memory_id, "Dedup: no duplicate found");
             }
             Ok(candidates) => {
-                // Skip chunk siblings: if the incoming memory is a chunk, ignore
-                // candidates that share the same parent_id (they're slices of the same content).
-                let (existing_id, similarity) = if let Some(pid) = &job_parent_id {
-                    match self.find_non_sibling(&candidates, pid).await {
-                        Some((id, sim)) => (id.clone(), sim),
-                        None => {
-                            tracing::debug!(
-                                memory_id = %job.memory_id,
-                                "Dedup: all candidates are chunk siblings — no duplicate"
-                            );
-                            return;
-                        }
-                    }
-                } else {
-                    (candidates[0].memory_id.clone(), candidates[0].similarity)
-                };
+                // Phase 24.75: chunking removed, so no parent/sibling concept remains.
+                // Pick the top candidate by similarity.
+                let (existing_id, similarity) =
+                    (candidates[0].memory_id.clone(), candidates[0].similarity);
 
                 let source_info = job.memory_id.as_str();
 
@@ -144,40 +125,6 @@ impl DedupWorker {
         }
     }
 
-    /// Find the first candidate that is NOT a chunk sibling of the incoming memory.
-    ///
-    /// Two chunks are siblings if they share the same parent_id. We skip these because
-    /// chunks from the same parent naturally have high similarity (overlapping content).
-    async fn find_non_sibling<'a>(
-        &self,
-        candidates: &'a [crate::consolidation::similarity::SimilarMemory],
-        job_parent_id: &str,
-    ) -> Option<(&'a String, f64)> {
-        for candidate in candidates {
-            // Look up the candidate's parent_id
-            match self.store.get(&candidate.memory_id).await {
-                Ok(m) => {
-                    if m.parent_id.as_deref() == Some(job_parent_id) {
-                        // Same parent — skip this sibling
-                        tracing::debug!(
-                            candidate_id = %candidate.memory_id,
-                            parent_id = %job_parent_id,
-                            "Dedup: skipping chunk sibling"
-                        );
-                        continue;
-                    }
-                    return Some((&candidate.memory_id, candidate.similarity));
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        candidate_id = %candidate.memory_id,
-                        "Dedup: failed to fetch candidate for sibling check — skipping"
-                    );
-                    continue;
-                }
-            }
-        }
-        None
-    }
+    // Phase 24.75: find_non_sibling removed — chunking is gone, so there are no
+    // parent/sibling relationships to worry about at dedup time.
 }

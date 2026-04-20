@@ -11,7 +11,7 @@ use serde_json::json;
 use tokio::time::{timeout, Duration};
 
 use super::types::{error_json, SearchRequest};
-use crate::search::salience::{dedup_parent_chunks, SalienceInput, SalienceScorer, ScoredHit};
+use crate::search::salience::{SalienceInput, SalienceScorer, ScoredHit};
 use crate::store::{decode_search_keyset_cursor, encode_search_keyset_cursor};
 use crate::transport::health::AppState;
 
@@ -249,7 +249,7 @@ pub async fn search_handler(
         }
     }
 
-    dedup_parent_chunks(&mut scored_hits);
+    // Phase 24.75: chunking removed; no parent/chunk dedup needed.
 
     // Apply cursor-based filtering.
     let scored_hits: Vec<ScoredHit> = if let Some((last_score, ref last_id)) = cursor_position {

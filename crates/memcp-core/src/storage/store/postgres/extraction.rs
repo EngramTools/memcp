@@ -240,7 +240,7 @@ impl PostgresMemoryStore {
         let rows = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
+             actor, actor_type, audience, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
              abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \
@@ -788,7 +788,7 @@ impl PostgresMemoryStore {
              m.last_accessed_at, m.access_count, m.embedding_status, \
              m.extracted_entities, m.extracted_facts, m.extraction_status, \
              m.is_consolidated_original, m.consolidated_into, \
-             m.actor, m.actor_type, m.audience, m.parent_id, m.chunk_index, m.total_chunks, \
+             m.actor, m.actor_type, m.audience, \
              m.event_time, m.event_time_precision, m.project, \
              m.trust_level, m.session_id, m.agent_role, m.write_path, m.metadata, \
              m.abstract_text, m.overview_text, m.abstraction_status, \
@@ -810,7 +810,7 @@ impl PostgresMemoryStore {
              m.last_accessed_at, m.access_count, m.embedding_status, \
              m.extracted_entities, m.extracted_facts, m.extraction_status, \
              m.is_consolidated_original, m.consolidated_into, \
-             m.actor, m.actor_type, m.audience, m.parent_id, m.chunk_index, m.total_chunks, \
+             m.actor, m.actor_type, m.audience, \
              m.event_time, m.event_time_precision, m.project, \
              m.trust_level, m.session_id, m.agent_role, m.write_path, m.metadata, \
              m.abstract_text, m.overview_text, m.abstraction_status, \
@@ -1196,7 +1196,7 @@ impl PostgresMemoryStore {
              last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, \
              is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
+             actor, actor_type, audience, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
              abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids \

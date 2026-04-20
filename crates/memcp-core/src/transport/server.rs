@@ -94,7 +94,7 @@ use crate::embedding::{EmbeddingJob, EmbeddingProvider};
 use crate::errors::MemcpError;
 use crate::extraction::ExtractionJob;
 use crate::pipeline::redaction::RedactionEngine;
-use crate::search::salience::{dedup_parent_chunks, SalienceInput};
+use crate::search::salience::SalienceInput;
 use crate::search::{SalienceScorer, ScoredHit};
 use crate::store::{
     decode_search_keyset_cursor, encode_search_keyset_cursor, CreateMemory, ListFilter, Memory,
@@ -1077,9 +1077,6 @@ Callable from code_execution_20260120 sandboxes."
             actor_type: params.actor_type.unwrap_or_else(|| "agent".to_string()),
             audience: params.audience.unwrap_or_else(|| "global".to_string()),
             idempotency_key: params.idempotency_key,
-            parent_id: None,
-            chunk_index: None,
-            total_chunks: None,
             event_time: None,
             event_time_precision: None,
             project: None,
@@ -2230,8 +2227,7 @@ Callable from code_execution_20260120 sandboxes."
             }
         }
 
-        // 12.6. Deduplicate parent/chunk collisions — prefer chunks over parents.
-        dedup_parent_chunks(&mut scored_hits);
+        // 12.6. Phase 24.75: chunking removed; no parent/chunk dedup needed.
 
         // 13. Apply cursor-based filtering: skip items at or before the cursor position.
         // Cursor encodes (salience_score, id) of the LAST item on the previous page.

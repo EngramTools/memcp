@@ -53,12 +53,6 @@ pub struct Memory {
     pub actor_type: String,
     /// Audience scope: "global", "self", "tenant"
     pub audience: String,
-    /// Parent memory ID for chunks (None for standalone/parent memories)
-    pub parent_id: Option<String>,
-    /// Zero-based index of this chunk within the parent's chunk family
-    pub chunk_index: Option<i32>,
-    /// Total number of chunks the parent was split into
-    pub total_chunks: Option<i32>,
     /// When the memory content refers to a specific point in time (e.g., "in 2019", "when I was 6").
     /// Separate from created_at — this is the event time embedded in the content, not the store time.
     pub event_time: Option<DateTime<Utc>>,
@@ -93,7 +87,8 @@ pub struct Memory {
     /// Source memory IDs (JSONB array of UUID strings).
     /// Required non-empty when tier = "derived" (D-04). Optional for "pattern". Null for others.
     pub source_ids: Option<serde_json::Value>,
-    /// D-16: conversation-threading link. None for non-reply memories. Distinct from parent_id (chunking).
+    /// D-16: conversation-threading link. None for non-reply memories. (Phase 24.75 dropped
+    /// the separate parent_id/chunking column; reply_to_id is the only threading link.)
     pub reply_to_id: Option<String>,
 }
 
@@ -129,15 +124,6 @@ pub struct CreateMemory {
     /// When absent, content-hash dedup applies within the configured window.
     #[serde(default)]
     pub idempotency_key: Option<String>,
-    /// Parent memory ID — set when creating a chunk
-    #[serde(default)]
-    pub parent_id: Option<String>,
-    /// Chunk index within parent (0-based)
-    #[serde(default)]
-    pub chunk_index: Option<i32>,
-    /// Total chunks in the parent family
-    #[serde(default)]
-    pub total_chunks: Option<i32>,
     /// Optional event time extracted from content during store (e.g., "in 2019" → 2019-01-01T00:00:00Z).
     /// Populated by temporal extraction pipeline; None if no temporal reference found.
     #[serde(default)]
@@ -167,7 +153,8 @@ pub struct CreateMemory {
     /// Provenance source memory IDs. Required (non-empty) when knowledge_tier = "derived" (D-04).
     #[serde(default)]
     pub source_ids: Option<Vec<String>>,
-    /// D-16: conversation-threading link. None for non-reply memories. Distinct from parent_id (chunking).
+    /// D-16: conversation-threading link. None for non-reply memories. (Phase 24.75 dropped
+    /// the separate parent_id/chunking column; reply_to_id is the only threading link.)
     #[serde(default)]
     pub reply_to_id: Option<String>,
 }

@@ -215,33 +215,7 @@ fn days_since(ts: chrono::DateTime<chrono::Utc>) -> f64 {
     (duration.num_seconds() as f64 / 86_400.0).max(0.0)
 }
 
-/// Deduplicate parent/chunk collisions in search results.
-///
-/// When both a parent memory and one or more of its chunks appear in search results,
-/// suppress the parent (prefer the more specific chunk). Multiple chunks from the
-/// same parent are all kept -- they represent different content segments.
-///
-/// Called after salience scoring, before cursor pagination and result assembly.
-pub fn dedup_parent_chunks(hits: &mut Vec<ScoredHit>) {
-    use std::collections::HashSet;
-
-    // Collect parent_ids of all chunks in results (owned to avoid borrow conflict with retain)
-    let chunk_parent_ids: HashSet<String> = hits
-        .iter()
-        .filter_map(|h| h.memory.parent_id.clone())
-        .collect();
-
-    if chunk_parent_ids.is_empty() {
-        return; // No chunks in results, nothing to dedup
-    }
-
-    // Remove parent memories whose chunks are also present
-    hits.retain(|h| {
-        if h.memory.parent_id.is_none() {
-            // This is a parent or standalone memory — drop if a chunk from it is present
-            !chunk_parent_ids.contains(&h.memory.id)
-        } else {
-            true // Keep all chunks
-        }
-    });
-}
+// Phase 24.75 (CHUNK-06): chunk-dedup logic removed from the salience module.
+// Chunking no longer exists at the storage layer, so there are no parent/chunk
+// collisions to resolve. Precision on long memories comes from get_memory_span
+// (Plan 24.75-04) + Phase 27 agentic retrieval.

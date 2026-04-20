@@ -16,7 +16,7 @@ use crate::config::Config;
 use crate::gc;
 use crate::ipc::{embed_multi_via_daemon, embed_via_daemon, rerank_via_daemon};
 use crate::pipeline::temporal::extract_event_time;
-use crate::search::salience::{dedup_parent_chunks, SalienceInput};
+use crate::search::salience::SalienceInput;
 use crate::search::{SalienceScorer, ScoredHit};
 use crate::store::postgres::PostgresMemoryStore;
 use crate::store::{
@@ -437,9 +437,6 @@ pub async fn cmd_store(
         actor_type,
         audience,
         idempotency_key,
-        parent_id: None,
-        chunk_index: None,
-        total_chunks: None,
         event_time,
         event_time_precision,
         project,
@@ -1088,8 +1085,7 @@ pub async fn cmd_search(
         }
     }
 
-    // Deduplicate parent/chunk collisions — prefer chunks over parents.
-    dedup_parent_chunks(&mut scored_hits);
+    // Phase 24.75: chunking removed; no parent/chunk dedup needed.
 
     // Apply cursor-based filtering: skip items at or before the cursor position.
     // Cursor encodes (salience_score, id) of the LAST item on the previous page.

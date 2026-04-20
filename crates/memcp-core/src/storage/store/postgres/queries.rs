@@ -85,7 +85,6 @@ impl MemoryStore for PostgresMemoryStore {
                  m.last_accessed_at, m.access_count, m.embedding_status, \
                  m.extracted_entities, m.extracted_facts, m.extraction_status, \
                  m.is_consolidated_original, m.consolidated_into, m.actor, m.actor_type, m.audience, \
-                 m.parent_id, m.chunk_index, m.total_chunks, \
                  m.event_time, m.event_time_precision, m.project, \
                  m.trust_level, m.session_id, m.agent_role, m.write_path, m.metadata, \
                  m.abstract_text, m.overview_text, m.abstraction_status, m.knowledge_tier, m.source_ids, m.reply_to_id \
@@ -113,7 +112,6 @@ impl MemoryStore for PostgresMemoryStore {
                  last_accessed_at, access_count, embedding_status, \
                  extracted_entities, extracted_facts, extraction_status, \
                  is_consolidated_original, consolidated_into, actor, actor_type, audience, \
-                 parent_id, chunk_index, total_chunks, \
                  event_time, event_time_precision, project, \
                  trust_level, session_id, agent_role, write_path, metadata, \
                  abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids, reply_to_id \
@@ -192,8 +190,8 @@ impl MemoryStore for PostgresMemoryStore {
         };
 
         sqlx::query(
-            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, parent_id, chunk_index, total_chunks, event_time, event_time_precision, project, trust_level, session_id, agent_role, write_path, metadata, abstraction_status, knowledge_tier, source_ids, reply_to_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)",
+            "INSERT INTO memories (id, content, type_hint, source, tags, created_at, updated_at, access_count, embedding_status, actor, actor_type, audience, content_hash, event_time, event_time_precision, project, trust_level, session_id, agent_role, write_path, metadata, abstraction_status, knowledge_tier, source_ids, reply_to_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 'pending', $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)",
         )
         .bind(&id)
         .bind(&input.content)
@@ -206,9 +204,6 @@ impl MemoryStore for PostgresMemoryStore {
         .bind(&input.actor_type)
         .bind(&input.audience)
         .bind(&hash)          // content_hash for dedup
-        .bind(&input.parent_id)
-        .bind(input.chunk_index)
-        .bind(input.total_chunks)
         .bind(input.event_time)
         .bind(&input.event_time_precision)
         .bind(&input.project)
@@ -293,9 +288,6 @@ impl MemoryStore for PostgresMemoryStore {
             actor: input.actor,
             actor_type: input.actor_type,
             audience: input.audience,
-            parent_id: input.parent_id,
-            chunk_index: input.chunk_index,
-            total_chunks: input.total_chunks,
             event_time: input.event_time,
             event_time_precision: input.event_time_precision,
             project: input.project,
@@ -318,7 +310,7 @@ impl MemoryStore for PostgresMemoryStore {
         let row = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
+             actor, actor_type, audience, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
              abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids, reply_to_id \
@@ -415,7 +407,7 @@ impl MemoryStore for PostgresMemoryStore {
         let updated_row = sqlx::query(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
+             actor, actor_type, audience, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
              abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids, reply_to_id \
@@ -522,7 +514,7 @@ impl MemoryStore for PostgresMemoryStore {
         let sql = format!(
             "SELECT id, content, type_hint, source, tags, created_at, updated_at, last_accessed_at, access_count, embedding_status, \
              extracted_entities, extracted_facts, extraction_status, is_consolidated_original, consolidated_into, \
-             actor, actor_type, audience, parent_id, chunk_index, total_chunks, \
+             actor, actor_type, audience, \
              event_time, event_time_precision, project, \
              trust_level, session_id, agent_role, write_path, metadata, \
              abstract_text, overview_text, abstraction_status, knowledge_tier, source_ids, reply_to_id \
