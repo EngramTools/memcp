@@ -2198,7 +2198,6 @@ async fn main() -> Result<()> {
                 let _auto_store_handle = memcp::auto_store::AutoStoreWorker::spawn(
                     memcp::auto_store::AutoStoreContext {
                         config: config.auto_store.clone(),
-                        chunking_config: config.chunking.clone(),
                         extraction_config: &config.extraction,
                         store: store.clone(),
                         embedding_pipeline: Some(&pipeline),
