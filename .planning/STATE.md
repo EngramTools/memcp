@@ -3,21 +3,21 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: 24.75-01 complete — migration 028 apparatus ready (orchestrator + DDL)
-last_updated: "2026-04-19T23:36:35.472Z"
+stopped_at: 24.75-04 complete — get_memory_span across MCP + HTTP + CLI
+last_updated: "2026-04-20T02:48:37.854Z"
 progress:
   total_phases: 67
   completed_phases: 41
   total_plans: 157
-  completed_plans: 127
-  percent: 81
+  completed_plans: 130
+  percent: 83
 ---
 
 # Project State
 
 ## Current Phase
 
-Phase 24.75 (Chunk-Semantics Rethink) -- Plan 00 (baseline + A1 probe) + Plan 01 (migration 028 apparatus) COMPLETE. Plans 02-05 remaining (auto-store chunking removal, DDL apply + operator checkpoint, import granularity per message, benchmark re-run).
+Phase 24.75 (Chunk-Semantics Rethink) -- Plans 00-04 COMPLETE. Plan 05 (benchmark re-run on LongMemEval + LoCoMo post-chunk-removal) remaining.
 
 ## Active Context
 
@@ -29,14 +29,15 @@ Phase 24.75 (Chunk-Semantics Rethink) -- Plan 00 (baseline + A1 probe) + Plan 01
 - Phase 24.5 Plan 04 COMPLETE: parse_ingest_stream auto-detect helper; run_ingest_batch refactored into AppState-free run_ingest_batch_with_ctx shared by HTTP/MCP/CLI; 2 MCP tools (ingest_messages batch + ingest_message single) registered; MemoryService gains summarization_provider/embed_sender/extract_sender/ingest_config/user_birth_year setters; memcp ingest CLI subcommand with --file/--message/--stdin (auto-detect when piped); cmd_ingest_from_reader testable seam; 22/22 ingest tests green; test_tool_discovery (16→18) now green; INGEST-06 delivered in full
 - Phase 24.75 Plan 00 COMPLETE: A1 probe (A1-UNDECIDABLE-EMPTY — dev DB has 0 chunk rows; source-read confirms A1 holds by construction); 3 RED test scaffolds registered in tests/chunk_removal_test.rs (all `#[ignore]`d with pending-plan markers)
 - Phase 24.75 Plan 01 COMPLETE: migrations/028_drop_chunks.sql (DDL-only, 10 lines); migrate_028_collapse_chunks binary (438 lines, local-embed feature) — Pitfall 5 dimension guard + Pitfall 6 per-parent short transactions + A1 length-guardrail before any wipe; data/migration_028_report.jsonl audit trail; dry-run on dev DB prints "no chunk rows — no-op"; 4 unit tests + 1 integration test green; CHUNK-02 delivered. test_migration_028_refuses_unreassembled + test_columns_dropped still `#[ignore]`d (Plan 03 owners)
+- Phase 24.75 Plan 04 COMPLETE: compute_memory_span shared helper in transport/api/memory_span.rs — MCP + HTTP + CLI all delegate to one code path (byte-identical output for same inputs). MCP get_memory_span tool registered (tool-count 18→19); POST /v1/memory/span behind rate_limit; `memcp memory-span --id --topic` CLI subcommand. Topic-embedding cache bounded to 100 entries on AppState + MemoryService. Byte offsets computed via sentence-anchor back into memory.content, returned content is the parent substring verbatim. Threats T-24.75-04-01/02/03/05 mitigated (topic length cap, span count cap, uniform not-found, no topic logging). 3 Wave-0 scaffolds flipped green (test_topic_ranked_span, test_memory_span_offsets_valid, test_memory_span_http); CHUNK-04 delivered.
 - Phases 24.5-27 on ROADMAP (Universal Ingestion, Reasoning Agent, Dreaming Worker, Agentic Retrieval)
 - Pricing decided: Option A -- Pro $25-35/mo includes reasoning, BYOK $10-15/mo
 
 ## Next Steps
 
-1. Plan 24.75-02: strip chunking fan-out from `pipeline/auto_store/mod.rs:463-570`; auto-store stores whole regardless of length (CHUNK-01).
-2. Plan 24.75-03: operator checkpoint — run `migrate_028_collapse_chunks` binary on real data, then apply migration 028 DDL via daemon restart; flip ON test_migration_028_refuses_unreassembled + test_columns_dropped.
-3. Plan 24.75-04 / 24.75-05: `get_memory_span` tool (CHUNK-04), import-granularity updates (CHUNK-05), LongMemEval + LoCoMo re-run (CHUNK-08).
+1. Plan 24.75-05: re-run LongMemEval + LoCoMo benchmarks post-chunk-removal. Accept ≤5% recall drop per D-05; document findings. If >5%, investigate but do not revert (precision path is Phase 27 + Phase 29, not reviving chunks).
+2. Open a workspace-wide clippy sweep follow-up (2056 pre-existing pedantic warnings in load_test + validation, blocking `cargo clippy --all-targets -- -D warnings`).
+3. After Phase 24.75 wraps: coordinate downstream update — Phase 27 ARET-02 should add `get_memory_span` to the retrieval specialist's tool palette.
 
 ## Project Reference
 
@@ -47,8 +48,8 @@ See: .planning/PROJECT.md (updated 2026-04-17)
 
 ## Session Continuity
 
-Last session: 2026-04-19T23:36:20.247Z
-Stopped at: 24.75-01 complete — migration 028 apparatus ready (orchestrator + DDL)
+Last session: 2026-04-20T02:50:00.000Z
+Stopped at: 24.75-04 complete — get_memory_span across MCP + HTTP + CLI (CHUNK-04 delivered)
 Resume file: None
 
 ## Recent Decisions
@@ -82,3 +83,11 @@ Resume file: None
 - 24.75-01: detect_and_reassemble kept as A1-REFUTED fallback (header-stripped concat in chunk_index order); zero cost on empty dev DB, safety net for any other DB
 - 24.75-01: two separate pool/store entities in the binary — direct PgPool for write transactions, PostgresMemoryStore for read helpers; simpler than adding a pool-sharing constructor for one-shot binary
 - 24.75-01: integration test re-declares detect_and_reassemble as a lockstep shim (integration-test crates cannot import from src/bin/*.rs); binary's 4 inline unit tests are canonical coverage
+- 24.75-04: compute_memory_span uses splitter::split_sentences directly (NOT chunk_content) because chunk_content prefixes a `[From: topic] part N/M\n` context header that would break the `memory.content[start..end] == returned.content` byte invariant
+- 24.75-04: return memory.content[start..end] VERBATIM (not the joined-sentences string) — guarantees byte-accurate offsets even when unicode_sentences consumes inter-sentence whitespace; offsets anchor via first + last sentence find into parent content
+- 24.75-04: HTTP /v1/memory/span sits behind rate_limit only, no auth — mirrors /v1/search (A4); topic queries are read-only and cheap enough to share the search rate bucket
+- 24.75-04: topic-embedding cache is bounded HashMap<String, Vec<f32>> cap=100, drop-arbitrary-entry on overflow — RESEARCH Don't-Hand-Roll simple path is acceptable for v1; span-embedding cache deferred until real usage demands (Phase 29 may obsolete it)
+- 24.75-04: MemoryService gains topic_embedding_cache field + setter so a daemon can share one Arc with AppState when hosting both HTTP + MCP — stdio-only `memcp serve` gets its own default cache
+- 24.75-04: MCP + HTTP both map MemcpError::NotFound to a uniform "memory not found" error — T-24.75-04-03 disposition prevents scope-exclusion disclosure
+- 24.75-04: tracing span emits tool + memory_id only; topic is NEVER logged — T-24.75-04-05 disposition avoids content leakage via logs
+- 24.75-04: 8 AppState struct-literal call sites all required the new topic_embedding_cache field (daemon.rs + 6 test helpers + load_test.rs × 2) — plan called out api_test.rs only; the rest were Rule-3 auto-fixes

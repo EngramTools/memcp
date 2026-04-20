@@ -722,7 +722,7 @@ Plans:
 
 ## Phase 24.75: Remove Chunks, Rely on Reasoning Layer
 - **Goal**: Remove chunking from memcp entirely. One memory per atomic unit (message, turn, document). No sibling rows with `parent_id`. Retrieval returns whole memories. Agents drill into long memories on demand via a new `get_memory_span(memory_id, topic)` tool that splits and embeds lazily at query time. Precision comes from the reasoning layer (Phases 25/27) and the summary layer (Phase 29), not from pre-computed chunks.
-- **Status**: Planned
+- **Status**: In progress — Plans 00-04 COMPLETE (CHUNK-01/02/03/04/05/06/07 delivered); Plan 05 (benchmark re-run, CHUNK-08) remaining
 - **Depends on**: Phase 24 (knowledge tiers need intact per-memory identity for `source_ids`), Phase 24.5 (ingest ships without chunking first, then 24.75 rehabilitates auto-store)
 - **Origin**: Phase 24.5 D-10 plus 24.75 discuss-phase (2026-04-19) — pivoted from "chunks-as-internal-embeddings" after recognizing that the Honcho-style reasoning stack (QI re-ranker, reasoning specialists, source chains, salience, tier boosting) makes chunks a liability at every layer. Chunking was designed for one-shot vector retrieval; the reasoning stack has moved past that. Removing chunks is simpler than rehabilitating them.
 - **Locked discussion decisions (2026-04-19):**
@@ -735,7 +735,7 @@ Plans:
   - CHUNK-01: Drop the chunking fan-out loop from auto-store (`pipeline/auto_store/mod.rs:463-570`). Auto-store stores content whole, regardless of length.
   - CHUNK-02: Migration 028 — collapse `memories WHERE parent_id IS NOT NULL` rows back into their parents (reassemble content ordered by `chunk_index`, re-embed parent from the full reassembled content, delete chunk rows). One-shot destructive; manual backup required before running.
   - CHUNK-03: Drop `parent_id`, `chunk_index`, `total_chunks` columns from `memories`. Drop `idx_memories_parent_id`. Update all SQL, type definitions, and tests that reference these columns.
-  - CHUNK-04: New MCP/HTTP/CLI tool `get_memory_span(memory_id, topic)` — splits the target memory on-the-fly (reusing `pipeline/chunking/splitter.rs` as a runtime utility), embeds each candidate span, returns the best-matching span. No persistent chunk storage. Agent-driven precision tool.
+  - [x] CHUNK-04: New MCP/HTTP/CLI tool `get_memory_span(memory_id, topic)` — splits the target memory on-the-fly (reusing `pipeline/chunking/splitter.rs` as a runtime utility), embeds each candidate span, returns the best-matching span. No persistent chunk storage. Agent-driven precision tool. (Plan 24.75-04, 9d5bde1 + c38eef2)
   - CHUNK-05: Update import paths (chatgpt, claude_ai, claude_code, markdown) to store one memory per message/turn (conversations) or per document (markdown). The existing `chunk_content()` helper in imports becomes obsolete for storage; retains utility for `get_memory_span` at query time.
   - CHUNK-06: Salience + reinforcement operate on whole memory rows only — no "split signal across siblings" problem to solve, just remove the chunk-aware handling.
   - CHUNK-07: Ensure `source_ids` referencing rules cascade cleanly once chunks no longer exist (no CHUNK-09 schema enforcement needed — there are no chunk IDs).
