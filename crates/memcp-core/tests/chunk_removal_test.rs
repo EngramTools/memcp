@@ -71,7 +71,12 @@ async fn test_migration_028_collapse(_pool: PgPool) {
         out
     }
 
-    fn mk(id: &str, content: &str, parent_id: Option<&str>, chunk_index: Option<i32>) -> Memory {
+    // Phase 24.75-03: Memory struct no longer carries parent_id/chunk_index/
+    // total_chunks. `detect_and_reassemble` reads parent.content + iterates
+    // `chunks` in caller-supplied order, so the shim no longer needs those
+    // fields. Chunk ordering is preserved by the caller's Vec construction,
+    // mirroring the orchestrator's `ORDER BY chunk_index ASC` SQL query.
+    fn mk(id: &str, content: &str) -> Memory {
         Memory {
             id: id.to_string(),
             content: content.to_string(),
@@ -91,9 +96,6 @@ async fn test_migration_028_collapse(_pool: PgPool) {
             actor: None,
             actor_type: "system".to_string(),
             audience: "global".to_string(),
-            parent_id: parent_id.map(str::to_string),
-            chunk_index,
-            total_chunks: None,
             event_time: None,
             event_time_precision: None,
             project: None,
@@ -112,27 +114,23 @@ async fn test_migration_028_collapse(_pool: PgPool) {
     }
 
     // A1-CONFIRMED: parent holds full content — trusted as authoritative.
-    let parent = mk("p1", "hello world from memcp full content", None, None);
+    let parent = mk("p1", "hello world from memcp full content");
     let chunks = vec![
-        mk("c0", "[From: \"t\", part 1/2]\nhello world", Some("p1"), Some(0)),
-        mk("c1", "[From: \"t\", part 2/2]\n from memcp", Some("p1"), Some(1)),
+        mk("c0", "[From: \"t\", part 1/2]\nhello world"),
+        mk("c1", "[From: \"t\", part 2/2]\n from memcp"),
     ];
     assert_eq!(detect_and_reassemble(&parent, &chunks), parent.content);
 
     // A1-REFUTED: parent is preview, chunks carry the real payload.
-    let parent = mk("p2", "preview", None, None);
+    let parent = mk("p2", "preview");
     let chunks = vec![
         mk(
             "c0",
             "[From: \"t\", part 1/2]\nFIRST CHUNK REAL BODY OF THE LONG CONTENT",
-            Some("p2"),
-            Some(0),
         ),
         mk(
             "c1",
             "[From: \"t\", part 2/2]\nSECOND CHUNK REAL BODY OF THE LONG CONTENT",
-            Some("p2"),
-            Some(1),
         ),
     ];
     let reassembled = detect_and_reassemble(&parent, &chunks);
@@ -141,7 +139,7 @@ async fn test_migration_028_collapse(_pool: PgPool) {
     assert!(!reassembled.starts_with("[From:"));
 
     // Idempotency: no chunks → parent content returned verbatim.
-    let solo = mk("p3", "solo", None, None);
+    let solo = mk("p3", "solo");
     assert_eq!(detect_and_reassemble(&solo, &[]), "solo");
 }
 

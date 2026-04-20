@@ -67,19 +67,11 @@ pub async fn run_gc(
         store.soft_delete_memories(&expired_ids).await?
     };
 
-    // Step 6c: Cascade soft-delete to chunks of pruned/expired parents.
-    // FK ON DELETE CASCADE only triggers on hard-delete, so we must explicitly
-    // soft-delete orphaned chunks when their parent is soft-deleted.
+    // Phase 24.75: chunking removed — no chunk rows, so no cascade soft-delete
+    // is required. Collect the list of deleted IDs purely for step 6d (source_ids
+    // orphan tagging).
     let mut all_deleted_parents: Vec<String> = candidate_ids;
     all_deleted_parents.extend(expired_ids.iter().cloned());
-    if !all_deleted_parents.is_empty() {
-        let chunk_count = store
-            .soft_delete_chunks_by_parents(&all_deleted_parents)
-            .await?;
-        if chunk_count > 0 {
-            tracing::info!(chunk_count, "GC: cascade soft-deleted orphaned chunks");
-        }
-    }
 
     // Step 6d: Tag derived/pattern memories that reference deleted sources as "orphaned_sources" (D-06).
     // No cascade delete — derived conclusions are often more valuable than their sources.

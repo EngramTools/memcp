@@ -4,7 +4,8 @@
 //! Splits content at `# ` and `## ` header boundaries to produce
 //! semantically coherent chunks (one section = one memory).
 //!
-//! Long sections are further split by `chunk_content()` to stay under 2048 chars.
+//! Phase 24.75 D-01: long sections are stored whole. `get_memory_span`
+//! (Plan 24.75-04) handles drill-down at query time.
 
 use std::path::Path;
 
@@ -13,12 +14,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use super::{
-    chatgpt::chunk_content, DiscoveredSource, ImportChunk, ImportOpts, ImportSource,
-    ImportSourceKind,
+    DiscoveredSource, ImportChunk, ImportOpts, ImportSource, ImportSourceKind,
 };
-
-/// Maximum chunk size in characters. Sections longer than this are further split.
-const MAX_CHUNK_CHARS: usize = 2048;
 
 // ── Reader ────────────────────────────────────────────────────────────────────
 
@@ -92,7 +89,9 @@ impl ImportSource for MarkdownReader {
                 format!("file:{}", filename),
             ];
 
-            // Split content at H1/H2 headers.
+            // Phase 24.75 D-01: one memory per H1/H2 section. No sub-chunking —
+            // long sections are stored whole; Phase 27 + get_memory_span handle
+            // drill-down at query time.
             let sections = split_by_headers(&content);
 
             for section in sections {
@@ -101,30 +100,17 @@ impl ImportSource for MarkdownReader {
                     continue;
                 }
 
-                // Further split very long sections.
-                let sub_chunks = chunk_content(section, MAX_CHUNK_CHARS);
-                let total = sub_chunks.len();
-
-                for (i, piece) in sub_chunks.into_iter().enumerate() {
-                    if piece.trim().is_empty() {
-                        continue;
-                    }
-                    let mut chunk_tags = base_tags.clone();
-                    if total > 1 {
-                        chunk_tags.push(format!("chunk:{}/{}", i + 1, total));
-                    }
-                    chunks.push(ImportChunk {
-                        content: piece,
-                        type_hint: Some("fact".to_string()),
-                        source: "imported:markdown".to_string(),
-                        tags: chunk_tags,
-                        created_at,
-                        actor: None,
-                        embedding: None,
-                        embedding_model: None,
-                        project: opts.project.clone(),
-                    });
-                }
+                chunks.push(ImportChunk {
+                    content: section.to_string(),
+                    type_hint: Some("fact".to_string()),
+                    source: "imported:markdown".to_string(),
+                    tags: base_tags.clone(),
+                    created_at,
+                    actor: None,
+                    embedding: None,
+                    embedding_model: None,
+                    project: opts.project.clone(),
+                });
             }
         }
 
@@ -236,11 +222,30 @@ mod tests {
         let opts = ImportOpts::default();
         let chunks = reader.read_chunks(f.path(), &opts).await.unwrap();
 
-        assert!(chunks.len() >= 1);
+        // Phase 24.75 D-01: two H1/H2 sections ⇒ two chunks. No sub-chunking.
+        assert_eq!(chunks.len(), 2);
         for chunk in &chunks {
             assert_eq!(chunk.type_hint, Some("fact".to_string()));
             assert!(chunk.tags.contains(&"imported:markdown".to_string()));
+            // No chunk:N/M tags (CHUNK-05: no fan-out).
+            assert!(!chunk.tags.iter().any(|t| t.starts_with("chunk:")));
         }
+    }
+
+    /// CHUNK-05: a single long H1 section produces exactly one chunk — no
+    /// char-window sub-chunking.
+    #[tokio::test]
+    async fn test_markdown_long_section_no_subchunk() {
+        let mut f = NamedTempFile::with_suffix(".md").unwrap();
+        let body = "x".repeat(5_000);
+        writeln!(f, "# Long Section\n{}", body).unwrap();
+
+        let reader = MarkdownReader;
+        let opts = ImportOpts::default();
+        let chunks = reader.read_chunks(f.path(), &opts).await.unwrap();
+
+        assert_eq!(chunks.len(), 1, "one section in, one chunk out");
+        assert!(chunks[0].content.len() > 4_000);
     }
 
     #[tokio::test]

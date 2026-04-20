@@ -20,9 +20,6 @@ use chrono::DateTime;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
-use crate::config::ChunkingConfig;
-use crate::pipeline::chunking::chunk_content;
-
 use super::{DiscoveredSource, ImportChunk, ImportOpts, ImportSource, ImportSourceKind};
 
 /// Parsed line from Claude Code history.jsonl.
@@ -75,8 +72,10 @@ impl ClaudeCodeReader {
 
     /// Split MEMORY.md content into sections based on `#` and `##` headers.
     ///
-    /// Each header + following content becomes one ImportChunk. If a section
-    /// is very long (>2048 chars), it's further split using chunk_content().
+    /// Phase 24.75 D-01 (A6 MEMORY.md recommendation): each header + following
+    /// content becomes exactly one `ImportChunk`. No further sub-chunking —
+    /// long sections are stored whole. Phase 27 agentic retrieval +
+    /// `get_memory_span` (Plan 24.75-04) handle drill-down at query time.
     fn split_into_sections(
         content: &str,
         source_path: &str,
@@ -98,40 +97,30 @@ impl ClaudeCodeReader {
             let content = if let Some(h) = header {
                 format!("{}\n\n{}", h, body)
             } else {
-                body.clone()
+                body
             };
 
-            // For very long sections, use sentence-based chunking.
-            let sub_chunks = if content.len() > 2048 {
-                let cfg = ChunkingConfig {
-                    enabled: true,
-                    max_chunk_chars: 1024,
-                    overlap_sentences: 1,
-                    min_content_chars: 64,
-                };
-                let splits = chunk_content(&content, &cfg);
-                if splits.is_empty() {
-                    vec![content]
-                } else {
-                    splits.into_iter().map(|c| c.content).collect()
+            let mut tags = vec!["imported".to_string(), "imported:claude-code".to_string()];
+            if let Some(h) = header {
+                // section tag strips the leading `#`/`## ` so downstream consumers see
+                // the heading text, not the markup.
+                let heading = h.trim_start_matches('#').trim();
+                if !heading.is_empty() {
+                    tags.push(format!("section:{}", heading));
                 }
-            } else {
-                vec![content]
-            };
-
-            for sub in sub_chunks {
-                chunks.push(ImportChunk {
-                    content: sub,
-                    type_hint: Some("fact".to_string()),
-                    source: "imported:claude-code".to_string(),
-                    tags: vec!["imported".to_string(), "imported:claude-code".to_string()],
-                    created_at: None,
-                    actor: None,
-                    embedding: None,
-                    embedding_model: None,
-                    project: project.map(|w| w.to_string()),
-                });
             }
+
+            chunks.push(ImportChunk {
+                content,
+                type_hint: Some("fact".to_string()),
+                source: "imported:claude-code".to_string(),
+                tags,
+                created_at: None,
+                actor: None,
+                embedding: None,
+                embedding_model: None,
+                project: project.map(|w| w.to_string()),
+            });
         };
 
         for line in content.lines() {
@@ -502,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn test_split_into_sections_basic() {
+    fn test_claude_code_per_section() {
         let content =
             "# Architecture\nRust project using Tokio.\n\n## Storage\nPostgres with pgvector.";
         let chunks = ClaudeCodeReader::split_into_sections(content, "test.md", None);
@@ -510,6 +499,23 @@ mod tests {
         assert!(chunks[0].content.contains("Architecture"));
         assert!(chunks[1].content.contains("Storage"));
         assert_eq!(chunks[0].type_hint, Some("fact".to_string()));
+        // Phase 24.75: section tag carries the heading text, no sub-chunking.
+        assert!(chunks[0]
+            .tags
+            .iter()
+            .any(|t| t == "section:Architecture"));
+        assert!(chunks[1].tags.iter().any(|t| t == "section:Storage"));
+    }
+
+    /// CHUNK-05 (Phase 24.75 A6): a single very long H2 section produces exactly
+    /// ONE ImportChunk — no further character-window sub-chunking.
+    #[test]
+    fn test_claude_code_long_section_no_subchunk() {
+        let body = "x".repeat(5_000);
+        let content = format!("## Long Section\n{}", body);
+        let chunks = ClaudeCodeReader::split_into_sections(&content, "test.md", None);
+        assert_eq!(chunks.len(), 1, "one section in, one chunk out — no fan-out");
+        assert!(chunks[0].content.len() > 4_000);
     }
 
     #[test]

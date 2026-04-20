@@ -426,6 +426,108 @@ async fn test_content_hash_dedup(pool: PgPool) {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 24.75-03: dedup with no chunk-sibling logic. Two semantically similar
+// memories (no parent relationship because chunks are gone) must merge directly.
+// This locks in the Plan 02 simplification: dedup.rs::process_job has exactly
+// one candidate-selection path (candidates[0]) — no find_non_sibling branch.
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrator = "memcp::MIGRATOR")]
+async fn test_dedup_no_sibling_logic(pool: PgPool) {
+    use memcp::config::DedupConfig;
+    use memcp::gc::dedup::{DedupJob, DedupWorker};
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+
+    let store = Arc::new(PostgresMemoryStore::from_pool(pool.clone()).await.unwrap());
+
+    // Two semantically similar memories with DIFFERENT content strings (so
+    // content-hash dedup in store() doesn't short-circuit). No parent/sibling
+    // relationship exists — chunk_removal landed in Plan 02.
+    let older = store
+        .store(
+            MemoryBuilder::new()
+                .content("The quick brown fox jumps over the lazy dog in the morning sun (version A)")
+                .build(),
+        )
+        .await
+        .unwrap();
+    let newer = store
+        .store(
+            MemoryBuilder::new()
+                .content("The quick brown fox jumps over the lazy dog in the morning sun (version B)")
+                .build(),
+        )
+        .await
+        .unwrap();
+
+    // Embeddings won't be populated by `store()` — write identical vectors
+    // directly so the similarity search fires. `find_similar_memories` requires
+    // `embedding_status = 'complete'` so we flip both memories.
+    let vector = pgvector::Vector::from(vec![0.1f32; 384]);
+    for id in [&older.id, &newer.id] {
+        sqlx::query(
+            "INSERT INTO memory_embeddings (id, memory_id, embedding, model_name, model_version, dimension, is_current, tier, created_at, updated_at)
+             VALUES ($1, $2, $3::vector, 'test-model', 'v1', 384, true, 'fast', NOW(), NOW())
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(id)
+        .bind(&vector)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE memories SET embedding_status = 'complete' WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    // Run the dedup worker with a job for the newer memory.
+    let (tx, rx) = mpsc::channel(1);
+    let cfg = DedupConfig {
+        enabled: true,
+        similarity_threshold: 0.9,
+    };
+    tx.send(DedupJob {
+        memory_id: newer.id.clone(),
+        embedding: vector,
+    })
+    .await
+    .unwrap();
+    drop(tx); // close channel so worker exits after processing
+
+    let worker = DedupWorker::new(store.clone(), cfg, rx);
+    worker.run().await;
+
+    // Post-merge: newer is soft-deleted, older is untouched. dedup.rs picks
+    // candidates[0] directly — no sibling-skip branch.
+    let newer_deleted: Option<bool> =
+        sqlx::query_scalar("SELECT deleted_at IS NOT NULL FROM memories WHERE id = $1")
+            .bind(&newer.id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+    let older_deleted: Option<bool> =
+        sqlx::query_scalar("SELECT deleted_at IS NOT NULL FROM memories WHERE id = $1")
+            .bind(&older.id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        newer_deleted,
+        Some(true),
+        "newer memory should be soft-deleted by dedup merge"
+    );
+    assert_eq!(
+        older_deleted,
+        Some(false),
+        "older memory stays live as the merge target"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Test 8: Content-hash dedup outside window — identical content creates new memory
 // ---------------------------------------------------------------------------
 

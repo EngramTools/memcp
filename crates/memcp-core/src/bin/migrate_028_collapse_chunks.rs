@@ -339,7 +339,14 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
 
-    fn mk_memory(id: &str, content: &str, parent_id: Option<&str>, chunk_index: Option<i32>) -> Memory {
+    // Phase 24.75-03: Memory struct no longer carries parent_id/chunk_index/
+    // total_chunks (Plan 02 dropped them from Rust types). The orchestrator's
+    // DB-level chunk ordering is now carried by the SQL query (`SELECT ... FROM
+    // memories WHERE parent_id = $1 ORDER BY chunk_index ASC`) which still runs
+    // against the pre-DDL schema. `detect_and_reassemble` reads `parent.content`
+    // and iterates `chunks` in the order given, so the in-memory fixture no
+    // longer needs those fields.
+    fn mk_memory(id: &str, content: &str) -> Memory {
         Memory {
             id: id.to_string(),
             content: content.to_string(),
@@ -359,9 +366,6 @@ mod tests {
             actor: None,
             actor_type: "system".to_string(),
             audience: "global".to_string(),
-            parent_id: parent_id.map(str::to_string),
-            chunk_index,
-            total_chunks: None,
             event_time: None,
             event_time_precision: None,
             project: None,
@@ -382,10 +386,10 @@ mod tests {
     #[test]
     fn parent_with_full_content_is_trusted() {
         // A1-CONFIRMED shape: parent.content has full pre-chunking content.
-        let parent = mk_memory("p", "hello world from memcp", None, None);
+        let parent = mk_memory("p", "hello world from memcp");
         let chunks = vec![
-            mk_memory("c0", "[From: \"t\", part 1/2]\nhello world", Some("p"), Some(0)),
-            mk_memory("c1", "[From: \"t\", part 2/2]\n from memcp", Some("p"), Some(1)),
+            mk_memory("c0", "[From: \"t\", part 1/2]\nhello world"),
+            mk_memory("c1", "[From: \"t\", part 2/2]\n from memcp"),
         ];
         let out = detect_and_reassemble(&parent, &chunks);
         assert_eq!(out, parent.content);
@@ -395,19 +399,15 @@ mod tests {
     fn parent_preview_triggers_reassembly() {
         // A1-REFUTED shape: parent.content is a short preview; chunks carry
         // the real payload. Body total dwarfs (parent.len + per-chunk headers).
-        let parent = mk_memory("p", "preview only", None, None);
+        let parent = mk_memory("p", "preview only");
         let chunks = vec![
             mk_memory(
                 "c0",
                 "[From: \"t\", part 1/2]\nTHIS IS THE FIRST REAL CHUNK BODY OF THE FULL CONTENT",
-                Some("p"),
-                Some(0),
             ),
             mk_memory(
                 "c1",
                 "[From: \"t\", part 2/2]\nAND THIS IS THE SECOND REAL CHUNK BODY OF THE FULL CONTENT",
-                Some("p"),
-                Some(1),
             ),
         ];
         let out = detect_and_reassemble(&parent, &chunks);
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn no_chunks_returns_parent_content() {
-        let parent = mk_memory("p", "solo memory", None, None);
+        let parent = mk_memory("p", "solo memory");
         let out = detect_and_reassemble(&parent, &[]);
         assert_eq!(out, "solo memory");
     }

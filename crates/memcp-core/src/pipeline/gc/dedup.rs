@@ -125,6 +125,6 @@ impl DedupWorker {
         }
     }
 
-    // Phase 24.75: find_non_sibling removed — chunking is gone, so there are no
-    // parent/sibling relationships to worry about at dedup time.
+    // Phase 24.75: chunk-sibling selection removed — chunking is gone, so
+    // there are no parent/sibling relationships to worry about at dedup time.
 }

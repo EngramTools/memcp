@@ -16,12 +16,9 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use super::{
-    chatgpt::{chunk_content, MAX_DECOMPRESSED_SIZE, MAX_ZIP_ENTRIES},
+    chatgpt::{MAX_DECOMPRESSED_SIZE, MAX_ZIP_ENTRIES},
     DiscoveredSource, ImportChunk, ImportOpts, ImportSource, ImportSourceKind,
 };
-
-/// Maximum chunk size in characters. Conversations longer than this are split.
-const MAX_CHUNK_CHARS: usize = 2048;
 
 // ── JSON structures ───────────────────────────────────────────────────────────
 
@@ -188,20 +185,30 @@ impl ImportSource for ClaudeAiReader {
                 }
             }
 
-            let conversation_text = flatten_claude_conversation(&conv, &title);
-            if conversation_text.trim().is_empty() {
+            // Phase 24.75 D-01: one memory per message/turn (not per conversation).
+            let messages = flatten_claude_messages(&conv);
+            if messages.is_empty() {
                 continue;
             }
 
-            let tags = vec!["imported".to_string(), "imported:claude".to_string()];
+            let base_tags = vec!["imported".to_string(), "imported:claude".to_string()];
 
             if opts.curate {
-                // Curate mode: pass full conversation to LLM later.
+                // Curate mode: pass the joined conversation to the LLM as a single chunk.
+                let joined = messages
+                    .iter()
+                    .map(|(role, text)| {
+                        let label = if role == "human" { "User" } else { "Assistant" };
+                        format!("{}: {}", label, text)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                let full = format!("# {}\n\n{}", title, joined);
                 chunks.push(ImportChunk {
-                    content: conversation_text,
+                    content: full,
                     type_hint: None, // LLM decides in curate.rs
                     source: "imported:claude".to_string(),
-                    tags,
+                    tags: base_tags,
                     created_at,
                     actor: None,
                     embedding: None,
@@ -209,21 +216,17 @@ impl ImportSource for ClaudeAiReader {
                     project: opts.project.clone(),
                 });
             } else {
-                // Default: chunk long conversations into <=2048-char pieces.
-                let content_chunks = chunk_content(&conversation_text, MAX_CHUNK_CHARS);
-                let total = content_chunks.len();
-                for (i, piece) in content_chunks.into_iter().enumerate() {
-                    let mut chunk_tags = tags.clone();
-                    if total > 1 {
-                        chunk_tags.push(format!("chunk:{}/{}", i + 1, total));
-                    }
+                // Default (Phase 24.75 D-01): one ImportChunk per message.
+                for (role, text) in messages {
+                    let mut tags = base_tags.clone();
+                    tags.push(format!("role:{}", role));
                     chunks.push(ImportChunk {
-                        content: piece,
+                        content: text,
                         type_hint: Some("observation".to_string()),
                         source: "imported:claude".to_string(),
-                        tags: chunk_tags,
+                        tags,
                         created_at,
-                        actor: None,
+                        actor: Some(role),
                         embedding: None,
                         embedding_model: None,
                         project: opts.project.clone(),
@@ -238,29 +241,26 @@ impl ImportSource for ClaudeAiReader {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Flatten a Claude.ai conversation into a single text block with role prefixes.
-fn flatten_claude_conversation(conv: &ClaudeConversation, title: &str) -> String {
+/// Phase 24.75 D-01: extract one `(role, text)` pair per surviving message.
+///
+/// Empty-text messages are dropped. Role is normalized to "human" or "assistant"
+/// (other values pass through as the raw string — we don't try to interpret them).
+fn flatten_claude_messages(conv: &ClaudeConversation) -> Vec<(String, String)> {
     let messages = match &conv.chat_messages {
         Some(m) if !m.is_empty() => m,
-        _ => return String::new(),
+        _ => return Vec::new(),
     };
 
-    let mut lines = Vec::new();
+    let mut out = Vec::with_capacity(messages.len());
     for msg in messages {
         let text = msg.text.as_deref().unwrap_or("").trim();
         if text.is_empty() {
             continue;
         }
-        let role = msg.sender.as_deref().unwrap_or("unknown");
-        let label = if role == "human" { "User" } else { "Assistant" };
-        lines.push(format!("{}: {}", label, text));
+        let role = msg.sender.as_deref().unwrap_or("unknown").to_string();
+        out.push((role, text.to_string()));
     }
-
-    if lines.is_empty() {
-        return String::new();
-    }
-
-    format!("# {}\n\n{}", title, lines.join("\n\n"))
+    out
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -284,12 +284,13 @@ mod tests {
             created_at: None,
             chat_messages: None,
         };
-        let text = flatten_claude_conversation(&conv, "Test");
-        assert!(text.is_empty());
+        assert!(flatten_claude_messages(&conv).is_empty());
     }
 
+    /// Phase 24.75 D-01: two messages in → two `(role, text)` pairs out.
+    /// No conversation-level concatenation, no chunk fan-out.
     #[test]
-    fn test_flatten_conversation_with_messages() {
+    fn test_flatten_conversation_per_message() {
         let conv = ClaudeConversation {
             name: Some("My Conversation".to_string()),
             uuid: None,
@@ -307,10 +308,12 @@ mod tests {
                 },
             ]),
         };
-        let text = flatten_claude_conversation(&conv, "My Conversation");
-        assert!(text.contains("# My Conversation"));
-        assert!(text.contains("User: Hello, Claude!"));
-        assert!(text.contains("Assistant: Hi!"));
+        let msgs = flatten_claude_messages(&conv);
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].0, "human");
+        assert_eq!(msgs[0].1, "Hello, Claude!");
+        assert_eq!(msgs[1].0, "assistant");
+        assert_eq!(msgs[1].1, "Hi! How can I help you today?");
     }
 
     #[tokio::test]

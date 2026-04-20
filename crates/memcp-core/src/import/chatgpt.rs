@@ -18,9 +18,6 @@ use serde_json::Value;
 
 use super::{DiscoveredSource, ImportChunk, ImportOpts, ImportSource, ImportSourceKind};
 
-/// Maximum chunk size in characters. Conversations longer than this are split.
-const MAX_CHUNK_CHARS: usize = 2048;
-
 /// Maximum number of entries allowed in an import ZIP (ZIP bomb protection).
 pub const MAX_ZIP_ENTRIES: usize = 10_000;
 
@@ -193,21 +190,31 @@ impl ImportSource for ChatGptReader {
                 }
             }
 
-            let conversation_text = flatten_conversation(conv.mapping.as_ref(), &title);
-            if conversation_text.trim().is_empty() {
+            // Phase 24.75 D-01: one memory per message/turn (not per conversation).
+            let messages = flatten_conversation(conv.mapping.as_ref());
+            if messages.is_empty() {
                 continue;
             }
 
-            let tags = vec![
-                "imported".to_string(),
-                "imported:chatgpt".to_string(),
-                format!("conversation:{}", sanitize_tag(&title)),
-            ];
+            let conv_tag = format!("conversation:{}", sanitize_tag(&title));
 
             if opts.curate {
-                // Curate mode: pass full conversation to LLM later. One chunk per conversation.
+                // Curate mode: pass the joined conversation text to the LLM as a single
+                // chunk so it can decide whether to keep the exchange intact. One chunk
+                // per conversation is the correct atomic unit for curation.
+                let joined = messages
+                    .iter()
+                    .map(|m| format!("{}: {}", label_for_role(&m.role), m.text))
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                let full = format!("# {}\n\n{}", title, joined);
+                let tags = vec![
+                    "imported".to_string(),
+                    "imported:chatgpt".to_string(),
+                    conv_tag,
+                ];
                 chunks.push(ImportChunk {
-                    content: conversation_text,
+                    content: full,
                     type_hint: None, // LLM decides in curate.rs
                     source: "imported:chatgpt".to_string(),
                     tags,
@@ -218,21 +225,21 @@ impl ImportSource for ChatGptReader {
                     project: opts.project.clone(),
                 });
             } else {
-                // Default: chunk long conversations into <=2048-char pieces.
-                let content_chunks = chunk_content(&conversation_text, MAX_CHUNK_CHARS);
-                let total = content_chunks.len();
-                for (i, piece) in content_chunks.into_iter().enumerate() {
-                    let mut chunk_tags = tags.clone();
-                    if total > 1 {
-                        chunk_tags.push(format!("chunk:{}/{}", i + 1, total));
-                    }
+                // Default (Phase 24.75 D-01): one ImportChunk per message/turn.
+                for msg in messages {
+                    let tags = vec![
+                        "imported".to_string(),
+                        "imported:chatgpt".to_string(),
+                        conv_tag.clone(),
+                        format!("role:{}", msg.role),
+                    ];
                     chunks.push(ImportChunk {
-                        content: piece,
+                        content: msg.text,
                         type_hint: Some("observation".to_string()),
                         source: "imported:chatgpt".to_string(),
-                        tags: chunk_tags,
+                        tags,
                         created_at,
-                        actor: None,
+                        actor: Some(msg.role.clone()),
                         embedding: None,
                         embedding_model: None,
                         project: opts.project.clone(),
@@ -247,15 +254,33 @@ impl ImportSource for ChatGptReader {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Walk the mapping's parent chain to produce an ordered message list,
-/// then concatenate with role prefixes.
+/// A single extracted message from a ChatGPT conversation (Phase 24.75 D-01).
+pub(crate) struct FlatMessage {
+    /// Normalized role: "user" or "assistant" (system + tool are filtered out).
+    pub role: String,
+    /// Message text with leading/trailing whitespace trimmed.
+    pub text: String,
+}
+
+fn label_for_role(role: &str) -> &'static str {
+    if role == "user" {
+        "User"
+    } else {
+        "Assistant"
+    }
+}
+
+/// Walk the mapping's parent chain to produce an ordered per-message list.
+///
+/// Phase 24.75 D-01: returns one entry per surviving message. Callers decide
+/// whether to emit one `ImportChunk` per message (default) or a joined block
+/// for curation.
 fn flatten_conversation(
     mapping: Option<&std::collections::HashMap<String, MappingNode>>,
-    title: &str,
-) -> String {
+) -> Vec<FlatMessage> {
     let mapping = match mapping {
         Some(m) => m,
-        None => return String::new(),
+        None => return Vec::new(),
     };
 
     // Find root node: a node whose parent is None or whose parent is not in the map.
@@ -272,7 +297,29 @@ fn flatten_conversation(
         }
     });
 
-    let mut ordered: Vec<String> = Vec::new();
+    let mut ordered: Vec<FlatMessage> = Vec::new();
+
+    let push_if_valid = |msg: &Message, out: &mut Vec<FlatMessage>| {
+        if let Some(text) = extract_message_text(msg) {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return;
+            }
+            let role = msg
+                .author
+                .as_ref()
+                .and_then(|a| a.role.as_deref())
+                .unwrap_or("unknown");
+            // Skip system and tool roles (not user-authored or assistant-authored turns).
+            if matches!(role, "system" | "tool") {
+                return;
+            }
+            out.push(FlatMessage {
+                role: role.to_string(),
+                text: trimmed.to_string(),
+            });
+        }
+    };
 
     // DFS from root following children.
     if let Some(root) = root_id {
@@ -280,20 +327,7 @@ fn flatten_conversation(
         while let Some(id) = stack.pop() {
             if let Some(node) = mapping.get(&id) {
                 if let Some(msg) = &node.message {
-                    if let Some(text) = extract_message_text(msg) {
-                        if !text.trim().is_empty() {
-                            let role = msg
-                                .author
-                                .as_ref()
-                                .and_then(|a| a.role.as_deref())
-                                .unwrap_or("unknown");
-                            // Skip system and tool roles.
-                            if !matches!(role, "system" | "tool") {
-                                let label = if role == "user" { "User" } else { "Assistant" };
-                                ordered.push(format!("{}: {}", label, text.trim()));
-                            }
-                        }
-                    }
+                    push_if_valid(msg, &mut ordered);
                 }
                 // Push children in reverse so first child is processed first.
                 if let Some(children) = &node.children {
@@ -307,28 +341,12 @@ fn flatten_conversation(
         // Fallback: insertion order (no clear root found).
         for node in mapping.values() {
             if let Some(msg) = &node.message {
-                if let Some(text) = extract_message_text(msg) {
-                    if !text.trim().is_empty() {
-                        let role = msg
-                            .author
-                            .as_ref()
-                            .and_then(|a| a.role.as_deref())
-                            .unwrap_or("unknown");
-                        if !matches!(role, "system" | "tool") {
-                            let label = if role == "user" { "User" } else { "Assistant" };
-                            ordered.push(format!("{}: {}", label, text.trim()));
-                        }
-                    }
-                }
+                push_if_valid(msg, &mut ordered);
             }
         }
     }
 
-    if ordered.is_empty() {
-        return String::new();
-    }
-
-    format!("# {}\n\n{}", title, ordered.join("\n\n"))
+    ordered
 }
 
 /// Extract text from a ChatGPT message content object.
@@ -382,36 +400,6 @@ fn sanitize_tag(title: &str) -> String {
         .to_string()
 }
 
-/// Split content into chunks of at most `max_chars` characters.
-/// Tries to split at sentence boundaries (period+space) when possible.
-pub fn chunk_content(content: &str, max_chars: usize) -> Vec<String> {
-    if content.len() <= max_chars {
-        return vec![content.to_string()];
-    }
-
-    let mut chunks = Vec::new();
-    let mut remaining = content;
-
-    while remaining.len() > max_chars {
-        // Try to find a sentence boundary within the max window.
-        let window = &remaining[..max_chars];
-        let split_pos = window
-            .rfind(". ")
-            .or_else(|| window.rfind('\n'))
-            .unwrap_or(max_chars);
-
-        let (chunk, rest) = remaining.split_at(split_pos + 1);
-        chunks.push(chunk.trim().to_string());
-        remaining = rest.trim_start();
-    }
-
-    if !remaining.trim().is_empty() {
-        chunks.push(remaining.trim().to_string());
-    }
-
-    chunks
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -425,24 +413,6 @@ mod tests {
         assert_eq!(sanitize_tag("Rust Programming"), "rust-programming");
         // Interior non-alphanumeric chars become dashes.
         assert_eq!(sanitize_tag("AI & ML"), "ai---ml");
-    }
-
-    #[test]
-    fn test_chunk_content_short() {
-        let chunks = chunk_content("Short content.", 2048);
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0], "Short content.");
-    }
-
-    #[test]
-    fn test_chunk_content_long() {
-        // Build a string longer than 2048 chars.
-        let long = "Word. ".repeat(500); // 3000 chars
-        let chunks = chunk_content(&long, 2048);
-        assert!(chunks.len() >= 2);
-        for c in &chunks {
-            assert!(c.len() <= 2048 + 20, "chunk too long: {}", c.len());
-        }
     }
 
     #[test]
@@ -460,5 +430,118 @@ mod tests {
             .read_chunks(std::path::Path::new("/nonexistent/file.zip"), &opts)
             .await;
         assert!(result.is_err());
+    }
+
+    /// Phase 24.75 D-01: per-message granularity. Six valid messages ⇒ six chunks.
+    #[test]
+    fn test_flatten_conversation_per_message() {
+        use std::collections::HashMap;
+        let mut mapping: HashMap<String, MappingNode> = HashMap::new();
+        // Build a 3-turn conversation (user → assistant → user → assistant → user → assistant)
+        // as a linear chain so DFS walks in order.
+        let turns = [
+            ("user", "First user message long enough to pass any noise filter."),
+            ("assistant", "First assistant reply long enough to count as signal content."),
+            ("user", "Second user question also long enough to count as content."),
+            ("assistant", "Second assistant reply long enough to count as content."),
+            ("user", "Third user follow-up long enough to count as a real turn."),
+            ("assistant", "Third assistant response long enough to be a turn."),
+        ];
+        let ids: Vec<String> = (0..turns.len()).map(|i| format!("n{}", i)).collect();
+        for (i, (role, text)) in turns.iter().enumerate() {
+            let parent = if i == 0 { None } else { Some(ids[i - 1].clone()) };
+            let children = if i + 1 < turns.len() {
+                Some(vec![ids[i + 1].clone()])
+            } else {
+                None
+            };
+            mapping.insert(
+                ids[i].clone(),
+                MappingNode {
+                    message: Some(Message {
+                        id: Some(ids[i].clone()),
+                        author: Some(Author {
+                            role: Some(role.to_string()),
+                        }),
+                        content: Some(MessageContent {
+                            content_type: Some("text".to_string()),
+                            parts: Some(vec![serde_json::Value::String(text.to_string())]),
+                        }),
+                    }),
+                    parent,
+                    children,
+                },
+            );
+        }
+
+        let msgs = flatten_conversation(Some(&mapping));
+        assert_eq!(msgs.len(), 6, "one entry per turn, system/tool filtered");
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[1].role, "assistant");
+    }
+
+    /// CHUNK-05 acceptance: a single-message conversation of any size produces
+    /// exactly one `ImportChunk` (no char-window fan-out).
+    #[test]
+    fn test_no_chunk_fanout_in_chatgpt_import() {
+        use std::collections::HashMap;
+        let huge = "x".repeat(30_000);
+        let mut mapping: HashMap<String, MappingNode> = HashMap::new();
+        mapping.insert(
+            "root".to_string(),
+            MappingNode {
+                message: Some(Message {
+                    id: Some("root".to_string()),
+                    author: Some(Author {
+                        role: Some("user".to_string()),
+                    }),
+                    content: Some(MessageContent {
+                        content_type: Some("text".to_string()),
+                        parts: Some(vec![serde_json::Value::String(huge.clone())]),
+                    }),
+                }),
+                parent: None,
+                children: None,
+            },
+        );
+
+        let msgs = flatten_conversation(Some(&mapping));
+        assert_eq!(msgs.len(), 1, "one message in, one message out — no char-window split");
+        assert_eq!(msgs[0].text.len(), huge.len());
+    }
+
+    #[test]
+    fn test_flatten_conversation_skips_system_and_tool() {
+        use std::collections::HashMap;
+        let mut mapping: HashMap<String, MappingNode> = HashMap::new();
+        for (i, role) in ["system", "tool", "user", "assistant"].iter().enumerate() {
+            mapping.insert(
+                format!("n{}", i),
+                MappingNode {
+                    message: Some(Message {
+                        id: None,
+                        author: Some(Author {
+                            role: Some(role.to_string()),
+                        }),
+                        content: Some(MessageContent {
+                            content_type: Some("text".to_string()),
+                            parts: Some(vec![serde_json::Value::String(
+                                format!("{}-content-long-enough", role),
+                            )]),
+                        }),
+                    }),
+                    parent: if i == 0 { None } else { Some(format!("n{}", i - 1)) },
+                    children: if i + 1 < 4 {
+                        Some(vec![format!("n{}", i + 1)])
+                    } else {
+                        None
+                    },
+                },
+            );
+        }
+        let msgs = flatten_conversation(Some(&mapping));
+        assert_eq!(msgs.len(), 2);
+        assert!(msgs.iter().any(|m| m.role == "user"));
+        assert!(msgs.iter().any(|m| m.role == "assistant"));
     }
 }
