@@ -60,6 +60,11 @@ pub struct AppState {
     pub summarization_provider: Option<Arc<dyn SummarizationProvider>>,
     /// Extraction queue sender for post-store entity extraction. None when extraction disabled.
     pub extract_sender: Option<mpsc::Sender<ExtractionJob>>,
+    /// Phase 24.75 Plan 04 (CHUNK-04): shared topic-embedding cache for
+    /// `get_memory_span` — bounded to 100 entries by the handler. Shared with the
+    /// MCP `MemoryService` so HTTP + MCP callers reuse one embedding per topic.
+    pub topic_embedding_cache:
+        Arc<tokio::sync::Mutex<std::collections::HashMap<String, Vec<f32>>>>,
 }
 
 #[derive(Serialize)]

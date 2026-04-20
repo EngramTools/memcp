@@ -87,6 +87,9 @@ async fn make_rate_limited_state(pool: PgPool, store_rps: u32, burst_multiplier:
         content_filter: None,
         summarization_provider: None,
         extract_sender: None,
+        topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
     }
 }
 
@@ -110,6 +113,9 @@ async fn make_unlimited_state(pool: PgPool) -> AppState {
         content_filter: None,
         summarization_provider: None,
         extract_sender: None,
+        topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
     }
 }
 

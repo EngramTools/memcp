@@ -13,6 +13,7 @@ pub mod entities;
 pub mod export;
 pub mod graph;
 pub mod ingest;
+pub mod memory_span;
 pub mod pipeline;
 pub mod recall;
 pub mod search;
@@ -154,6 +155,10 @@ pub fn router(rl: &RateLimitConfig, auth_state: AuthState) -> Router<AppState> {
             )
             .route("/v1/graph", get(graph::graph_handler))
             .route("/v1/pipeline/health", get(pipeline::pipeline_health_handler))
+            .route(
+                "/v1/memory/span",
+                post(memory_span::memory_span_handler),
+            )
             .merge(ingest_route)
             .layer(DefaultBodyLimit::max(256 * 1024)); // 256KB hard limit on request bodies
     }
@@ -220,6 +225,17 @@ pub fn router(rl: &RateLimitConfig, auth_state: AuthState) -> Router<AppState> {
         .route("/v1/pipeline/health", get(pipeline::pipeline_health_handler))
         .layer(build_rate_limit_layer(rl.search_rps, rl.burst_multiplier));
 
+    // Phase 24.75 Plan 04 (CHUNK-04): topic-span drill-down. Per D-04 + Pattern A4
+    // (RESEARCH), /v1/memory/span is a read-only endpoint — no auth layer, rate-limit
+    // only (mirrors /v1/search). Embedding cost per call is O(N_spans) so it shares
+    // the search rate bucket.
+    let memory_span_routes = Router::new()
+        .route(
+            "/v1/memory/span",
+            post(memory_span::memory_span_handler),
+        )
+        .layer(build_rate_limit_layer(rl.search_rps, rl.burst_multiplier));
+
     // CRITICAL: auth is .layer()'d LAST so it wraps OUTERMOST and runs FIRST.
     // `.layer(A).layer(B)` => request flow is B -> A -> handler, so auth must be
     // the second `.layer(...)` to gate rate-limit token consumption on authenticated
@@ -246,6 +262,7 @@ pub fn router(rl: &RateLimitConfig, auth_state: AuthState) -> Router<AppState> {
         .merge(entity_routes)
         .merge(graph_routes)
         .merge(pipeline_routes)
+        .merge(memory_span_routes)
         .merge(ingest_routes)
         .route("/v1/status", get(crate::transport::health::status_handler))
         .layer(DefaultBodyLimit::max(256 * 1024)) // 256KB hard limit on request bodies

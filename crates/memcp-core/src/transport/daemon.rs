@@ -369,6 +369,11 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             // auto-store worker still gets the sender via its own context, so
             // extraction parity for file-watched memories is unchanged.
             extract_sender: None,
+            // Phase 24.75 Plan 04: shared topic-embedding cache for /v1/memory/span.
+            // Fresh per daemon boot; bounded to 100 entries inside compute_memory_span.
+            topic_embedding_cache: std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
         };
         Some(tokio::spawn(crate::health::serve(addr, state)))
     } else {

@@ -144,6 +144,9 @@ async fn build_state(pool: PgPool, fixture: &IngestFixture) -> AppState {
         content_filter: fixture.content_filter.clone(),
         summarization_provider: fixture.summarization.clone(),
         extract_sender: None,
+        topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
     }
 }
 

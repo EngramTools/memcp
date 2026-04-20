@@ -284,6 +284,9 @@ async fn main() -> Result<()> {
                     content_filter: None,
                     summarization_provider: None,
                     extract_sender: None,
+                    topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(
+                        std::collections::HashMap::new(),
+                    )),
                 };
 
                 // Spawn test server on a random port
@@ -560,6 +563,9 @@ async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
         content_filter: None,
         summarization_provider: None,
         extract_sender: None,
+        topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
     };
 
     let base_url = spawn_test_server(app_state, &rl_config).await;

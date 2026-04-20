@@ -44,6 +44,9 @@ async fn make_test_state(pool: PgPool, ready: bool) -> AppState {
         content_filter: None,
         summarization_provider: None,
         extract_sender: None,
+        topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
     }
 }
 
@@ -454,10 +457,106 @@ async fn test_dispatch_remote_invalid_url() {
 // ---------------------------------------------------------------------------
 
 /// POST /v1/memory/span with `{memory_id, topic}` returns 200 with a JSON body
-/// shaped `{content, span: {start, end}}`. Flips ON in Plan 24.75-04 once the
-/// route + handler exist. RED scaffold pre-registered by Plan 24.75-00.
-#[tokio::test]
-#[ignore = "pending 24.75-04"]
-async fn test_memory_span_http() {
-    unimplemented!("pending 24.75-04");
+/// shaped `{content, span: {start, end}}`. Flipped ON in Plan 24.75-04.
+///
+/// End-to-end coverage: axum router → `memory_span_handler` → shared
+/// `compute_memory_span`. Uses a keyword-indicator mock embedding provider so
+/// the test exercises the ranker without pulling in local-embed.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn test_memory_span_http(pool: PgPool) {
+    use async_trait::async_trait;
+    use memcp::embedding::{EmbeddingError, EmbeddingProvider};
+    use memcp::store::MemoryStore;
+
+    struct TopicMock;
+
+    #[async_trait]
+    impl EmbeddingProvider for TopicMock {
+        async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+            let lower = text.to_lowercase();
+            // Same keyword signal as memory_span_test::KeywordEmbedder.
+            let kws = [
+                "authentication",
+                "auth",
+                "login",
+                "password",
+                "billing",
+                "invoice",
+                "payment",
+                "shipping",
+                "delivery",
+                "address",
+            ];
+            Ok(kws
+                .iter()
+                .map(|kw| if lower.contains(kw) { 1.0 } else { 0.0 })
+                .collect())
+        }
+        fn model_name(&self) -> &str {
+            "topic-mock"
+        }
+        fn dimension(&self) -> usize {
+            10
+        }
+    }
+
+    // Seed a multi-topic memory.
+    let store = PostgresMemoryStore::from_pool(pool.clone()).await.unwrap();
+    let auth = "Authentication flow. The login subsystem validates credentials by hashing the user-supplied password with argon2 and comparing the result to the stored hash. When authentication succeeds we mint a short-lived access token and a longer refresh token. The refresh token rotates on every login to limit replay exposure. Password reset triggers a signed email link, also tied to the authentication subsystem. ".repeat(6);
+    let billing = "Billing and invoices. Every paid plan generates a monthly invoice line, and card-on-file payment happens three days before the billing period ends. Failed payment retries twice before the account moves to a delinquent state; each retry re-emails the customer with the updated invoice. Billing reports aggregate by project for multi-tenant customers. ".repeat(6);
+    let shipping = "Shipping and delivery. Physical goods ship from the nearest regional warehouse, and the shipping address gets validated against the postal carrier's geocoding service at checkout. Delivery tracking updates propagate back through the shipping webhook into the customer's order page. Failed delivery attempts generate a shipping exception row. ".repeat(6);
+    let content = format!("{}\n\n{}\n\n{}", auth, billing, shipping);
+    let mem = store
+        .store(memcp::store::CreateMemory {
+            content: content.clone(),
+            type_hint: "fact".to_string(),
+            source: "test".to_string(),
+            tags: None,
+            created_at: None,
+            actor: None,
+            actor_type: "agent".to_string(),
+            audience: "global".to_string(),
+            idempotency_key: None,
+            event_time: None,
+            event_time_precision: None,
+            project: Some("test".to_string()),
+            trust_level: None,
+            session_id: None,
+            agent_role: None,
+            write_path: None,
+            knowledge_tier: None,
+            source_ids: None,
+            reply_to_id: None,
+        })
+        .await
+        .unwrap();
+
+    // Build AppState with our mock embedder wired in.
+    let mut state = make_test_state(pool, true).await;
+    state.embed_provider = Some(Arc::new(TopicMock));
+    let base = spawn_test_server(state).await;
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/memory/span", base))
+        .json(&serde_json::json!({
+            "memory_id": mem.id,
+            "topic": "authentication login",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "Expected 200 OK");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let span_content = body["content"].as_str().expect("content present");
+    let start = body["span"]["start"].as_u64().expect("span.start present") as usize;
+    let end = body["span"]["end"].as_u64().expect("span.end present") as usize;
+    assert!(start < end, "start < end");
+    assert!(end <= content.len(), "end must fit in content length");
+    let lower = span_content.to_lowercase();
+    assert!(
+        lower.contains("authentication") || lower.contains("login"),
+        "Expected auth keywords in returned span: {}",
+        &span_content[..span_content.len().min(200)]
+    );
 }

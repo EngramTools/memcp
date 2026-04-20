@@ -45,6 +45,9 @@ async fn make_test_state(pool: PgPool, ready: bool) -> AppState {
         content_filter: None,
         summarization_provider: None,
         extract_sender: None,
+        topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
     }
 }
 
