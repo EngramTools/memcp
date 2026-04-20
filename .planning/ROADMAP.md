@@ -757,6 +757,17 @@ Plans:
   - REAS-08: Cost tracking: token counts per run, logged to metrics. Configurable budget ceiling per invocation
   - REAS-09: `[reasoning]` config section in memcp.toml: provider, model, max_iterations, budget_tokens, api_key
   - REAS-10: Salience side-effects on reasoning tool use — when `create_memory` references `source_ids`, source memories get stability boost (×1.3). When dreaming tombstones a contradicted memory, stability drops (×0.1). When agentic retrieval selects a memory for its final answer set, stability boost (×1.3). When retrieval retrieves but discards across iterations, gentle negative signal (×0.9). Closes the feedback loop without requiring explicit agent annotation.
+- **Planner note (2026-04-20):** Per 25-CONTEXT.md D-02/D-03, Phase 25 ships only Kimi + OpenAI + Ollama adapters. MiniMax / ZAI GLM / DeepSeek / Qwen / Gemini / OpenRouter deferred to Phase 25.1. REAS-02 is superseded by D-03 — Kimi is primary, not MiniMax.
+- **Plans:** 9 plans
+  - [ ] 25-00-PLAN.md — Wave 0: salience primitives (apply_stability_boost, revert_boost, is_source_of_any_derived) + migration 029 salience_audit_log + 11 RED test scaffolds + jsonschema/wiremock deps
+  - [ ] 25-01-PLAN.md — ReasoningProvider trait + unified types + credentials + ReasoningConfig/ProfileConfig with seed dreaming+retrieval profiles
+  - [ ] 25-02-PLAN.md — Kimi (Moonshot) adapter + wiremock tests (REAS-02 per D-03 supersede)
+  - [ ] 25-03-PLAN.md — OpenAI adapter + wiremock tests
+  - [ ] 25-04-PLAN.md — Ollama adapter with /api/show capability probe + wiremock tests
+  - [ ] 25-05-PLAN.md — 6 memory tools (search/create/update/delete/annotate/select_final_memories) + dispatch with D-04/D-06 guards + add_annotation trait method
+  - [ ] 25-06-PLAN.md — Iteration loop runner (terminator=tool_calls.is_empty, budget, timeouts, repeated-call detector, parallel dispatch, metrics)
+  - [ ] 25-07-PLAN.md — REAS-10 salience side-effects hook (×1.3/×0.9/×0.1) with audit + idempotent revert
+  - [ ] 25-08-PLAN.md — BYOK transport middleware (Pro strips caller api-key header; allowlist-validates provider) + 6 security tests
 
 ## Phase 26: Dreaming Worker
 - **Goal**: Queue-driven daemon worker running deduction → contradiction detection → induction cycles on recent memory activity. Uses Phase 25's reasoning agent with dreaming-specific prompts. Creates derived/pattern-tier memories with source chains. Soft-deletes (tombstones) superseded facts.
