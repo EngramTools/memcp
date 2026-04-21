@@ -82,9 +82,12 @@ target/
 # FastEmbed model cache (large binary model files downloaded at runtime)
 .fastembed_cache/
 
-# Benchmark / load test data (excluded from longmemeval corpus download)
+# Benchmark / load test data (eval corpora + regenerable run artifacts)
 data/longmemeval/
 data/locomo/
+data/results/
+data/benchmark_history.jsonl
+data/migration_*_report.jsonl
 
 # Agent system and AI tooling state (local, machine-specific)
 .agents/
