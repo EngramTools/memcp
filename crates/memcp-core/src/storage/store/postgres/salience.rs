@@ -292,6 +292,143 @@ impl PostgresMemoryStore {
         Ok(())
     }
 
+    /// Apply a multiplicative stability boost (REAS-10). Writes audit row atomically via transaction.
+    ///
+    /// **Idempotent per (run_id, memory_id)** (Reviews HIGH #1): invoking this function twice with
+    /// the same `run_id` and `memory_id` is a no-op on the second call — the audit row's UNIQUE
+    /// constraint rejects the duplicate, we detect the 0-rows-affected result, and SKIP the stability
+    /// multiplication. This guarantees retries cannot double-boost.
+    ///
+    /// `magnitude` examples: 1.3 (final_selection/create_memory_source), 0.9 (discarded), 0.1 (tombstoned).
+    /// `reason` MUST be one of: "final_selection", "tombstoned", "discarded", "create_memory_source"
+    /// (CHECK-enforced in salience_audit_log; DB will reject others with sqlx::Error::Database).
+    /// Clamps resulting stability to [0.1, 36500.0] (same range as reinforce_salience).
+    pub async fn apply_stability_boost(
+        &self,
+        memory_id: &str,
+        magnitude: f64,
+        run_id: &str,
+        reason: &str,
+    ) -> Result<(), MemcpError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| MemcpError::Storage(format!("apply_stability_boost begin tx: {}", e)))?;
+
+        // 1. Read current stability (defaults via get_salience_data).
+        let row_map = self.get_salience_data(&[memory_id.to_string()]).await?;
+        let current = row_map.get(memory_id).cloned().unwrap_or_default();
+        let prev = current.stability;
+        let raw = prev * magnitude;
+        let new_stability = raw.clamp(0.1_f64, 36500.0_f64);
+
+        // 2. Idempotency gate: INSERT the audit row first with ON CONFLICT DO NOTHING.
+        //    If the UNIQUE (run_id, memory_id) constraint rejects the insert, rows_affected = 0
+        //    and we short-circuit — the previous invocation already multiplied stability, and
+        //    re-multiplying would violate the idempotency contract.
+        let audit_result = sqlx::query(
+            "INSERT INTO salience_audit_log \
+             (run_id, memory_id, magnitude, reason, prev_stability, new_stability) \
+             VALUES ($1, $2::uuid, $3, $4, $5, $6) \
+             ON CONFLICT (run_id, memory_id) DO NOTHING",
+        )
+        .bind(run_id)
+        .bind(memory_id)
+        .bind(magnitude)
+        .bind(reason)
+        .bind(prev)
+        .bind(new_stability)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("apply_stability_boost audit: {}", e)))?;
+
+        if audit_result.rows_affected() == 0 {
+            // Duplicate (run_id, memory_id): already applied. Commit the (empty) tx and return.
+            // DO NOT write stability — that would double-multiply.
+            tracing::debug!(
+                run_id = %run_id,
+                memory_id = %memory_id,
+                "apply_stability_boost: idempotent no-op (audit row already exists for this pair)"
+            );
+            tx.commit().await.map_err(|e| {
+                MemcpError::Storage(format!(
+                    "apply_stability_boost commit (idempotent): {}",
+                    e
+                ))
+            })?;
+            return Ok(());
+        }
+
+        // 3. First-time path: upsert salience with new stability, preserve difficulty/count/last_reinforced_at.
+        sqlx::query(
+            "INSERT INTO memory_salience \
+             (memory_id, stability, difficulty, reinforcement_count, last_reinforced_at, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) \
+             ON CONFLICT (memory_id) DO UPDATE SET \
+               stability = EXCLUDED.stability, \
+               updated_at = NOW()",
+        )
+        .bind(memory_id)
+        .bind(new_stability as f32)
+        .bind(current.difficulty as f32)
+        .bind(current.reinforcement_count)
+        .bind(current.last_reinforced_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("apply_stability_boost upsert: {}", e)))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| MemcpError::Storage(format!("apply_stability_boost commit: {}", e)))?;
+        Ok(())
+    }
+
+    /// Revert all boosts logged under a run_id. Idempotent — safe to call twice.
+    /// For each audit row, writes prev_stability back and deletes the audit row.
+    ///
+    /// Reviews note: with UNIQUE (run_id, memory_id) enforced at the audit table level (migration 029),
+    /// there is at most ONE row per (run_id, memory_id) pair. This eliminates the order-dependent
+    /// rollback ambiguity GPT-5 raised in Reviews MEDIUM "Salience revert correctness".
+    pub async fn revert_boost(&self, run_id: &str) -> Result<u64, MemcpError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| MemcpError::Storage(format!("revert_boost begin tx: {}", e)))?;
+
+        let rows = sqlx::query_as::<_, (String, f64)>(
+            "SELECT memory_id::text, prev_stability FROM salience_audit_log WHERE run_id = $1",
+        )
+        .bind(run_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("revert_boost fetch: {}", e)))?;
+
+        let count = rows.len() as u64;
+        for (memory_id, prev_stability) in rows {
+            sqlx::query(
+                "UPDATE memory_salience SET stability = $2, updated_at = NOW() WHERE memory_id = $1",
+            )
+            .bind(&memory_id)
+            .bind(prev_stability as f32)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("revert_boost update: {}", e)))?;
+        }
+
+        sqlx::query("DELETE FROM salience_audit_log WHERE run_id = $1")
+            .bind(run_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| MemcpError::Storage(format!("revert_boost delete audit: {}", e)))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| MemcpError::Storage(format!("revert_boost commit: {}", e)))?;
+        Ok(count)
+    }
+
     /// Directly set the stability value for a memory (used for stale demotion).
     pub async fn update_memory_stability(
         &self,
