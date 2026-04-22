@@ -763,6 +763,30 @@ impl MemoryStore for PostgresMemoryStore {
 
         Ok(())
     }
+
+    /// Pre-delete guard per Phase 24 D-06 — Postgres implementation.
+    ///
+    /// Returns true if `memory_id` is listed in `source_ids` of any non-deleted
+    /// derived memory. Overrides the trait default so `&dyn MemoryStore` callers
+    /// (Phase 25 plan 05 delete_memory dispatch) hit the real query.
+    ///
+    /// Note: plan 25-00 references `tombstoned_at`; the memcp schema uses
+    /// `deleted_at`. Deviation Rule 1 — column-name bug fix to match actual schema.
+    async fn is_source_of_any_derived(&self, memory_id: &str) -> Result<bool, MemcpError> {
+        let row: (bool,) = sqlx::query_as(
+            "SELECT EXISTS ( \
+               SELECT 1 FROM memories \
+               WHERE knowledge_tier = 'derived' \
+                 AND deleted_at IS NULL \
+                 AND source_ids @> to_jsonb(ARRAY[$1]::text[]) \
+             )",
+        )
+        .bind(memory_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("is_source_of_any_derived: {}", e)))?;
+        Ok(row.0)
+    }
 }
 
 impl PostgresMemoryStore {
@@ -805,4 +829,5 @@ impl PostgresMemoryStore {
             }),
         }
     }
+
 }

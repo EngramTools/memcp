@@ -497,6 +497,17 @@ pub trait MemoryStore: Send + Sync {
     ///
     /// Silently ignores if the ID doesn't exist (fire-and-forget semantics).
     async fn touch(&self, id: &str) -> Result<(), MemcpError>;
+
+    /// Pre-delete guard per Phase 24 D-06. Returns Ok(true) when `memory_id` is a
+    /// source of a live derived memory; callers MUST block the delete and return
+    /// an informative error to the agent so it picks a different action.
+    ///
+    /// Default returns Ok(false) so non-Postgres backends are permissive;
+    /// `PostgresMemoryStore` provides the real implementation in `queries.rs`.
+    async fn is_source_of_any_derived(&self, memory_id: &str) -> Result<bool, MemcpError> {
+        let _ = memory_id;
+        Ok(false)
+    }
 }
 
 /// Infer a trust level from source and actor_type when not explicitly provided.
