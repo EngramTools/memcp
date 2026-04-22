@@ -2408,6 +2408,11 @@ pub struct Config {
     /// Existing configs without [input_limits] section still work (serde default applied).
     #[serde(default)]
     pub input_limits: crate::validation::InputLimitsConfig,
+
+    /// Phase 25 Reasoning Agent configuration (REAS-09).
+    /// Existing configs without [reasoning] section still work (serde default applied).
+    #[serde(default)]
+    pub reasoning: ReasoningConfig,
 }
 
 fn default_log_level() -> String {
@@ -2456,6 +2461,7 @@ impl Default for Config {
             redaction: RedactionConfig::default(),
             input_limits: crate::validation::InputLimitsConfig::default(),
             abstraction: AbstractionConfig::default(),
+            reasoning: ReasoningConfig::default(),
         }
     }
 }
@@ -2539,6 +2545,103 @@ impl Config {
             .map_err(|e| MemcpError::Config(format!("abstraction.openai_base_url: {}", e)))?;
 
         Ok(())
+    }
+}
+
+// ─── Phase 25: Reasoning Agent (REAS-09) ──────────────────────────────
+
+/// Top-level reasoning config: default profile + named profiles sub-table.
+/// Callers invoke `run_agent(profile: &str, ...)` — NEVER raw provider/model (D-05).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReasoningConfig {
+    /// Fallback profile when caller passes "" or missing profile name (D-07).
+    #[serde(default = "default_reasoning_default_profile")]
+    pub default_profile: String,
+
+    /// Per-profile settings keyed by profile name.
+    #[serde(default)]
+    pub profiles: HashMap<String, ProfileConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileConfig {
+    /// "kimi" | "openai" | "ollama" (Phase 25); 6 more in 25.1.
+    pub provider: String,
+    /// Model identifier. Kimi: "kimi-k2.5" or "kimi-latest". OpenAI: "gpt-4o-mini". Ollama: "qwen3:8b".
+    pub model: String,
+    /// Max agent-loop iterations (REAS-07 default 12; retrieval overrides to 6).
+    #[serde(default = "default_max_iterations")]
+    pub max_iterations: u32,
+    /// Token budget ceiling (REAS-08). Hard-enforced BEFORE each generate() call.
+    #[serde(default = "default_budget_tokens")]
+    pub budget_tokens: u32,
+    #[serde(default = "default_temperature")]
+    pub temperature: f32,
+    /// Optional per-profile API key override. Pro path populates from env via
+    /// MEMCP_REASONING__PROFILES__<NAME>__API_KEY figment double-underscore pattern.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Optional per-profile base URL override. Defaults baked into adapter constructors.
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+fn default_reasoning_default_profile() -> String {
+    "retrieval".to_string()
+}
+fn default_max_iterations() -> u32 {
+    12
+}
+fn default_budget_tokens() -> u32 {
+    8_000
+}
+fn default_temperature() -> f32 {
+    0.2
+}
+
+impl Default for ReasoningConfig {
+    fn default() -> Self {
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "dreaming".to_string(),
+            ProfileConfig {
+                provider: "kimi".into(),
+                model: "kimi-k2.5".into(),
+                max_iterations: 12,
+                budget_tokens: 32_000,
+                temperature: 0.3,
+                api_key: None,
+                base_url: None,
+            },
+        );
+        profiles.insert(
+            "retrieval".to_string(),
+            ProfileConfig {
+                provider: "kimi".into(),
+                model: "kimi-latest".into(),
+                max_iterations: 6,
+                budget_tokens: 8_000,
+                temperature: 0.2,
+                api_key: None,
+                base_url: None,
+            },
+        );
+        ReasoningConfig {
+            default_profile: "retrieval".into(),
+            profiles,
+        }
+    }
+}
+
+impl ReasoningConfig {
+    /// Resolve a profile by name, falling back to `default_profile` when `name`
+    /// is empty. Returns `None` if the requested name is not registered.
+    pub fn resolve(&self, name: &str) -> Option<&ProfileConfig> {
+        if name.is_empty() {
+            self.profiles.get(&self.default_profile)
+        } else {
+            self.profiles.get(name)
+        }
     }
 }
 
@@ -2657,5 +2760,36 @@ mod tests {
         assert_eq!(config.enrichment.batch_limit, 50);
         assert_eq!(config.enrichment.sweep_interval_secs, 3600);
         assert_eq!(config.enrichment.neighbor_depth, 5);
+    }
+
+    // ── Phase 25 Plan 01: ReasoningConfig seed profiles + resolve ──
+
+    #[test]
+    fn reasoning_config_default_has_two_seed_profiles() {
+        let cfg = ReasoningConfig::default();
+        assert_eq!(cfg.default_profile, "retrieval");
+        assert!(cfg.profiles.contains_key("dreaming"));
+        assert!(cfg.profiles.contains_key("retrieval"));
+        assert_eq!(cfg.profiles["dreaming"].max_iterations, 12);
+        assert_eq!(cfg.profiles["dreaming"].budget_tokens, 32_000);
+        assert_eq!(cfg.profiles["retrieval"].max_iterations, 6);
+        assert_eq!(cfg.profiles["retrieval"].budget_tokens, 8_000);
+        assert_eq!(cfg.profiles["dreaming"].provider, "kimi");
+    }
+
+    #[test]
+    fn reasoning_config_resolve_falls_back_to_default_profile() {
+        let cfg = ReasoningConfig::default();
+        // empty name → default_profile = "retrieval" → model "kimi-latest"
+        assert_eq!(cfg.resolve("").unwrap().model, "kimi-latest");
+        assert_eq!(cfg.resolve("dreaming").unwrap().model, "kimi-k2.5");
+        assert!(cfg.resolve("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_config_has_reasoning_field() {
+        let config = Config::default();
+        assert_eq!(config.reasoning.default_profile, "retrieval");
+        assert_eq!(config.reasoning.profiles.len(), 2);
     }
 }
