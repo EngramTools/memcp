@@ -8,6 +8,7 @@ pub mod credentials;
 pub mod kimi; // stub in plan 01 — impl lands in plan 02
 pub mod ollama; // stub in plan 01 — impl lands in plan 04
 pub mod openai; // stub in plan 01 — impl lands in plan 03
+pub mod tools; // plan 05 — 6 memory tools + dispatch_tool
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 pub use credentials::ProviderCredentials;
+pub use tools::{dispatch_tool, memory_tools, validate_tool_schemas};
 
 use crate::config::ProfileConfig;
 use crate::errors::MemcpError;

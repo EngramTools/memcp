@@ -73,7 +73,7 @@ impl PostgresMemoryStore {
                    true \
                  ), \
                  updated_at = NOW() \
-             WHERE id = $1::uuid",
+             WHERE id = $1",
         )
         .bind(id)
         .bind(text)
