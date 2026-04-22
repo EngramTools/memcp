@@ -787,6 +787,13 @@ impl MemoryStore for PostgresMemoryStore {
         .map_err(|e| MemcpError::Storage(format!("is_source_of_any_derived: {}", e)))?;
         Ok(row.0)
     }
+
+    /// Trait forwarder — delegates to the inherent
+    /// `PostgresMemoryStore::add_annotation` in extraction.rs so `&dyn MemoryStore`
+    /// callers (Phase 25 plan 05 annotate_memory dispatch) hit the real implementation.
+    async fn add_annotation(&self, id: &str, text: &str) -> Result<(), MemcpError> {
+        PostgresMemoryStore::add_annotation(self, id, text).await
+    }
 }
 
 impl PostgresMemoryStore {

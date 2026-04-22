@@ -52,6 +52,42 @@ impl PostgresMemoryStore {
         Ok(())
     }
 
+    /// Append an annotation string to metadata->annotations JSONB array. Phase 25 REAS-06.
+    ///
+    /// **Side effect (Reviews LOW #11):** this UPDATE bumps `memories.updated_at = NOW()` on the
+    /// parent row even though the body content is not changed. Downstream systems that treat
+    /// `updated_at` as a "content change" signal should either (a) filter on `updated_at` + a
+    /// content-hash comparison, or (b) accept that metadata annotations count as an update.
+    /// Rationale for bumping updated_at anyway: operators browsing memory history often want to
+    /// see that annotations were added, and it keeps the metadata write atomic with a timestamp
+    /// the rest of the codebase already synchronizes on.
+    ///
+    /// **Precondition:** memories.metadata JSONB column exists from migration 021 (verified).
+    pub async fn add_annotation(&self, id: &str, text: &str) -> Result<(), MemcpError> {
+        let result = sqlx::query(
+            "UPDATE memories \
+             SET metadata = jsonb_set( \
+                   coalesce(metadata, '{}'::jsonb), \
+                   '{annotations}', \
+                   coalesce(metadata->'annotations', '[]'::jsonb) || to_jsonb($2::text), \
+                   true \
+                 ), \
+                 updated_at = NOW() \
+             WHERE id = $1::uuid",
+        )
+        .bind(id)
+        .bind(text)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MemcpError::Storage(format!("add_annotation: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(MemcpError::NotFound {
+                id: format!("memory {id}"),
+            });
+        }
+        Ok(())
+    }
+
     /// Update the extraction_status column for a memory.
     ///
     /// Valid statuses: "pending", "complete", "failed".

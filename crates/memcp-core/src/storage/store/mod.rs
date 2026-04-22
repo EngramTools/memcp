@@ -508,6 +508,17 @@ pub trait MemoryStore: Send + Sync {
         let _ = memory_id;
         Ok(false)
     }
+
+    /// Append a text annotation to memory.metadata->annotations JSONB array.
+    /// Non-destructive — parent content never mutated. Phase 25 REAS-06 tool backing.
+    ///
+    /// Default returns `Internal("unimpl")` so non-Postgres backends signal loudly;
+    /// `PostgresMemoryStore` provides the real implementation in `extraction.rs`.
+    async fn add_annotation(&self, _id: &str, _text: &str) -> Result<(), MemcpError> {
+        Err(MemcpError::Internal(
+            "add_annotation: backend does not implement".into(),
+        ))
+    }
 }
 
 /// Infer a trust level from source and actor_type when not explicitly provided.
