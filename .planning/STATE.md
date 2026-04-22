@@ -3,21 +3,21 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Phase 25 Plan 01 COMPLETE — ReasoningProvider trait + unified types + factory + ReasoningConfig with seed profiles
-last_updated: "2026-04-20T00:00:00Z"
+stopped_at: Phase 25 Plan 05 COMPLETE — 6 memory tools + dispatch_tool + add_annotation shipped; plans 06/07/08 unblocked
+last_updated: "2026-04-22T06:55:30.375Z"
 progress:
   total_phases: 67
   completed_phases: 41
   total_plans: 166
-  completed_plans: 131
-  percent: 78
+  completed_plans: 135
+  percent: 81
 ---
 
 # Project State
 
 ## Current Phase
 
-Phase 25 (Reasoning Agent) — Plans 00 + 01 COMPLETE. Trait + factory + config surface ready; Plans 02/03/04 (Kimi/OpenAI/Ollama adapters) unblocked to land in parallel. Phase 24.75 Plan 05 (benchmark re-run) still remaining in parallel.
+Phase 25 (Reasoning Agent) — Plans 00 + 01 + 02 + 03 + 04 + 05 COMPLETE. Primitives, trait, all 3 adapters (Kimi/OpenAI/Ollama), and the 6-tool palette + dispatch_tool shipped. Plans 06 (runner loop) + 07 (salience hook) + 08 (BYOK wiring) ready to land. Phase 24.75 Plan 05 (benchmark re-run) still remaining in parallel.
 
 ## Active Context
 
@@ -32,6 +32,7 @@ Phase 25 (Reasoning Agent) — Plans 00 + 01 COMPLETE. Trait + factory + config 
 - Phase 24.75 Plan 04 COMPLETE: compute_memory_span shared helper in transport/api/memory_span.rs — MCP + HTTP + CLI all delegate to one code path (byte-identical output for same inputs). MCP get_memory_span tool registered (tool-count 18→19); POST /v1/memory/span behind rate_limit; `memcp memory-span --id --topic` CLI subcommand. Topic-embedding cache bounded to 100 entries on AppState + MemoryService. Byte offsets computed via sentence-anchor back into memory.content, returned content is the parent substring verbatim. Threats T-24.75-04-01/02/03/05 mitigated (topic length cap, span count cap, uniform not-found, no topic logging). 3 Wave-0 scaffolds flipped green (test_topic_ranked_span, test_memory_span_offsets_valid, test_memory_span_http); CHUNK-04 delivered.
 - Phase 25 Plan 00 COMPLETE: migration 029_salience_audit_log.sql (UNIQUE (run_id, memory_id) + CHECK on 4-value reason enum) applied to dev DB; apply_stability_boost (transactional INSERT ... ON CONFLICT DO NOTHING + rows_affected()==0 short-circuit → idempotent per (run_id, memory_id), Reviews HIGH #1 closed) and revert_boost (per-run rollback) in postgres/salience.rs; is_source_of_any_derived moved to MemoryStore trait (Ok(false) default) with PostgresMemoryStore override in queries.rs so &dyn callers hit the real EXISTS query; jsonschema 0.46 + wiremock 0.6 deps added; 27 #[ignore]'d RED scaffolds across 11 reasoning_*.rs files (5 salience incl. HIGH #1 double-invoke, 5 tool_dispatch incl. HIGH #3/#5 + MEDIUM #6, 4 byok_boundary incl. HIGH #2 ollama-no-key). REAS-10 primitives ready.
 - Phase 25 Plan 01 COMPLETE: intelligence::reasoning module with async ReasoningProvider trait (generate + model_name), 9 unified wire types (Tool/ToolCall/ToolResult/Message/TokenUsage/ReasoningRequest/ReasoningResponse/AgentOutcome/AgentCallerContext), ProviderCredentials { api_key, base_url } with from_env (MEMCP_REASONING__<P>_API_KEY) + from_headers (x-reasoning-api-key; base_url hard-coded None — SSRF T-25-01-01) + require_api_key; create_reasoning_provider factory matches on kimi/openai/ollama with NotConfigured default arm; 3 stub adapter modules (kimi/openai/ollama) return NotConfigured from new() so plans 02-04 can diff in cleanly. ReasoningConfig + ProfileConfig appended to config.rs with seed dreaming (kimi+kimi-k2.5+12 iter+32k budget+0.3 temp) and retrieval (kimi+kimi-latest+6 iter+8k budget+0.2 temp); resolve(name) falls back to default_profile="retrieval" on empty name; wired into top-level Config via #[serde(default)]. From<ReasoningError> for MemcpError via Internal variant. Wave 0 reasoning_trait_test::trait_compiles flipped RED → GREEN. 4 tests green (1 integration + 3 lib config). REAS-01 + REAS-09 delivered.
+- Phase 25 Plan 05 COMPLETE: intelligence/reasoning/tools.rs — memory_tools() returns 6 Tool defs (search_memories/create_memory/update_memory/delete_memory/annotate_memory/select_final_memories) with canonical Phase 24 knowledge_tier enum [raw,imported,explicit,derived,pattern] (HIGH #3); dispatch_tool runs jsonschema::validator_for(&tool.parameters).validate(&call.arguments) BEFORE serde_json::from_value (MEDIUM #6); ALL error ToolResults are structured JSON {"error","code"} via single err_result() helper with distinct codes schema_validation/bad_args/storage_error/unknown_tool/cascade_delete_forbidden/bad_tool_schema (MEDIUM #7); delete_memory fires MemoryStore::is_source_of_any_derived BEFORE delete with force_if_source=true escape hatch emitting tracing::warn! + warning field in ToolResult (HIGH #5). MemoryStore::add_annotation trait method added (default Err(Internal)) with Postgres inherent impl via jsonb_set(metadata,'{annotations}',coalesce(…)||to_jsonb($2::text)) + updated_at=NOW() bump (LOW #11 comment inline); trait forwarder in queries.rs routes &dyn callers to inherent. search_memories delegates to MemoryStore::list + in-memory substring filter as MVP (plan referenced recall::recall free function that doesn't exist — real RecallEngine::recall needs an embedding; hybrid_search via dispatcher deferred to Phase 27). 4 lib tests (tool_schema_tests) + 1 integration smoke + 8 DB-gated integration tests all GREEN. REAS-06 delivered; Reviews HIGH #3, HIGH #5, MEDIUM #6, MEDIUM #7 closed.
 - Phases 24.5-27 on ROADMAP (Universal Ingestion, Reasoning Agent, Dreaming Worker, Agentic Retrieval)
 - Pricing decided: Option A -- Pro $25-35/mo includes reasoning, BYOK $10-15/mo
 
@@ -50,9 +51,9 @@ See: .planning/PROJECT.md (updated 2026-04-17)
 
 ## Session Continuity
 
-Last session: 2026-04-20
-Stopped at: Phase 25 Plan 01 COMPLETE — trait + unified types + factory + ReasoningConfig shipped; plans 02/03/04 (adapters) unblocked
-Resume file: --resume-file
+Last session: 2026-04-22T06:55:30.347Z
+Stopped at: Phase 25 Plan 05 COMPLETE — 6 memory tools + dispatch_tool + add_annotation shipped; plans 06/07/08 unblocked
+Resume file: None
 
 ## Recent Decisions
 
@@ -102,5 +103,14 @@ Resume file: --resume-file
 - 25-01: Test import uses `memcp::` (lib name), not `memcp_core::` (package name); plan specified the wrong prefix — matches existing test convention across store_test/stress_test/import_test.
 - 25-01: base_url NEVER populated on the BYOK path (from_headers); adapter defaults always win. Pro env reads permit base_url override but only under operator control (SSRF T-25-01-01 mitigation).
 - 25-01: ReasoningError → MemcpError via the Internal variant (sanitize_message keeps adapter strings safe) rather than minting a new top-level variant — keeps error surface stable.
+- 25-05: dispatch_tool runs jsonschema::validator_for(&tool.parameters).validate(&call.arguments) BEFORE serde_json::from_value — distinguishes schema_validation errors (LLM malformed) from bad_args (type mismatch) in the agent's feedback loop (MEDIUM #6).
+- 25-05: Structured JSON error envelope via single err_result(call, code, msg) helper — every error path routes through one place so agents always see {"error","code"} (MEDIUM #7 enforced at call-site level).
+- 25-05: delete_memory force_if_source=true emits tracing::warn! AND a warning field in the ToolResult body — escape hatch observable in operator logs AND agent context (HIGH #5).
+- 25-05: search_memories dispatches via MemoryStore::list + in-memory substring filter as MVP — plan's referenced recall::recall(store, query, limit, tier) free function doesn't exist; real RecallEngine::recall takes embedding bound to concrete PostgresMemoryStore. Hybrid search via dispatcher deferred to Phase 27 agentic retrieval.
+- 25-05: add_annotation UPDATE binds id with plain $1 (no ::uuid cast) — matches queries.rs delete/update/touch pattern; the ::uuid cast produced silent sanitized "Database operation failed" on live dev DB until removed (Rule 1 auto-fix during Task 2).
+- 25-05: create_memory inserts source_ids into AgentCallerContext.final_selection alongside the stored id — provenance nodes flow through the REAS-10 stability boost, not just the terminal memory.
+- 25-05: select_final_memories removes ids from read_but_discarded so a final-selected id never double-accounts as discarded-but-selected.
+- 25-05: `CreateMemory` has no `Default` impl — dispatcher + tests use explicit field-by-field construction via `build_create_memory`/`sample_create` helpers.
+- 25-05: StoreOutcome variants are `Created(Memory) | Deduplicated(Memory)` (not `Stored{..}` as plan assumed) — dispatcher uses `outcome.memory().id.clone()` which works for both.
 
 **Planned Phase:** 25 (Reasoning Agent) — 9 plans — 2026-04-20T23:07:08.506Z
