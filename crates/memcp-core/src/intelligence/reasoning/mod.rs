@@ -8,6 +8,7 @@ pub mod credentials;
 pub mod kimi; // stub in plan 01 — impl lands in plan 02
 pub mod ollama; // stub in plan 01 — impl lands in plan 04
 pub mod openai; // stub in plan 01 — impl lands in plan 03
+pub mod runner; // plan 06 — iteration-loop runner (REAS-07 + REAS-08)
 pub mod tools; // plan 05 — 6 memory tools + dispatch_tool
 
 use async_trait::async_trait;
@@ -16,6 +17,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 pub use credentials::ProviderCredentials;
+pub use runner::{run_agent, run_agent_with_provider, run_agent_with_provider_and_timeout};
 pub use tools::{dispatch_tool, memory_tools, validate_tool_schemas};
 
 use crate::config::ProfileConfig;
@@ -183,6 +185,21 @@ impl From<ReasoningError> for MemcpError {
     fn from(e: ReasoningError) -> Self {
         MemcpError::Internal(e.to_string())
     }
+}
+
+/// REAS-10 salience hook — stub in plan 06, fully implemented in plan 07.
+///
+/// Plan 07 replaces this body with x1.3 / x0.9 / x0.1 writes against
+/// `PostgresMemoryStore::apply_stability_boost`. Runner calls this
+/// unconditionally at every exit point (Terminal, BudgetExceeded,
+/// MaxIterations, RepeatedToolCall) so the salience side-effects land
+/// regardless of how the loop terminated.
+pub async fn apply_salience_side_effects(
+    _ctx: &AgentCallerContext,
+) -> Result<(), ReasoningError> {
+    // Plan 07 will read ctx.final_selection / read_but_discarded / tombstoned
+    // and apply boosts via MemoryStore::apply_stability_boost.
+    Ok(())
 }
 
 // ─── Trait ────────────────────────────────────────────────────────────

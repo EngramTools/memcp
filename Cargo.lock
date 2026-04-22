@@ -2440,6 +2440,7 @@ dependencies = [
  "dirs",
  "fastembed",
  "figment",
+ "futures",
  "governor",
  "indicatif",
  "jsonschema",
