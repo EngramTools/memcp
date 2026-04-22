@@ -7,5 +7,6 @@
 
 pub mod embedding;
 pub mod query_intelligence;
+pub mod reasoning;
 pub mod recall;
 pub mod search;
