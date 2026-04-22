@@ -765,7 +765,7 @@ Plans:
   - [ ] 25-03-PLAN.md — OpenAI adapter + wiremock tests
   - [ ] 25-04-PLAN.md — Ollama adapter with /api/show capability probe + wiremock tests
   - [ ] 25-05-PLAN.md — 6 memory tools (search/create/update/delete/annotate/select_final_memories) + dispatch with D-04/D-06 guards + add_annotation trait method
-  - [ ] 25-06-PLAN.md — Iteration loop runner (terminator=tool_calls.is_empty, budget, timeouts, repeated-call detector, parallel dispatch, metrics)
+  - [x] 25-06-PLAN.md — Iteration loop runner (terminator=tool_calls.is_empty, budget, timeouts, repeated-call detector, parallel dispatch, metrics) (SUMMARY: 25-06-SUMMARY.md, commits fe10f30 + 9b80171)
   - [ ] 25-07-PLAN.md — REAS-10 salience side-effects hook (×1.3/×0.9/×0.1) with audit + idempotent revert
   - [ ] 25-08-PLAN.md — BYOK transport middleware (Pro strips caller api-key header; allowlist-validates provider) + 6 security tests
 
