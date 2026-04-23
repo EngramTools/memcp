@@ -54,7 +54,7 @@ pub struct ReasoningMwState {
 ///
 /// Credentials are inserted into request extensions as `ProviderCredentials`;
 /// downstream handlers extract via `axum::Extension<ProviderCredentials>`.
-/// T-25-08-02: NEVER logs the api_key value — only event names + provider.
+/// T-25-08-02: NEVER logs the `api_key` value — only event names + provider.
 pub async fn require_reasoning_creds(
     State(state): State<ReasoningMwState>,
     mut req: Request<Body>,

@@ -62,6 +62,12 @@ tokio = { version = "1", features = ["full"] }
 metrics-exporter-prometheus = "0.18"
 tracing-test = { version = "0.2.6", features = ["no-env-filter"] }
 wiremock = "0.6"
+# Phase 25 Plan 08: direct tower::ServiceExt::oneshot + http-body-util::BodyExt
+# in reasoning_byok_boundary.rs (in-process axum Router harness without binding
+# a real TCP socket). `tower` and `http-body-util` were transitive previously;
+# listed explicitly here for direct-import clarity.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
 
 [[bin]]
 name = "benchmark"

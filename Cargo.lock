@@ -2442,6 +2442,7 @@ dependencies = [
  "figment",
  "futures",
  "governor",
+ "http-body-util",
  "indicatif",
  "jsonschema",
  "metrics",
