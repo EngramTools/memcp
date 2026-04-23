@@ -3,21 +3,21 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Phase 25 Plan 06 COMPLETE — run_agent state machine + 8 tests (1 smoke + 4 term + 3 budget); REAS-07 + REAS-08 shipped; plans 07/08 unblocked
-last_updated: "2026-04-22T08:00:00.000Z"
+stopped_at: Phase 25 Plan 07 COMPLETE — REAS-10 salience hook shipped (x1.3/x0.9/x0.1 + HIGH #1 idempotency); 5 integration tests green; plan 08 (BYOK wiring) remaining in Phase 25
+last_updated: "2026-04-23T19:26:13.000Z"
 progress:
   total_phases: 67
   completed_phases: 41
   total_plans: 166
-  completed_plans: 136
-  percent: 82
+  completed_plans: 137
+  percent: 83
 ---
 
 # Project State
 
 ## Current Phase
 
-Phase 25 (Reasoning Agent) — Plans 00 + 01 + 02 + 03 + 04 + 05 + 06 COMPLETE. Primitives, trait, all 3 adapters (Kimi/OpenAI/Ollama), 6-tool palette + dispatch_tool, and the iteration-loop runner shipped. Plans 07 (salience hook) + 08 (BYOK wiring) ready to land. Phase 24.75 Plan 05 (benchmark re-run) still remaining in parallel.
+Phase 25 (Reasoning Agent) — Plans 00 + 01 + 02 + 03 + 04 + 05 + 06 + 07 COMPLETE. Primitives, trait, all 3 adapters (Kimi/OpenAI/Ollama), 6-tool palette + dispatch_tool, iteration-loop runner, AND the REAS-10 salience hook shipped. Runner exits now trigger real x1.3 / x0.9 / x0.1 stability boosts against the idempotent Postgres primitive. Plan 08 (BYOK transport wiring) remaining in Phase 25. Phase 24.75 Plan 05 (benchmark re-run) still remaining in parallel.
 
 ## Active Context
 
@@ -34,14 +34,16 @@ Phase 25 (Reasoning Agent) — Plans 00 + 01 + 02 + 03 + 04 + 05 + 06 COMPLETE. 
 - Phase 25 Plan 01 COMPLETE: intelligence::reasoning module with async ReasoningProvider trait (generate + model_name), 9 unified wire types (Tool/ToolCall/ToolResult/Message/TokenUsage/ReasoningRequest/ReasoningResponse/AgentOutcome/AgentCallerContext), ProviderCredentials { api_key, base_url } with from_env (MEMCP_REASONING__<P>_API_KEY) + from_headers (x-reasoning-api-key; base_url hard-coded None — SSRF T-25-01-01) + require_api_key; create_reasoning_provider factory matches on kimi/openai/ollama with NotConfigured default arm; 3 stub adapter modules (kimi/openai/ollama) return NotConfigured from new() so plans 02-04 can diff in cleanly. ReasoningConfig + ProfileConfig appended to config.rs with seed dreaming (kimi+kimi-k2.5+12 iter+32k budget+0.3 temp) and retrieval (kimi+kimi-latest+6 iter+8k budget+0.2 temp); resolve(name) falls back to default_profile="retrieval" on empty name; wired into top-level Config via #[serde(default)]. From<ReasoningError> for MemcpError via Internal variant. Wave 0 reasoning_trait_test::trait_compiles flipped RED → GREEN. 4 tests green (1 integration + 3 lib config). REAS-01 + REAS-09 delivered.
 - Phase 25 Plan 05 COMPLETE: intelligence/reasoning/tools.rs — memory_tools() returns 6 Tool defs (search_memories/create_memory/update_memory/delete_memory/annotate_memory/select_final_memories) with canonical Phase 24 knowledge_tier enum [raw,imported,explicit,derived,pattern] (HIGH #3); dispatch_tool runs jsonschema::validator_for(&tool.parameters).validate(&call.arguments) BEFORE serde_json::from_value (MEDIUM #6); ALL error ToolResults are structured JSON {"error","code"} via single err_result() helper with distinct codes schema_validation/bad_args/storage_error/unknown_tool/cascade_delete_forbidden/bad_tool_schema (MEDIUM #7); delete_memory fires MemoryStore::is_source_of_any_derived BEFORE delete with force_if_source=true escape hatch emitting tracing::warn! + warning field in ToolResult (HIGH #5). MemoryStore::add_annotation trait method added (default Err(Internal)) with Postgres inherent impl via jsonb_set(metadata,'{annotations}',coalesce(…)||to_jsonb($2::text)) + updated_at=NOW() bump (LOW #11 comment inline); trait forwarder in queries.rs routes &dyn callers to inherent. search_memories delegates to MemoryStore::list + in-memory substring filter as MVP (plan referenced recall::recall free function that doesn't exist — real RecallEngine::recall needs an embedding; hybrid_search via dispatcher deferred to Phase 27). 4 lib tests (tool_schema_tests) + 1 integration smoke + 8 DB-gated integration tests all GREEN. REAS-06 delivered; Reviews HIGH #3, HIGH #5, MEDIUM #6, MEDIUM #7 closed.
 - Phase 25 Plan 06 COMPLETE: intelligence/reasoning/runner.rs (225 LOC) — 3-tier public entry run_agent/run_agent_with_provider/run_agent_with_provider_and_timeout; terminator = tool_calls.is_empty() exclusively (Pitfall 3); finish_reason logged at tracing::debug! only (Reviews LOW #12); budget check BEFORE generate + max_tokens per-turn cap 4096 (Pitfall 7 two-line defense); tokio::time::timeout per turn (30s hosted / 120s ollama); repeated-call detector via canonical-JSON (name,args) hash triple (Pitfall 4); parallel tool dispatch via futures::future::join_all; reasoning_tokens_total{profile,adapter} counter with PROFILE NAME (not model id) as the "profile" label (regression-guarded by source-level test). apply_salience_side_effects stub in mod.rs called at all 4 exit points (Terminal/BudgetExceeded/MaxIterations/RepeatedToolCall) — plan 07 only replaces the stub body. 3 shared mock providers (MockReasoningProvider/SlowMockProvider/RecordingMockProvider) + NullStore + noop_ctx in tests/common/reasoning_fixtures.rs (185 LOC). 8 new tests: 1 smoke (Terminal path) + 4 termination (Terminal/MaxIter/Repeated/Transport-timeout) + 3 budget (hard-stop/max_tokens bounded/metric-label source guard) — 8/8 green; zero #[ignore] remaining in the three plan-owned test files. REAS-07 + REAS-08 delivered.
+- Phase 25 Plan 07 COMPLETE: real apply_salience_side_effects in intelligence/reasoning/mod.rs replaces plan-06 stub — x1.3 final_selection + x0.1 tombstoned + x0.9 (read_but_discarded \ final_selection) with ctx.run_id propagated unchanged. MemoryStore::apply_stability_boost added as trait default (Internal unimpl) with PostgresMemoryStore forwarder in queries.rs so &dyn callers hit the idempotent inherent impl from plan 00. Snapshot-then-release locks before .await (Send-safety). Individual failures log warn! + continue (T-25-07-02); only all-fail returns Err(Generation). 5 DB-gated integration tests flip the Wave-0 scaffolds GREEN (final_selection_boost / discarded_decay / tombstone_penalty / idempotent_via_revert / idempotent_double_invoke_same_run_id) — Reviews HIGH #1 CLOSED via double-invoke test asserting stability stays at prev×1.3 (not prev×1.69) and audit row count stays at 1. Regression: runner/termination/budget/tool_dispatch all green. REAS-10 delivered.
 - Phases 24.5-27 on ROADMAP (Universal Ingestion, Reasoning Agent, Dreaming Worker, Agentic Retrieval)
 - Pricing decided: Option A -- Pro $25-35/mo includes reasoning, BYOK $10-15/mo
 
 ## Next Steps
 
-1. Plan 24.75-05: re-run LongMemEval + LoCoMo benchmarks post-chunk-removal. Accept ≤5% recall drop per D-05; document findings. If >5%, investigate but do not revert (precision path is Phase 27 + Phase 29, not reviving chunks).
-2. Open a workspace-wide clippy sweep follow-up (2056 pre-existing pedantic warnings in load_test + validation, blocking `cargo clippy --all-targets -- -D warnings`).
-3. After Phase 24.75 wraps: coordinate downstream update — Phase 27 ARET-02 should add `get_memory_span` to the retrieval specialist's tool palette.
+1. Plan 25-08 (BYOK transport wiring) — final Phase 25 plan; ties ProviderCredentials + x-reasoning-api-key headers into the transport daemon with HIGH #2 ollama-no-key closure.
+2. Plan 24.75-05: re-run LongMemEval + LoCoMo benchmarks post-chunk-removal. Accept ≤5% recall drop per D-05; document findings. If >5%, investigate but do not revert (precision path is Phase 27 + Phase 29, not reviving chunks).
+3. Open a workspace-wide clippy sweep follow-up (2172 pre-existing pedantic warnings in load_test + validation, blocking `cargo clippy --all-targets -- -D warnings`).
+4. After Phase 24.75 wraps: coordinate downstream update — Phase 27 ARET-02 should add `get_memory_span` to the retrieval specialist's tool palette.
 
 ## Project Reference
 
@@ -52,8 +54,8 @@ See: .planning/PROJECT.md (updated 2026-04-17)
 
 ## Session Continuity
 
-Last session: 2026-04-22T08:00:00.000Z
-Stopped at: Phase 25 Plan 06 COMPLETE — run_agent state machine + 8 tests; REAS-07/08 shipped; plans 07/08 unblocked
+Last session: 2026-04-23T19:26:13.000Z
+Stopped at: Phase 25 Plan 07 COMPLETE — REAS-10 salience hook + 5 integration tests; Reviews HIGH #1 closed; only plan 08 (BYOK wiring) remains in Phase 25
 Resume file: None
 
 ## Recent Decisions
@@ -116,6 +118,13 @@ Resume file: None
 - 25-06: Three-tier public entry (`run_agent` → `run_agent_with_provider` → `run_agent_with_provider_and_timeout`) instead of one monolithic fn with Option<Arc<dyn>> + Option<Duration> args — each tier adds one dimension of test flexibility. Factory path is the production entry; mock path bypasses factory for unit tests; timeout-override path exists only for `test_timeout`.
 - 25-06: `apply_salience_side_effects` STUB lives in `mod.rs` (not `runner.rs`) so plan 07 drops its real body in the same module without touching runner.rs. Runner calls it via `super::apply_salience_side_effects`. Body returns `Ok(())` — plan 07 replaces with x1.3/x0.9/x0.1 writes against PostgresMemoryStore::apply_stability_boost.
 - 25-06: Diagnostic `finish_reason` log uses `let diag_finish = resp.finish_reason.as_deref().unwrap_or("<none>"); tracing::debug!(...)` — the plan's own example used `if let Some(fr) = ...` which matches the Pitfall-3 grep acceptance regex `if.*finish_reason`. The let-binding form preserves LOW #12's diagnostic intent without tripping the grep (Rule 1 fix).
+- 25-07: `MemoryStore::apply_stability_boost` default returns `Internal("unimpl")` (not `Ok(())`) — matches add_annotation (plan 05) pattern so non-Postgres backends fail loudly. Forwarder in queries.rs delegates to the plan-00 inherent idempotent impl; &dyn callers (the reasoning hook) hit the real UNIQUE-guarded query.
+- 25-07: apply_salience_side_effects snapshots the three Mutex<HashSet<String>> tracking sets inside `.lock().map(|g| g.clone())` and drops the guard BEFORE any .await — std::sync::Mutex must never be held across await points (Send-safety + fairness).
+- 25-07: `discarded.difference(&final_sel)` computes exclusion against the in-memory final_selection snapshot, not DB state — same-run members in both sets get x1.3 only (T-25-07-01 intentional de-double-count).
+- 25-07: Failure policy: attempts==0 → Ok; attempts>0 && all failed → Err(Generation); else Ok. Keeps runner's "side-effects always fire at exit" contract non-fatal for partial DB flakiness (T-25-07-02).
+- 25-07: `memory_salience.memory_id` is TEXT (migration 005), `salience_audit_log.memory_id` is UUID (migration 029) — queries must cast accordingly. Plan's action block used `::uuid` cast on stability SELECT; Rule 1 auto-fix dropped it.
+- 25-07: `PostgresMemoryStore::new(url, skip_migrations)` is the actual constructor — plan said `::connect(url)`. Also `CreateMemory` has no Default impl (explicit field construction per sample_create helper pattern), `StoreOutcome::Created` (not `Stored`), crate is `memcp` (not `memcp_core`), `memcp::store::` (not `memcp::storage::store::`). 5 symbol deviations total, all Rule 1.
+- 25-07: HIGH #1 (idempotency of apply_salience_side_effects per run_id) CLOSED — `test_idempotent_double_invoke_same_run_id` asserts stability stays at prev×1.3 (not prev×1.69) AND audit row count stays at 1 on second invoke with identical (run_id, memory_id). Two `IDEMPOTENCY VIOLATION` panic messages make any future regression self-diagnosing.
 - 25-06: `futures = "0.3"` added as an explicit memcp-core dep — was only transitive before (reachable via tokio). `use futures::future::join_all;` is brittle on transitive-only reach; explicit dep is 1 line (Rule 3 blocker fix).
 - 25-06: NullStore test fixture implements ALL 8 required MemoryStore trait methods (plan's example stubbed only 4) — trait has no defaults for list/count_matching/delete_matching/touch (Rule 1 fix against plan's example code).
 - 25-06: `metrics::counter!(...)` invocation forced onto a single line with `#[rustfmt::skip]` — acceptance grep + source-level regression test rely on the literal appearing once with profile/adapter labels inline. Multi-line form drifts out of shape with rustfmt.
