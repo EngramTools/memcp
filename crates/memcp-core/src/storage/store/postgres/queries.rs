@@ -794,6 +794,20 @@ impl MemoryStore for PostgresMemoryStore {
     async fn add_annotation(&self, id: &str, text: &str) -> Result<(), MemcpError> {
         PostgresMemoryStore::add_annotation(self, id, text).await
     }
+
+    /// Trait forwarder — delegates to the inherent
+    /// `PostgresMemoryStore::apply_stability_boost` in salience.rs so `&dyn MemoryStore`
+    /// callers (Phase 25 plan 07 apply_salience_side_effects) hit the idempotent
+    /// per-(run_id, memory_id) implementation.
+    async fn apply_stability_boost(
+        &self,
+        memory_id: &str,
+        magnitude: f64,
+        run_id: &str,
+        reason: &str,
+    ) -> Result<(), MemcpError> {
+        PostgresMemoryStore::apply_stability_boost(self, memory_id, magnitude, run_id, reason).await
+    }
 }
 
 impl PostgresMemoryStore {

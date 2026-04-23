@@ -519,6 +519,26 @@ pub trait MemoryStore: Send + Sync {
             "add_annotation: backend does not implement".into(),
         ))
     }
+
+    /// Apply a multiplicative stability boost (REAS-10). Writes audit row.
+    /// **Idempotent per (run_id, memory_id)** in the Postgres impl (plan 25-00):
+    /// UNIQUE (run_id, memory_id) + ON CONFLICT DO NOTHING + rows_affected()==0
+    /// short-circuit. Retries never double-boost.
+    ///
+    /// `reason` must be one of: "final_selection", "tombstoned", "discarded",
+    /// "create_memory_source" (CHECK-enforced on salience_audit_log).
+    /// Non-Postgres backends return Internal("unimpl") by default.
+    async fn apply_stability_boost(
+        &self,
+        _memory_id: &str,
+        _magnitude: f64,
+        _run_id: &str,
+        _reason: &str,
+    ) -> Result<(), MemcpError> {
+        Err(MemcpError::Internal(
+            "apply_stability_boost: backend does not implement".into(),
+        ))
+    }
 }
 
 /// Infer a trust level from source and actor_type when not explicitly provided.

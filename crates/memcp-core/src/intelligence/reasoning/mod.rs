@@ -187,18 +187,122 @@ impl From<ReasoningError> for MemcpError {
     }
 }
 
-/// REAS-10 salience hook — stub in plan 06, fully implemented in plan 07.
+/// REAS-10 salience hook: apply x1.3 / x0.9 / x0.1 stability boosts based on tracking sets.
 ///
-/// Plan 07 replaces this body with x1.3 / x0.9 / x0.1 writes against
-/// `PostgresMemoryStore::apply_stability_boost`. Runner calls this
-/// unconditionally at every exit point (Terminal, BudgetExceeded,
-/// MaxIterations, RepeatedToolCall) so the salience side-effects land
-/// regardless of how the loop terminated.
+/// Runner (plan 06) calls this unconditionally at every exit point (Terminal,
+/// BudgetExceeded, MaxIterations, RepeatedToolCall) so the salience side-effects
+/// land regardless of how the loop terminated.
+///
+/// - `final_selection` (x1.3, reason "final_selection"): memories the agent chose
+///   as part of the final answer set OR referenced as source_ids in a create_memory
+///   call during this run (plan 05 tools.rs inserts create_memory source_ids here).
+/// - `tombstoned` (x0.1, reason "tombstoned"): memories the dreaming worker marked
+///   contradicted.
+/// - `read_but_discarded` (x0.9, reason "discarded"): memories retrieved but not
+///   promoted to final_selection. Excludes any ID also present in final_selection
+///   to avoid double-count (T-25-07-01).
+///
+/// **Idempotency (Reviews HIGH #1):** invoking this function twice with the SAME
+/// `ctx.run_id` is safe — the underlying `MemoryStore::apply_stability_boost`
+/// primitive (plan 00 Postgres impl) is idempotent per (run_id, memory_id) via a
+/// UNIQUE index + ON CONFLICT DO NOTHING + rows_affected()==0 short-circuit. A
+/// retry will NOT double-boost stability and will NOT insert a duplicate audit row.
+///
+/// Failures of individual boosts are logged WARN and skipped (T-25-07-02) — the
+/// audit table records what succeeded. Returns Ok(()) unless every attempt failed.
 pub async fn apply_salience_side_effects(
-    _ctx: &AgentCallerContext,
+    ctx: &AgentCallerContext,
 ) -> Result<(), ReasoningError> {
-    // Plan 07 will read ctx.final_selection / read_but_discarded / tombstoned
-    // and apply boosts via MemoryStore::apply_stability_boost.
+    use std::collections::HashSet;
+
+    // Snapshot the three sets under their locks. Clone + release so the per-id
+    // awaits below don't hold the Mutex across .await (Send-safety + fairness).
+    let final_sel: HashSet<String> = ctx
+        .final_selection
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    let tombstoned: HashSet<String> = ctx
+        .tombstoned
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    let discarded: HashSet<String> = ctx
+        .read_but_discarded
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+
+    let mut attempts: u32 = 0;
+    let mut failures: u32 = 0;
+    let mut last_err: Option<crate::errors::MemcpError> = None;
+
+    for id in &final_sel {
+        attempts += 1;
+        if let Err(e) = ctx
+            .store
+            .apply_stability_boost(id, 1.3, &ctx.run_id, "final_selection")
+            .await
+        {
+            tracing::warn!(
+                run_id = %ctx.run_id,
+                memory_id = %id,
+                reason = "final_selection",
+                error = %e,
+                "apply_stability_boost failed; continuing"
+            );
+            failures += 1;
+            last_err = Some(e);
+        }
+    }
+
+    for id in &tombstoned {
+        attempts += 1;
+        if let Err(e) = ctx
+            .store
+            .apply_stability_boost(id, 0.1, &ctx.run_id, "tombstoned")
+            .await
+        {
+            tracing::warn!(
+                run_id = %ctx.run_id,
+                memory_id = %id,
+                reason = "tombstoned",
+                error = %e,
+                "apply_stability_boost failed; continuing"
+            );
+            failures += 1;
+            last_err = Some(e);
+        }
+    }
+
+    // T-25-07-01: exclude final_selection members from the discarded penalty so
+    // the same id isn't boosted then penalized in a single run.
+    for id in discarded.difference(&final_sel) {
+        attempts += 1;
+        if let Err(e) = ctx
+            .store
+            .apply_stability_boost(id, 0.9, &ctx.run_id, "discarded")
+            .await
+        {
+            tracing::warn!(
+                run_id = %ctx.run_id,
+                memory_id = %id,
+                reason = "discarded",
+                error = %e,
+                "apply_stability_boost failed; continuing"
+            );
+            failures += 1;
+            last_err = Some(e);
+        }
+    }
+
+    // Only fail if every attempt failed AND there was at least one attempt.
+    if attempts > 0 && attempts == failures {
+        return Err(ReasoningError::Generation(format!(
+            "all {attempts} salience boost attempts failed; last: {}",
+            last_err.map(|e| e.to_string()).unwrap_or_default()
+        )));
+    }
     Ok(())
 }
 
