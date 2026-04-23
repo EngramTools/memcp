@@ -90,6 +90,8 @@ async fn make_rate_limited_state(pool: PgPool, store_rps: u32, burst_multiplier:
         topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),
         )),
+        reasoning_creds: memcp::transport::health::ReasoningCreds::default(),
+        reasoning_tenancy: memcp::transport::health::ReasoningTenancy::Byok,
     }
 }
 
@@ -116,12 +118,19 @@ async fn make_unlimited_state(pool: PgPool) -> AppState {
         topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),
         )),
+        reasoning_creds: memcp::transport::health::ReasoningCreds::default(),
+        reasoning_tenancy: memcp::transport::health::ReasoningTenancy::Byok,
     }
 }
 
 /// Spawn the app on a random port. Returns base URL.
 async fn spawn_test_server(state: AppState) -> String {
-    let api_routes = api::router(&state.config.rate_limit, state.auth.clone());
+    let api_routes = api::router(
+        &state.config.rate_limit,
+        state.auth.clone(),
+        state.reasoning_tenancy,
+        state.reasoning_creds.clone(),
+    );
 
     let app = Router::new()
         .route("/health", get(memcp::transport::health::status_handler))

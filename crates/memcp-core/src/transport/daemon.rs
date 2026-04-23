@@ -351,6 +351,12 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             config.ingest.api_key.clone(),
         );
 
+        // Phase 25 Plan 08: load reasoning env keys + derive tenancy. Pro when
+        // any non-ollama MEMCP_REASONING__<P>_API_KEY is set; BYOK otherwise.
+        // Ollama-only env does not flip to Pro (T-25-08-07).
+        let reasoning_creds = crate::transport::health::ReasoningCreds::from_env();
+        let reasoning_tenancy = reasoning_creds.tenancy();
+
         let state = crate::health::AppState {
             ready: ready.clone(),
             started_at: tokio::time::Instant::now(),
@@ -374,6 +380,8 @@ pub async fn run_daemon(config: &Config, skip_migrate: bool) -> Result<()> {
             topic_embedding_cache: std::sync::Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
+            reasoning_creds,
+            reasoning_tenancy,
         };
         Some(tokio::spawn(crate::health::serve(addr, state)))
     } else {

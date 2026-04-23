@@ -287,6 +287,8 @@ async fn main() -> Result<()> {
                     topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(
                         std::collections::HashMap::new(),
                     )),
+                    reasoning_creds: memcp::transport::health::ReasoningCreds::default(),
+                    reasoning_tenancy: memcp::transport::health::ReasoningTenancy::Byok,
                 };
 
                 // Spawn test server on a random port
@@ -431,7 +433,12 @@ fn parse_rw_ratio(s: &str) -> Result<WorkloadProfile> {
 ///
 /// Mirrors the pattern from crates/memcp-core/tests/api_test.rs.
 async fn spawn_test_server(state: AppState, rl_config: &RateLimitConfig) -> String {
-    let api_routes = api::router(rl_config, state.auth.clone());
+    let api_routes = api::router(
+        rl_config,
+        state.auth.clone(),
+        state.reasoning_tenancy,
+        state.reasoning_creds.clone(),
+    );
     let app = Router::new()
         .route("/health", get(memcp::transport::health::status_handler))
         .merge(api_routes)
@@ -566,6 +573,8 @@ async fn run_trust_workload_cli(cli: &Cli, pool: &PgPool) -> Result<()> {
         topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),
         )),
+        reasoning_creds: memcp::transport::health::ReasoningCreds::default(),
+        reasoning_tenancy: memcp::transport::health::ReasoningTenancy::Byok,
     };
 
     let base_url = spawn_test_server(app_state, &rl_config).await;

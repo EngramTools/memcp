@@ -15,6 +15,7 @@ pub mod graph;
 pub mod ingest;
 pub mod memory_span;
 pub mod pipeline;
+pub mod reasoning;
 pub mod recall;
 pub mod search;
 pub mod store;
@@ -35,7 +36,8 @@ use tower_governor::{
 
 use crate::config::RateLimitConfig;
 use crate::transport::api::auth::AuthState;
-use crate::transport::health::AppState;
+use crate::transport::api::reasoning::{require_reasoning_creds, ReasoningMwState};
+use crate::transport::health::{AppState, ReasoningCreds, ReasoningTenancy};
 
 /// Build a GovernorLayer with a global (non-per-IP) rate limit and JSON 429 responses.
 ///
@@ -119,7 +121,19 @@ fn build_rate_limit_layer(
 /// ```rust
 /// let api_routes = api::router(&rl_config).layer(jwt_middleware);
 /// ```
-pub fn router(rl: &RateLimitConfig, auth_state: AuthState) -> Router<AppState> {
+pub fn router(
+    rl: &RateLimitConfig,
+    auth_state: AuthState,
+    reasoning_tenancy: ReasoningTenancy,
+    reasoning_creds: ReasoningCreds,
+) -> Router<AppState> {
+    // Phase 25 Plan 08: reasoning middleware layered AFTER Phase 24.5 auth so
+    // `require_api_key` still wraps outermost (24.5-03 decision). Applied at
+    // Router::layer() at the end of the function so all /v1/* routes get it.
+    let reasoning_mw_state = ReasoningMwState {
+        tenancy: reasoning_tenancy,
+        creds: reasoning_creds,
+    };
     if !rl.enabled {
         // Rate limiting disabled — flat router with no layers. /v1/ingest still needs
         // the auth layer so missing keys get 401 instead of being silently accepted on
@@ -160,6 +174,17 @@ pub fn router(rl: &RateLimitConfig, auth_state: AuthState) -> Router<AppState> {
                 post(memory_span::memory_span_handler),
             )
             .merge(ingest_route)
+            // Phase 25 Plan 08: reasoning BYOK/Pro credential middleware. Applied
+            // at the merged router so it observes every /v1/* request. Runs AFTER
+            // auth (which is layered per-route on ingest) because layer ordering
+            // here makes this middleware run BEFORE the inner route handlers but
+            // AFTER the outer Router-level layers added after this — the only
+            // later layer is DefaultBodyLimit, which is content-length based and
+            // does not care about reasoning headers. See Reviews MEDIUM #8.
+            .layer(axum::middleware::from_fn_with_state(
+                reasoning_mw_state.clone(),
+                require_reasoning_creds,
+            ))
             .layer(DefaultBodyLimit::max(256 * 1024)); // 256KB hard limit on request bodies
     }
 
@@ -265,5 +290,13 @@ pub fn router(rl: &RateLimitConfig, auth_state: AuthState) -> Router<AppState> {
         .merge(memory_span_routes)
         .merge(ingest_routes)
         .route("/v1/status", get(crate::transport::health::status_handler))
+        // Phase 25 Plan 08: reasoning BYOK/Pro credential middleware. See the
+        // disabled-rate-limit branch above for rationale. Layered at the merged
+        // Router so every /v1/* endpoint benefits from header stripping on Pro
+        // tenancy (T-25-08-01) while non-reasoning traffic passes through.
+        .layer(axum::middleware::from_fn_with_state(
+            reasoning_mw_state,
+            require_reasoning_creds,
+        ))
         .layer(DefaultBodyLimit::max(256 * 1024)) // 256KB hard limit on request bodies
 }

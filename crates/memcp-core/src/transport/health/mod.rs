@@ -7,6 +7,7 @@
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -21,6 +22,61 @@ use crate::extraction::ExtractionJob;
 use crate::pipeline::redaction::RedactionEngine;
 use crate::summarization::SummarizationProvider;
 use crate::transport::api::auth::AuthState;
+
+/// Phase 25 Plan 08: reasoning tenancy — Pro (server-side env keys) vs BYOK
+/// (caller-supplied `x-reasoning-api-key` header). Selected at daemon boot by
+/// `ReasoningCreds::tenancy()` based on which `MEMCP_REASONING__<P>_API_KEY`
+/// env vars are populated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReasoningTenancy {
+    Pro,
+    Byok,
+}
+
+/// Server-side reasoning API keys loaded at boot (Pro tier). Keyed by provider name.
+///
+/// Reviews HIGH #2: ollama entries are optional. The middleware treats ollama
+/// as no-auth regardless of env key presence. `MEMCP_REASONING__OLLAMA_API_KEY`
+/// is read for future hosted-Ollama-proxy compatibility, but its absence is
+/// never an error for `provider=ollama` requests.
+#[derive(Clone, Debug, Default)]
+pub struct ReasoningCreds {
+    pub env_keys: HashMap<String, String>,
+}
+
+impl ReasoningCreds {
+    /// Load provider keys from env at daemon boot. Closed set of providers for
+    /// Phase 25: {kimi, openai, ollama}. Empty string env values are skipped
+    /// (treated as "not configured") so an operator can unset a provider by
+    /// clearing rather than unsetting.
+    pub fn from_env() -> Self {
+        let mut env_keys = HashMap::new();
+        for provider in &["kimi", "openai", "ollama"] {
+            let var = format!("MEMCP_REASONING__{}_API_KEY", provider.to_uppercase());
+            if let Ok(v) = std::env::var(&var) {
+                if !v.is_empty() {
+                    env_keys.insert((*provider).to_string(), v);
+                }
+            }
+        }
+        Self { env_keys }
+    }
+
+    /// Pro if ANY non-ollama env key present; BYOK otherwise.
+    ///
+    /// T-25-08-07: An ollama-only env map must NOT flip to Pro because ollama
+    /// is no-auth — treating that as Pro would cause the middleware to 503
+    /// non-ollama requests from BYOK callers that should be authenticating via
+    /// `x-reasoning-api-key` instead.
+    pub fn tenancy(&self) -> ReasoningTenancy {
+        let has_pro_key = self.env_keys.keys().any(|p| p != "ollama");
+        if has_pro_key {
+            ReasoningTenancy::Pro
+        } else {
+            ReasoningTenancy::Byok
+        }
+    }
+}
 
 /// Shared state for the health and API server.
 ///
@@ -65,6 +121,16 @@ pub struct AppState {
     /// MCP `MemoryService` so HTTP + MCP callers reuse one embedding per topic.
     pub topic_embedding_cache:
         Arc<tokio::sync::Mutex<std::collections::HashMap<String, Vec<f32>>>>,
+    /// Phase 25 Plan 08 (REAS-04): server-side reasoning API keys loaded at boot
+    /// from `MEMCP_REASONING__<PROVIDER>_API_KEY` env vars. Consumed by the
+    /// `require_reasoning_creds` axum middleware to populate `ProviderCredentials`
+    /// in request extensions when running on Pro tenancy. Clone-cheap (wraps a
+    /// small HashMap behind a Clone derive).
+    pub reasoning_creds: ReasoningCreds,
+    /// Phase 25 Plan 08: derived from `reasoning_creds.tenancy()` at boot. Selects
+    /// middleware behavior — Pro strips caller-supplied `x-reasoning-api-key`,
+    /// BYOK requires it (non-ollama).
+    pub reasoning_tenancy: ReasoningTenancy,
 }
 
 #[derive(Serialize)]
@@ -210,10 +276,15 @@ pub async fn status_handler(
 pub async fn serve(addr: SocketAddr, state: AppState) {
     // Apply per-endpoint rate limits, then wrap with metrics middleware.
     // /health, /status, and /metrics are NOT in api_routes — they are never metered.
-    let api_routes =
-        crate::transport::api::router(&state.config.rate_limit, state.auth.clone()).layer(
-            axum::middleware::from_fn(crate::transport::metrics::metrics_middleware),
-        );
+    let api_routes = crate::transport::api::router(
+        &state.config.rate_limit,
+        state.auth.clone(),
+        state.reasoning_tenancy,
+        state.reasoning_creds.clone(),
+    )
+    .layer(axum::middleware::from_fn(
+        crate::transport::metrics::metrics_middleware,
+    ));
 
     let app = Router::new()
         .route("/health", get(health_handler))

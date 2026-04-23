@@ -147,11 +147,18 @@ async fn build_state(pool: PgPool, fixture: &IngestFixture) -> AppState {
         topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),
         )),
+        reasoning_creds: memcp::transport::health::ReasoningCreds::default(),
+        reasoning_tenancy: memcp::transport::health::ReasoningTenancy::Byok,
     }
 }
 
 async fn spawn(state: AppState) -> String {
-    let api_routes = api::router(&state.config.rate_limit, state.auth.clone());
+    let api_routes = api::router(
+        &state.config.rate_limit,
+        state.auth.clone(),
+        state.reasoning_tenancy,
+        state.reasoning_creds.clone(),
+    );
     let app = Router::new()
         .route("/health", get(memcp::transport::health::status_handler))
         .merge(api_routes)

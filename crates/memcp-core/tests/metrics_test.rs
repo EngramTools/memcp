@@ -61,15 +61,23 @@ async fn make_test_state(pool: PgPool, ready: bool) -> AppState {
         topic_embedding_cache: Arc::new(tokio::sync::Mutex::new(
             std::collections::HashMap::new(),
         )),
+        reasoning_creds: memcp::transport::health::ReasoningCreds::default(),
+        reasoning_tenancy: memcp::transport::health::ReasoningTenancy::Byok,
     }
 }
 
 /// Spawn the full app (health + /metrics + /v1/* routes with metrics middleware) on a random port.
 /// Matches the production serve() layout from health/mod.rs.
 async fn spawn_test_server(state: AppState) -> String {
-    let api_routes = api::router(&state.config.rate_limit, state.auth.clone()).layer(
-        axum::middleware::from_fn(memcp::transport::metrics::metrics_middleware),
-    );
+    let api_routes = api::router(
+        &state.config.rate_limit,
+        state.auth.clone(),
+        state.reasoning_tenancy,
+        state.reasoning_creds.clone(),
+    )
+    .layer(axum::middleware::from_fn(
+        memcp::transport::metrics::metrics_middleware,
+    ));
 
     let app = Router::new()
         .route("/health", get(memcp::transport::health::status_handler))
