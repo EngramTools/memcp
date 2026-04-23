@@ -743,7 +743,7 @@ Plans:
 
 ## Phase 25: Reasoning Agent
 - **Goal**: Shared reasoning agent infrastructure powering both dreaming (Phase 26) and agentic retrieval (Phase 27). `ReasoningProvider` trait with API-based providers (MiniMax, ZAI GLM, OpenRouter) and Ollama for self-hosted. Tool definitions for agentic memory operations with salience side-effects. Iteration loop runner with cost tracking.
-- **Status**: Planned
+- **Status**: COMPLETE (2026-04-23) — all 9 plans (00–08) shipped; REAS-01/04/06/07/08/09/10 delivered. Reviews HIGH #1/#2/#3/#5 + MEDIUM #6/#7/#8 all closed.
 - **Depends on**: Phase 24
 - **Origin**: Honcho's deduction/induction specialists adapted for memcp. Single provider powers multiple use cases.
 - **Requirements:**
@@ -767,7 +767,7 @@ Plans:
   - [ ] 25-05-PLAN.md — 6 memory tools (search/create/update/delete/annotate/select_final_memories) + dispatch with D-04/D-06 guards + add_annotation trait method
   - [x] 25-06-PLAN.md — Iteration loop runner (terminator=tool_calls.is_empty, budget, timeouts, repeated-call detector, parallel dispatch, metrics) (SUMMARY: 25-06-SUMMARY.md, commits fe10f30 + 9b80171)
   - [ ] 25-07-PLAN.md — REAS-10 salience side-effects hook (×1.3/×0.9/×0.1) with audit + idempotent revert
-  - [ ] 25-08-PLAN.md — BYOK transport middleware (Pro strips caller api-key header; allowlist-validates provider) + 6 security tests
+  - [x] 25-08-PLAN.md — BYOK transport middleware: `require_reasoning_creds` + `ReasoningTenancy/Creds` on AppState; Pro strips caller `x-reasoning-api-key`, BYOK requires it (non-ollama), Ollama no-auth in both tenancies (Reviews HIGH #2); 8 security tests green (SUMMARY: 25-08-SUMMARY.md, commits 10de3c7 + cb9ced4)
 
 ## Phase 26: Dreaming Worker
 - **Goal**: Queue-driven daemon worker running deduction → contradiction detection → induction cycles on recent memory activity. Uses Phase 25's reasoning agent with dreaming-specific prompts. Creates derived/pattern-tier memories with source chains. Soft-deletes (tombstones) superseded facts.

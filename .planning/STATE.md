@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Phase 25 Plan 07 COMPLETE — REAS-10 salience hook shipped (x1.3/x0.9/x0.1 + HIGH #1 idempotency); 5 integration tests green; plan 08 (BYOK wiring) remaining in Phase 25
-last_updated: "2026-04-23T19:26:13.000Z"
+stopped_at: Completed 25-08 — Phase 25 COMPLETE
+last_updated: "2026-04-23T19:50:22.456Z"
 progress:
   total_phases: 67
-  completed_phases: 41
+  completed_phases: 42
   total_plans: 166
-  completed_plans: 137
+  completed_plans: 138
   percent: 83
 ---
 
@@ -17,7 +17,7 @@ progress:
 
 ## Current Phase
 
-Phase 25 (Reasoning Agent) — Plans 00 + 01 + 02 + 03 + 04 + 05 + 06 + 07 COMPLETE. Primitives, trait, all 3 adapters (Kimi/OpenAI/Ollama), 6-tool palette + dispatch_tool, iteration-loop runner, AND the REAS-10 salience hook shipped. Runner exits now trigger real x1.3 / x0.9 / x0.1 stability boosts against the idempotent Postgres primitive. Plan 08 (BYOK transport wiring) remaining in Phase 25. Phase 24.75 Plan 05 (benchmark re-run) still remaining in parallel.
+Phase 25 (Reasoning Agent) COMPLETE — all 9 plans (00–08) shipped. Primitives, trait, all 3 adapters (Kimi/OpenAI/Ollama), 6-tool palette + dispatch_tool, iteration-loop runner, REAS-10 salience hook, AND the REAS-04 BYOK transport middleware shipped. `require_reasoning_creds` now gates every /v1/* request: Pro strips caller `x-reasoning-api-key` before dispatch (D-08), BYOK requires it (non-ollama), Ollama short-circuits no-auth in both tenancies (Reviews HIGH #2). Phase 24.75 Plan 05 (benchmark re-run) still remaining in parallel.
 
 ## Active Context
 
@@ -34,16 +34,18 @@ Phase 25 (Reasoning Agent) — Plans 00 + 01 + 02 + 03 + 04 + 05 + 06 + 07 COMPL
 - Phase 25 Plan 01 COMPLETE: intelligence::reasoning module with async ReasoningProvider trait (generate + model_name), 9 unified wire types (Tool/ToolCall/ToolResult/Message/TokenUsage/ReasoningRequest/ReasoningResponse/AgentOutcome/AgentCallerContext), ProviderCredentials { api_key, base_url } with from_env (MEMCP_REASONING__<P>_API_KEY) + from_headers (x-reasoning-api-key; base_url hard-coded None — SSRF T-25-01-01) + require_api_key; create_reasoning_provider factory matches on kimi/openai/ollama with NotConfigured default arm; 3 stub adapter modules (kimi/openai/ollama) return NotConfigured from new() so plans 02-04 can diff in cleanly. ReasoningConfig + ProfileConfig appended to config.rs with seed dreaming (kimi+kimi-k2.5+12 iter+32k budget+0.3 temp) and retrieval (kimi+kimi-latest+6 iter+8k budget+0.2 temp); resolve(name) falls back to default_profile="retrieval" on empty name; wired into top-level Config via #[serde(default)]. From<ReasoningError> for MemcpError via Internal variant. Wave 0 reasoning_trait_test::trait_compiles flipped RED → GREEN. 4 tests green (1 integration + 3 lib config). REAS-01 + REAS-09 delivered.
 - Phase 25 Plan 05 COMPLETE: intelligence/reasoning/tools.rs — memory_tools() returns 6 Tool defs (search_memories/create_memory/update_memory/delete_memory/annotate_memory/select_final_memories) with canonical Phase 24 knowledge_tier enum [raw,imported,explicit,derived,pattern] (HIGH #3); dispatch_tool runs jsonschema::validator_for(&tool.parameters).validate(&call.arguments) BEFORE serde_json::from_value (MEDIUM #6); ALL error ToolResults are structured JSON {"error","code"} via single err_result() helper with distinct codes schema_validation/bad_args/storage_error/unknown_tool/cascade_delete_forbidden/bad_tool_schema (MEDIUM #7); delete_memory fires MemoryStore::is_source_of_any_derived BEFORE delete with force_if_source=true escape hatch emitting tracing::warn! + warning field in ToolResult (HIGH #5). MemoryStore::add_annotation trait method added (default Err(Internal)) with Postgres inherent impl via jsonb_set(metadata,'{annotations}',coalesce(…)||to_jsonb($2::text)) + updated_at=NOW() bump (LOW #11 comment inline); trait forwarder in queries.rs routes &dyn callers to inherent. search_memories delegates to MemoryStore::list + in-memory substring filter as MVP (plan referenced recall::recall free function that doesn't exist — real RecallEngine::recall needs an embedding; hybrid_search via dispatcher deferred to Phase 27). 4 lib tests (tool_schema_tests) + 1 integration smoke + 8 DB-gated integration tests all GREEN. REAS-06 delivered; Reviews HIGH #3, HIGH #5, MEDIUM #6, MEDIUM #7 closed.
 - Phase 25 Plan 06 COMPLETE: intelligence/reasoning/runner.rs (225 LOC) — 3-tier public entry run_agent/run_agent_with_provider/run_agent_with_provider_and_timeout; terminator = tool_calls.is_empty() exclusively (Pitfall 3); finish_reason logged at tracing::debug! only (Reviews LOW #12); budget check BEFORE generate + max_tokens per-turn cap 4096 (Pitfall 7 two-line defense); tokio::time::timeout per turn (30s hosted / 120s ollama); repeated-call detector via canonical-JSON (name,args) hash triple (Pitfall 4); parallel tool dispatch via futures::future::join_all; reasoning_tokens_total{profile,adapter} counter with PROFILE NAME (not model id) as the "profile" label (regression-guarded by source-level test). apply_salience_side_effects stub in mod.rs called at all 4 exit points (Terminal/BudgetExceeded/MaxIterations/RepeatedToolCall) — plan 07 only replaces the stub body. 3 shared mock providers (MockReasoningProvider/SlowMockProvider/RecordingMockProvider) + NullStore + noop_ctx in tests/common/reasoning_fixtures.rs (185 LOC). 8 new tests: 1 smoke (Terminal path) + 4 termination (Terminal/MaxIter/Repeated/Transport-timeout) + 3 budget (hard-stop/max_tokens bounded/metric-label source guard) — 8/8 green; zero #[ignore] remaining in the three plan-owned test files. REAS-07 + REAS-08 delivered.
+- Phase 25 Plan 08 COMPLETE: transport/api/reasoning.rs middleware `require_reasoning_creds` (163 LOC) — closed allowlist {kimi,openai,ollama} (400 otherwise), ollama no-auth short-circuit in both tenancies (Reviews HIGH #2), Pro strips caller `x-reasoning-api-key` before next.run() and `tracing::warn!`s event name + provider only (T-25-08-02 never the key), BYOK 401s on missing header (non-ollama), Pro 503s on missing env (non-ollama). `ReasoningTenancy::{Pro,Byok}` + `ReasoningCreds { env_keys: HashMap<String,String> }` added to transport/health/mod.rs; `from_env()` reads MEMCP_REASONING__{KIMI,OPENAI,OLLAMA}_API_KEY + `tenancy()` returns Pro only when non-ollama key present (T-25-08-07). AppState gained 2 fields; 8 struct-literal sites updated (daemon.rs + 2 in load_test.rs + 5 test helpers). api::router() signature extended with reasoning_tenancy + reasoning_creds; middleware layered on both rate-limit-enabled and disabled branches so every /v1/* observes it. Plan pointed to server.rs for boot wiring but that's the rmcp MCP MemoryService — real AppState construction is daemon.rs:354 (Rule 3 deviation). 8 security tests green via in-process Router::oneshot (no TCP bind): Pro-strip/BYOK-require/unknown-400/Pro-503/passthrough/BYOK-happy + 2 HIGH #2 (BYOK-ollama-no-key + Pro-ollama-no-env). Dev-deps: http-body-util 0.1 + tower(util) added explicitly for direct imports. REAS-04 delivered; Reviews HIGH #2 + MEDIUM #8 CLOSED; Phase 25 COMPLETE.
 - Phase 25 Plan 07 COMPLETE: real apply_salience_side_effects in intelligence/reasoning/mod.rs replaces plan-06 stub — x1.3 final_selection + x0.1 tombstoned + x0.9 (read_but_discarded \ final_selection) with ctx.run_id propagated unchanged. MemoryStore::apply_stability_boost added as trait default (Internal unimpl) with PostgresMemoryStore forwarder in queries.rs so &dyn callers hit the idempotent inherent impl from plan 00. Snapshot-then-release locks before .await (Send-safety). Individual failures log warn! + continue (T-25-07-02); only all-fail returns Err(Generation). 5 DB-gated integration tests flip the Wave-0 scaffolds GREEN (final_selection_boost / discarded_decay / tombstone_penalty / idempotent_via_revert / idempotent_double_invoke_same_run_id) — Reviews HIGH #1 CLOSED via double-invoke test asserting stability stays at prev×1.3 (not prev×1.69) and audit row count stays at 1. Regression: runner/termination/budget/tool_dispatch all green. REAS-10 delivered.
 - Phases 24.5-27 on ROADMAP (Universal Ingestion, Reasoning Agent, Dreaming Worker, Agentic Retrieval)
 - Pricing decided: Option A -- Pro $25-35/mo includes reasoning, BYOK $10-15/mo
 
 ## Next Steps
 
-1. Plan 25-08 (BYOK transport wiring) — final Phase 25 plan; ties ProviderCredentials + x-reasoning-api-key headers into the transport daemon with HIGH #2 ollama-no-key closure.
+1. Phase 25 COMPLETE — next reasoning work is Phase 25.1 (OpenRouter-via-BYOK adapter). Transport rail is ready; 25.1 just adds an entry to ALLOWED_PROVIDERS in transport/api/reasoning.rs and a factory arm in create_reasoning_provider.
 2. Plan 24.75-05: re-run LongMemEval + LoCoMo benchmarks post-chunk-removal. Accept ≤5% recall drop per D-05; document findings. If >5%, investigate but do not revert (precision path is Phase 27 + Phase 29, not reviving chunks).
-3. Open a workspace-wide clippy sweep follow-up (2172 pre-existing pedantic warnings in load_test + validation, blocking `cargo clippy --all-targets -- -D warnings`).
+3. Open a workspace-wide clippy sweep follow-up (2173 pre-existing pedantic warnings + 1 pre-existing unwrap-on-Result error at transport/api/memory_span.rs:243, blocking `cargo clippy --all-targets -- -D warnings`).
 4. After Phase 24.75 wraps: coordinate downstream update — Phase 27 ARET-02 should add `get_memory_span` to the retrieval specialist's tool palette.
+5. Phase 26 Dreaming Worker + Phase 27 Agentic Retrieval inherit the BYOK/Pro boundary from plan 08 — assume `ctx.creds` carries a valid `ProviderCredentials` on every HTTP-origin reasoning call.
 
 ## Project Reference
 
@@ -54,12 +56,19 @@ See: .planning/PROJECT.md (updated 2026-04-17)
 
 ## Session Continuity
 
-Last session: 2026-04-23T19:26:13.000Z
-Stopped at: Phase 25 Plan 07 COMPLETE — REAS-10 salience hook + 5 integration tests; Reviews HIGH #1 closed; only plan 08 (BYOK wiring) remains in Phase 25
+Last session: 2026-04-23T19:49:19.624Z
+Stopped at: Completed 25-08 — Phase 25 COMPLETE
 Resume file: None
 
 ## Recent Decisions
 
+- 25-08: AppState construction is in transport/daemon.rs:354 (plan said server.rs — that's rmcp MemoryService); Rule 3 blocking deviation
+- 25-08: reasoning middleware layered at merged Router level (both rate-limit branches) so every /v1/* observes it; early-return on missing x-reasoning-provider leaves non-reasoning traffic untouched
+- 25-08: Ollama no-auth short-circuit precedes tenancy branching — `provider=="ollama"` always gets `ProviderCredentials { api_key: env_or_None, base_url: None }` in both tenancies (Reviews HIGH #2)
+- 25-08: `tenancy()` requires a NON-ollama env key for Pro (`any(|p| p != "ollama")`) — ollama-only env stays BYOK (T-25-08-07)
+- 25-08: test AppState defaults = `ReasoningTenancy::Byok` + empty `env_keys` so 5 pre-plan-08 integration tests are byte-identical in behavior
+- 25-08: `base_url` always None on BYOK path (T-25-01-01 SSRF mitigation inherited from plan 01 — never accept caller-supplied base URLs)
+- 25-08: dev-deps `http-body-util` + `tower(util)` added explicitly to Cargo.toml for direct imports in the in-process Router::oneshot test harness (were transitive but cannot `use` transitive crates directly)
 - 24.5-00: hold `.reply_to_id` on MemoryBuilder but defer CreateMemory threading until 24.5-01 (field doesn't exist yet)
 - 24.5-00: collapse tool-count assertion to single line so plan grep `assert_eq!(tools.len(), 18` matches verbatim
 - 24.5-00: pre-register 18-tool name assertions before MCP tool registration — test goes RED intentionally until 24.5-04 (RESEARCH pitfall 6)
