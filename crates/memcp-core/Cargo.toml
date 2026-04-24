@@ -47,7 +47,7 @@ tower = "0.5"
 governor = "0.10"
 tower_governor = { version = "0.8", features = ["axum"] }
 tower-http = { version = "0.6", features = ["trace"] }
-unicode-segmentation = "1.11"
+unicode-segmentation = "1.13"
 rusqlite = { version = "0.31", features = ["bundled"] }
 zip = "2"
 sha2 = "0.10"
